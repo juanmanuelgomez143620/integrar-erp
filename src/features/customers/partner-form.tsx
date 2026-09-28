@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
@@ -78,6 +78,9 @@ export function PartnerSheet({ kind, open, onOpenChange, partner, nextCode }: {
   )
 
   const err = form.formState.errors
+  // useWatch (no form.watch) para no perder la memoización: form.watch() devuelve
+  // una función que React Compiler no puede memoizar de forma segura.
+  const vatCondition = useWatch({ control: form.control, name: 'vat_condition' })
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
@@ -92,7 +95,7 @@ export function PartnerSheet({ kind, open, onOpenChange, partner, nextCode }: {
           <Field label="Nombre comercial" className="sm:col-span-2"><Input {...form.register('trade_name')} /></Field>
           <Field label="Condición frente al IVA" className="sm:col-span-2">
             <SimpleSelect
-              value={form.watch('vat_condition')}
+              value={vatCondition}
               onChange={(v: VatCondition) => form.setValue('vat_condition', v)}
               options={(Object.keys(VAT_CONDITIONS) as VatCondition[]).map((v) => ({ value: v, label: VAT_CONDITIONS[v] }))}
             />
