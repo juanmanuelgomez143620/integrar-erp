@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useQuery } from '@tanstack/react-query'
@@ -60,7 +60,13 @@ export function ProductSheet({ open, onOpenChange, product }: { open: boolean; o
     { success: 'Producto guardado.', onSuccess: () => onOpenChange(false) },
   )
   const err = form.formState.errors
-  const type = form.watch('product_type')
+  // useWatch (no form.watch) para no perder la memoización: form.watch() devuelve
+  // una función que React Compiler no puede memoizar de forma segura.
+  const type = useWatch({ control: form.control, name: 'product_type' })
+  const uomCode = useWatch({ control: form.control, name: 'uom_code' })
+  const vatRate = useWatch({ control: form.control, name: 'vat_rate' })
+  const defaultWarehouseId = useWatch({ control: form.control, name: 'default_warehouse_id' })
+  const defaultSupplierId = useWatch({ control: form.control, name: 'default_supplier_id' })
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -77,26 +83,26 @@ export function ProductSheet({ open, onOpenChange, product }: { open: boolean; o
           <Field label="Descripción" required className="sm:col-span-2" error={err.name?.message}><Input {...form.register('name')} /></Field>
           <Field label="Categoría"><Input {...form.register('category')} /></Field>
           <Field label="Unidad de medida">
-            <SimpleSelect value={form.watch('uom_code')} onChange={(v) => form.setValue('uom_code', v)} options={Object.entries(UNITS).map(([k, u]) => ({ value: k, label: `${k} · ${u.name}` }))} />
+            <SimpleSelect value={uomCode} onChange={(v) => form.setValue('uom_code', v)} options={Object.entries(UNITS).map(([k, u]) => ({ value: k, label: `${k} · ${u.name}` }))} />
           </Field>
           <Field label="Costo de referencia ($)" error={err.standard_cost?.message}><Input inputMode="decimal" {...form.register('standard_cost')} /></Field>
           <Field label="Precio de venta ($)" error={err.sale_price?.message}><Input inputMode="decimal" {...form.register('sale_price')} placeholder="Si se vende" /></Field>
           <Field label="Alícuota de IVA">
-            <SimpleSelect value={form.watch('vat_rate')} onChange={(v) => form.setValue('vat_rate', v)} options={VAT_RATES.map((r) => ({ value: String(r), label: `${String(r).replace('.', ',')} %` }))} />
+            <SimpleSelect value={vatRate} onChange={(v) => form.setValue('vat_rate', v)} options={VAT_RATES.map((r) => ({ value: String(r), label: `${String(r).replace('.', ',')} %` }))} />
           </Field>
           {type !== 'SERVICIO' && (
             <>
               <Field label="Stock mínimo" error={err.min_stock?.message} hint="Debajo de este valor se genera una alerta."><Input inputMode="decimal" {...form.register('min_stock')} /></Field>
               <Field label="Cantidad de reposición" error={err.reorder_qty?.message} hint="Sugerida al crear la solicitud."><Input inputMode="decimal" {...form.register('reorder_qty')} /></Field>
               <Field label="Depósito habitual">
-                <SimpleSelect value={form.watch('default_warehouse_id')} onChange={(v) => form.setValue('default_warehouse_id', v)} options={company.warehouses.map((w) => ({ value: w.id, label: w.name }))} />
+                <SimpleSelect value={defaultWarehouseId} onChange={(v) => form.setValue('default_warehouse_id', v)} options={company.warehouses.map((w) => ({ value: w.id, label: w.name }))} />
               </Field>
               <Field label="Ubicación"><Input {...form.register('location')} placeholder="Nave 1 · estantería B-3" /></Field>
             </>
           )}
           {suppliers.length > 0 && (
             <Field label="Proveedor habitual" className="sm:col-span-2">
-              <SimpleSelect value={form.watch('default_supplier_id')} onChange={(v) => form.setValue('default_supplier_id', v)} options={suppliers.map((s) => ({ value: s.id, label: `${s.code} · ${s.legal_name}` }))} placeholder="Sin proveedor habitual" />
+              <SimpleSelect value={defaultSupplierId} onChange={(v) => form.setValue('default_supplier_id', v)} options={suppliers.map((s) => ({ value: s.id, label: `${s.code} · ${s.legal_name}` }))} placeholder="Sin proveedor habitual" />
             </Field>
           )}
         </form>
