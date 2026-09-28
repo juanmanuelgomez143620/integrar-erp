@@ -48,9 +48,20 @@ export function currentUserId(): string | null {
   }
 }
 
-function requireUser() {
+/**
+ * Exige una sesión con un perfil activo *en este momento*, no sólo al
+ * momento de iniciar sesión: si el docente desactiva a un estudiante, la
+ * pestaña que ya tenía abierta deja de poder leer o escribir en el próximo
+ * pedido, no recién cuando vuelva a ingresar.
+ */
+function requireActiveUser(db: DB): string {
   const id = currentUserId()
   if (!id) throw new E.BusinessError('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
+  const profile = db.profiles.find((p) => p.id === id)
+  if (!profile || !profile.is_active) {
+    sessionStorage.removeItem(SESSION_KEY)
+    throw new E.BusinessError('USUARIO_INACTIVO', 'Tu usuario está desactivado. Consultá a tu docente.')
+  }
   return id
 }
 
@@ -58,14 +69,12 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function query<R>(fn: (db: DB, userId: string) => R): Promise<R> {
   await wait(40)
-  const userId = requireUser()
-  return read((db) => fn(db, userId))
+  return read((db) => fn(db, requireActiveUser(db)))
 }
 
 async function command<R>(fn: (ctx: E.Ctx) => R): Promise<R> {
   await wait(150)
-  const userId = requireUser()
-  return transact((db) => fn({ db, userId, now: new Date().toISOString() }))
+  return transact((db) => fn({ db, userId: requireActiveUser(db), now: new Date().toISOString() }))
 }
 
 // ------------------------------------------------------------ Autenticación
