@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Send, Trash2 } from 'lucide-react'
@@ -47,24 +47,32 @@ function RequisitionForm({ products, existing }: {
   const [params] = useSearchParams()
   const active = products.filter((p) => p.is_active)
 
-  const [priority, setPriority] = useState<Priority>(existing?.doc.pr?.priority ?? 'NORMAL')
+  // Precarga desde una alerta de stock mínimo (?producto=MP-004): se calcula una
+  // sola vez, al montar. Si fuera un efecto disparado por `products`, cada vez que
+  // la lista se vuelva a consultar (por ejemplo tras guardar cualquier documento)
+  // pisaría lo que el estudiante ya haya escrito en el formulario.
+  const [preload] = useState(() => {
+    if (existing) return null
+    const code = params.get('producto')
+    return code ? (products.find((x) => x.code === code) ?? null) : null
+  })
+
+  const [priority, setPriority] = useState<Priority>(existing?.doc.pr?.priority ?? (preload ? 'ALTA' : 'NORMAL'))
   const [neededBy, setNeededBy] = useState(existing?.doc.pr?.needed_by ?? '')
-  const [reason, setReason] = useState(existing?.doc.pr?.reason ?? '')
+  const [reason, setReason] = useState(
+    existing?.doc.pr?.reason ??
+      (preload
+        ? `Reposición: ${preload.code} ${preload.name} está por debajo del stock mínimo (hay ${qty(preload.stock, preload.uom_code)}, mínimo ${qty(preload.min_stock, preload.uom_code)}).`
+        : ''),
+  )
   const [notes, setNotes] = useState(existing?.doc.notes ?? '')
   const [lines, setLines] = useState<LineState[]>(() =>
-    existing ? existing.lines.map((l) => ({ key: l.id, product_id: l.product.id, quantity: String(l.quantity), notes: l.notes })) : [newLine()],
+    existing
+      ? existing.lines.map((l) => ({ key: l.id, product_id: l.product.id, quantity: String(l.quantity), notes: l.notes }))
+      : preload
+        ? [newLine(preload.id, String(preload.reorder_qty ?? Math.max(preload.min_stock - preload.stock, 1)))]
+        : [newLine()],
   )
-
-  // Precarga desde una alerta de stock mínimo: ?producto=MP-004
-  useEffect(() => {
-    const code = params.get('producto')
-    if (!code || existing) return
-    const p = products.find((x) => x.code === code)
-    if (!p) return
-    setLines([newLine(p.id, String(p.reorder_qty ?? Math.max(p.min_stock - p.stock, 1)))])
-    setPriority('ALTA')
-    setReason(`Reposición: ${p.code} ${p.name} está por debajo del stock mínimo (hay ${qty(p.stock, p.uom_code)}, mínimo ${qty(p.min_stock, p.uom_code)}).`)
-  }, [params, products, existing])
 
   const input = (): RequisitionInput => ({
     needed_by: neededBy || null,
