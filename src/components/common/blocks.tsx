@@ -3,7 +3,14 @@ import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 
 /** Tarjeta de sección con título: base visual de fichas y tableros. */
-export function Section({ title, description, actions, children, className, bodyClassName }: {
+export function Section({
+  title,
+  description,
+  actions,
+  children,
+  className,
+  bodyClassName,
+}: {
   title?: ReactNode
   description?: ReactNode
   actions?: ReactNode
@@ -27,7 +34,14 @@ export function Section({ title, description, actions, children, className, body
   )
 }
 
-export function KpiCard({ label, value, hint, icon: Icon, to, tone = 'default' }: {
+export function KpiCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  to,
+  tone = 'default',
+}: {
   label: string
   value: ReactNode
   hint?: ReactNode
@@ -36,24 +50,44 @@ export function KpiCard({ label, value, hint, icon: Icon, to, tone = 'default' }
   tone?: 'default' | 'warning' | 'danger'
 }) {
   const body = (
-    <div className={cn(
-      'flex h-full flex-col gap-1 rounded-xl border bg-card p-4 transition-colors',
-      to && 'hover:border-brand-blue/40 hover:bg-brand-blue-soft/40',
-      tone === 'warning' && 'border-amber-200',
-      tone === 'danger' && 'border-red-200',
-    )}>
+    <div
+      className={cn(
+        'flex h-full flex-col gap-1 rounded-xl border bg-card p-4 transition-colors',
+        to && 'hover:border-brand-blue/40 hover:bg-brand-blue-soft/40',
+        tone === 'warning' && 'border-amber-200',
+        tone === 'danger' && 'border-red-200',
+      )}
+    >
       <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
         {label}
-        {Icon && <Icon className={cn('size-4', tone === 'warning' ? 'text-amber-600' : tone === 'danger' ? 'text-red-600' : 'text-brand-blue')} />}
+        {Icon && (
+          <Icon
+            className={cn(
+              'size-4',
+              tone === 'warning' ? 'text-amber-600' : tone === 'danger' ? 'text-red-600' : 'text-brand-blue',
+            )}
+          />
+        )}
       </div>
       <div className="tabular text-2xl font-semibold tracking-tight text-navy">{value}</div>
       {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
     </div>
   )
-  return to ? <Link to={to} className="block">{body}</Link> : body
+  return to ? (
+    <Link to={to} className="block">
+      {body}
+    </Link>
+  ) : (
+    body
+  )
 }
 
-export function EmptyState({ icon: Icon, title, children, action }: {
+export function EmptyState({
+  icon: Icon,
+  title,
+  children,
+  action,
+}: {
   icon?: ComponentType<{ className?: string }>
   title: string
   children?: ReactNode
@@ -78,7 +112,14 @@ export function InfoRow({ label, children }: { label: string; children: ReactNod
   )
 }
 
-export function Field({ label, hint, error, children, className, required }: {
+export function Field({
+  label,
+  hint,
+  error,
+  children,
+  className,
+  required,
+}: {
   label: string
   hint?: ReactNode
   error?: string
@@ -93,7 +134,11 @@ export function Field({ label, hint, error, children, className, required }: {
         {required && <span className="text-red-600"> *</span>}
       </label>
       {children}
-      {error ? <p className="text-xs text-red-600">{error}</p> : hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      {error ? (
+        <p className="text-xs text-red-600">{error}</p>
+      ) : hint ? (
+        <p className="text-xs text-muted-foreground">{hint}</p>
+      ) : null}
     </div>
   )
 }

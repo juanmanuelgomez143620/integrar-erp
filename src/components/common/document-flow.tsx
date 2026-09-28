@@ -10,7 +10,12 @@ import { StatusBadge } from './status-badge'
 /** Cadena de documentos vinculados (SC → OC → REC): la integración entre áreas. */
 export function DocumentFlow({ nodes }: { nodes: FlowNode[] }) {
   if (nodes.length <= 1) {
-    return <p className="text-sm text-muted-foreground">Este documento todavía no está vinculado con otros. Cuando el proceso avance, acá vas a ver la cadena completa de comprobantes.</p>
+    return (
+      <p className="text-sm text-muted-foreground">
+        Este documento todavía no está vinculado con otros. Cuando el proceso avance, acá vas a ver la cadena completa
+        de comprobantes.
+      </p>
+    )
   }
   return (
     <div className="flex flex-wrap items-stretch gap-2">
@@ -20,12 +25,18 @@ export function DocumentFlow({ nodes }: { nodes: FlowNode[] }) {
           {n.readable ? (
             <Link
               to={n.path}
-              className={cn('flex min-w-40 flex-col gap-1 rounded-lg border bg-card px-3 py-2 transition-colors hover:border-brand-blue/50', n.current && 'border-brand-blue ring-2 ring-brand-blue/15')}
+              className={cn(
+                'flex min-w-40 flex-col gap-1 rounded-lg border bg-card px-3 py-2 transition-colors hover:border-brand-blue/50',
+                n.current && 'border-brand-blue ring-2 ring-brand-blue/15',
+              )}
             >
               <FlowContent node={n} />
             </Link>
           ) : (
-            <div className="flex min-w-40 flex-col gap-1 rounded-lg border border-dashed bg-muted/40 px-3 py-2" title="Tu rol no tiene acceso a este tipo de documento">
+            <div
+              className="flex min-w-40 flex-col gap-1 rounded-lg border border-dashed bg-muted/40 px-3 py-2"
+              title="Tu rol no tiene acceso a este tipo de documento"
+            >
               <FlowContent node={n} />
             </div>
           )}

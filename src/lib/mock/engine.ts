@@ -118,7 +118,13 @@ export interface Actor {
   sector_name: string
 }
 
-export const SYSTEM_ACTOR: Actor = { user_id: null, name: 'Sistema', role_code: 'SISTEMA', sector_id: null, sector_name: '—' }
+export const SYSTEM_ACTOR: Actor = {
+  user_id: null,
+  name: 'Sistema',
+  role_code: 'SISTEMA',
+  sector_id: null,
+  sector_name: '—',
+}
 
 function sectorName(db: DB, sectorId: string | null) {
   return (sectorId && db.sectors.find((s) => s.id === sectorId)?.name) || '—'
@@ -134,14 +140,20 @@ export function actorFor(ctx: Ctx, companyId: string, permission?: string, prefe
   const member = getMember(db, userId, companyId)
   const memberRoles = member?.is_active ? getMemberRoles(db, member.id) : []
   const build = (mr: T.MemberRole): Actor => ({
-    user_id: userId, name, role_code: mr.role_code, sector_id: mr.sector_id, sector_name: sectorName(db, mr.sector_id),
+    user_id: userId,
+    name,
+    role_code: mr.role_code,
+    sector_id: mr.sector_id,
+    sector_name: sectorName(db, mr.sector_id),
   })
   if (preferRole) {
     const mr = memberRoles.find((r) => r.role_code === preferRole)
     if (mr) return build(mr)
   }
   if (permission) {
-    const mr = memberRoles.find((r) => !ROLES[r.role_code].isSupervisor && ROLE_PERMISSIONS[r.role_code].includes(permission))
+    const mr = memberRoles.find(
+      (r) => !ROLES[r.role_code].isSupervisor && ROLE_PERMISSIONS[r.role_code].includes(permission),
+    )
     if (mr) return build(mr)
   }
   const supervisorRole = memberRoles.find((r) => ROLES[r.role_code].isSupervisor)
@@ -215,7 +227,13 @@ export function businessDate(company: T.Company) {
   return todayAR() || company.start_date
 }
 
-function newDocument(ctx: Ctx, companyId: string, docType: T.DocType, actor: Actor, fields: Partial<T.Document>): T.Document {
+function newDocument(
+  ctx: Ctx,
+  companyId: string,
+  docType: T.DocType,
+  actor: Actor,
+  fields: Partial<T.Document>,
+): T.Document {
   const company = getCompany(ctx.db, companyId)
   const { number, display } = nextNumber(ctx.db, companyId, docType)
   const doc: T.Document = {
@@ -309,7 +327,9 @@ function diff<R extends object>(before: R, after: R, keys: (keyof R)[]) {
 // ============================================================ Notificaciones y tareas
 
 export function usersWithRole(db: DB, companyId: string, role: T.RoleCode): string[] {
-  const memberIds = new Set(db.memberRoles.filter((r) => r.company_id === companyId && r.role_code === role).map((r) => r.member_id))
+  const memberIds = new Set(
+    db.memberRoles.filter((r) => r.company_id === companyId && r.role_code === role).map((r) => r.member_id),
+  )
   return db.members.filter((m) => memberIds.has(m.id) && m.is_active).map((m) => m.user_id)
 }
 
@@ -342,7 +362,13 @@ function notifyUsers(ctx: Ctx, companyId: string, userIds: string[], n: Notifica
 }
 
 function notifyRoles(ctx: Ctx, companyId: string, roles: T.RoleCode[], n: NotificationInput, exclude?: string | null) {
-  notifyUsers(ctx, companyId, roles.flatMap((r) => usersWithRole(ctx.db, companyId, r)), n, exclude)
+  notifyUsers(
+    ctx,
+    companyId,
+    roles.flatMap((r) => usersWithRole(ctx.db, companyId, r)),
+    n,
+    exclude,
+  )
 }
 
 function openTasksForStatus(ctx: Ctx, doc: T.Document, actor: Actor) {
@@ -351,7 +377,9 @@ function openTasksForStatus(ctx: Ctx, doc: T.Document, actor: Actor) {
     let user: string | null = null
     if (rule.assignee === 'ROLE') role = rule.role ?? null
     if (rule.assignee === 'APPROVER') {
-      role = ctx.db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')?.approver_role ?? 'GERENCIA'
+      role =
+        ctx.db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')?.approver_role ??
+        'GERENCIA'
     }
     if (rule.assignee === 'CREATOR') user = doc.created_by
     const title = rule.title.replace('{number}', doc.display_number).replace('{total}', money(doc.total))
@@ -382,7 +410,14 @@ function openTasksForStatus(ctx: Ctx, doc: T.Document, actor: Actor) {
       ctx,
       doc.company_id,
       recipients,
-      { type: 'NUEVA_TAREA', title: `Nueva tarea: ${title}`, body: rule.description, link_path: docPath(ctx.db, doc), document_id: doc.id, task_id: task.id },
+      {
+        type: 'NUEVA_TAREA',
+        title: `Nueva tarea: ${title}`,
+        body: rule.description,
+        link_path: docPath(ctx.db, doc),
+        document_id: doc.id,
+        task_id: task.id,
+      },
       actor.user_id,
     )
   }
@@ -390,7 +425,11 @@ function openTasksForStatus(ctx: Ctx, doc: T.Document, actor: Actor) {
 
 function closeTasksForStatus(ctx: Ctx, docId: string, originStatus: string, byUser: string | null) {
   for (const task of ctx.db.tasks) {
-    if (task.document_id === docId && task.origin_status === originStatus && (task.status === 'PENDIENTE' || task.status === 'EN_CURSO')) {
+    if (
+      task.document_id === docId &&
+      task.origin_status === originStatus &&
+      (task.status === 'PENDIENTE' || task.status === 'EN_CURSO')
+    ) {
       task.status = 'RESUELTA'
       task.completed_by = byUser
       task.completed_at = ctx.now
@@ -407,15 +446,25 @@ interface TransitionOptions {
   summary?: string
 }
 
-export function findTransition(docType: T.DocType, from: string, action: T.TransitionAction, to?: string): TransitionInfo | undefined {
-  return TRANSITIONS.find((t) => t.docType === docType && t.from === from && t.action === action && (!to || t.to === to))
+export function findTransition(
+  docType: T.DocType,
+  from: string,
+  action: T.TransitionAction,
+  to?: string,
+): TransitionInfo | undefined {
+  return TRANSITIONS.find(
+    (t) => t.docType === docType && t.from === from && t.action === action && (!to || t.to === to),
+  )
 }
 
 /** Única puerta para cambiar el estado de un documento (private.transition_document). */
 export function transition(ctx: Ctx, doc: T.Document, action: T.TransitionAction, opts: TransitionOptions = {}): Actor {
   const tr = findTransition(doc.doc_type, doc.status, action, opts.to)
   if (!tr) {
-    fail('TRANSICION_INVALIDA', `${doc.display_number} está en estado "${statusLabel(doc.doc_type, doc.status)}" y no admite esta acción.`)
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} está en estado "${statusLabel(doc.doc_type, doc.status)}" y no admite esta acción.`,
+    )
   }
   const comment = opts.comment?.trim() ?? ''
   if (tr.requiresComment && comment.length < 3) {
@@ -476,7 +525,15 @@ export function postMovement(ctx: Ctx, m: MovementInput) {
   const company = getCompany(db, m.company_id)
   let bal = db.stockBalances.find((b) => b.product_id === m.product_id && b.warehouse_id === m.warehouse_id)
   if (!bal) {
-    bal = { company_id: m.company_id, product_id: m.product_id, warehouse_id: m.warehouse_id, qty_on_hand: 0, qty_reserved: 0, avg_unit_cost: 0, last_movement_at: null }
+    bal = {
+      company_id: m.company_id,
+      product_id: m.product_id,
+      warehouse_id: m.warehouse_id,
+      qty_on_hand: 0,
+      qty_reserved: 0,
+      avg_unit_cost: 0,
+      last_movement_at: null,
+    }
     db.stockBalances.push(bal)
   }
   const before = totalStock(db, m.product_id)
@@ -526,7 +583,10 @@ export function postMovement(ctx: Ctx, m: MovementInput) {
 export function raiseStockAlert(ctx: Ctx, product: T.Product) {
   const { db } = ctx
   const open = db.tasks.some(
-    (t) => t.task_type === 'REPONER_STOCK' && t.context.product_id === product.id && (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+    (t) =>
+      t.task_type === 'REPONER_STOCK' &&
+      t.context.product_id === product.id &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
   )
   if (open) return
   const company = getCompany(db, product.company_id)
@@ -573,7 +633,11 @@ export function raiseStockAlert(ctx: Ctx, product: T.Product) {
 
 function resolveStockTasks(ctx: Ctx, productId: string, _reason: string) {
   for (const t of ctx.db.tasks) {
-    if (t.task_type === 'REPONER_STOCK' && t.context.product_id === productId && (t.status === 'PENDIENTE' || t.status === 'EN_CURSO')) {
+    if (
+      t.task_type === 'REPONER_STOCK' &&
+      t.context.product_id === productId &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO')
+    ) {
       t.status = 'RESUELTA'
       t.completed_by = ctx.userId
       t.completed_at = ctx.now
@@ -621,7 +685,9 @@ function recomputePurchaseOrder(ctx: Ctx, poId: string) {
 }
 
 function requisitionsOfOrder(db: DB, poId: string): string[] {
-  const reqLineIds = new Set(db.poLines.filter((l) => l.document_id === poId && l.requisition_line_id).map((l) => l.requisition_line_id))
+  const reqLineIds = new Set(
+    db.poLines.filter((l) => l.document_id === poId && l.requisition_line_id).map((l) => l.requisition_line_id),
+  )
   return [...new Set(db.prLines.filter((l) => reqLineIds.has(l.id)).map((l) => l.document_id))]
 }
 
@@ -637,7 +703,11 @@ export interface RequisitionInput {
 
 function validateRequisition(ctx: Ctx, companyId: string, input: RequisitionInput) {
   if (input.reason.trim().length < 5) {
-    fail('DATO_INVALIDO', 'Explicá el motivo de la solicitud (mínimo 5 caracteres).', 'Toda compra empieza con una necesidad justificada.')
+    fail(
+      'DATO_INVALIDO',
+      'Explicá el motivo de la solicitud (mínimo 5 caracteres).',
+      'Toda compra empieza con una necesidad justificada.',
+    )
   }
   const lines = input.lines.filter((l) => l.product_id)
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un producto.')
@@ -646,7 +716,8 @@ function validateRequisition(ctx: Ctx, companyId: string, input: RequisitionInpu
     if (!p.is_active) fail('DATO_INVALIDO', `${productLabel(p)} está inactivo.`)
     if (!(l.quantity > 0)) fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero.`)
   }
-  if (input.needed_by && input.needed_by < todayAR()) fail('DATO_INVALIDO', 'La fecha necesaria no puede ser anterior a hoy.')
+  if (input.needed_by && input.needed_by < todayAR())
+    fail('DATO_INVALIDO', 'La fecha necesaria no puede ser anterior a hoy.')
   return lines
 }
 
@@ -654,8 +725,14 @@ function writeRequisitionLines(ctx: Ctx, doc: T.Document, lines: RequisitionInpu
   ctx.db.prLines = ctx.db.prLines.filter((l) => l.document_id !== doc.id)
   lines.forEach((l, i) => {
     ctx.db.prLines.push({
-      id: uid(), company_id: doc.company_id, document_id: doc.id, line_no: i + 1,
-      product_id: l.product_id, quantity: round3(l.quantity), qty_ordered: 0, notes: l.notes ?? '',
+      id: uid(),
+      company_id: doc.company_id,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: l.product_id,
+      quantity: round3(l.quantity),
+      qty_ordered: 0,
+      notes: l.notes ?? '',
     })
   })
 }
@@ -680,8 +757,14 @@ export function cmdCreateRequisition(ctx: Ctx, companyId: string, input: Requisi
   })
   writeRequisitionLines(ctx, doc, lines)
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'CREATE', entity_type: 'purchase_requisition', entity_id: doc.id,
-    entity_label: doc.display_number, document_id: doc.id, to_status: 'BORRADOR',
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'purchase_requisition',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
     summary: `Creó ${doc.display_number} (${lines.length} ítem${lines.length > 1 ? 's' : ''})`,
   })
   if (submit) submitRequisition(ctx, doc)
@@ -700,8 +783,14 @@ export function cmdUpdateRequisition(ctx: Ctx, docId: string, input: Requisition
   doc.updated_by = ctx.userId
   writeRequisitionLines(ctx, doc, lines)
   logAudit(ctx, {
-    company_id: doc.company_id, actor, action: 'UPDATE', entity_type: 'purchase_requisition', entity_id: doc.id,
-    entity_label: doc.display_number, document_id: doc.id, summary: `Modificó ${doc.display_number}`,
+    company_id: doc.company_id,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'purchase_requisition',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    summary: `Modificó ${doc.display_number}`,
   })
 }
 
@@ -711,7 +800,11 @@ function submitRequisition(ctx: Ctx, doc: T.Document) {
   // La solicitud atiende las alertas de stock mínimo de sus productos.
   const productIds = new Set(ctx.db.prLines.filter((l) => l.document_id === doc.id).map((l) => l.product_id))
   for (const t of ctx.db.tasks) {
-    if (t.task_type === 'REPONER_STOCK' && productIds.has(t.context.product_id) && (t.status === 'PENDIENTE' || t.status === 'EN_CURSO')) {
+    if (
+      t.task_type === 'REPONER_STOCK' &&
+      productIds.has(t.context.product_id) &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO')
+    ) {
       t.status = 'RESUELTA'
       t.completed_by = ctx.userId
       t.completed_at = ctx.now
@@ -726,9 +819,19 @@ export function cmdSubmitRequisition(ctx: Ctx, docId: string) {
 export function cmdRejectRequisition(ctx: Ctx, docId: string, reason: string) {
   const doc = getDoc(ctx.db, docId, 'PURCHASE_REQUISITION')
   transition(ctx, doc, 'REJECT', { comment: reason })
-  notifyUsers(ctx, doc.company_id, doc.created_by ? [doc.created_by] : [], {
-    type: 'SC_RECHAZADA', title: `${doc.display_number} fue rechazada por Compras`, body: reason, link_path: docPath(ctx.db, doc), document_id: doc.id,
-  }, ctx.userId)
+  notifyUsers(
+    ctx,
+    doc.company_id,
+    doc.created_by ? [doc.created_by] : [],
+    {
+      type: 'SC_RECHAZADA',
+      title: `${doc.display_number} fue rechazada por Compras`,
+      body: reason,
+      link_path: docPath(ctx.db, doc),
+      document_id: doc.id,
+    },
+    ctx.userId,
+  )
 }
 
 export function cmdCancelRequisition(ctx: Ctx, docId: string, reason: string) {
@@ -751,7 +854,13 @@ export interface PurchaseOrderInput {
   payment_terms_days: number
   delivery_terms: string
   notes: string
-  lines: { product_id: string; requisition_line_id: string | null; quantity: number; unit_price: number; vat_rate: number }[]
+  lines: {
+    product_id: string
+    requisition_line_id: string | null
+    quantity: number
+    unit_price: number
+    vat_rate: number
+  }[]
 }
 
 function validatePurchaseOrder(ctx: Ctx, companyId: string, input: PurchaseOrderInput, currentDocId?: string) {
@@ -759,7 +868,8 @@ function validatePurchaseOrder(ctx: Ctx, companyId: string, input: PurchaseOrder
   const supplier = db.suppliers.find((s) => s.id === input.supplier_id && s.company_id === companyId)
   if (!supplier) fail('DATO_INVALIDO', 'Elegí un proveedor.')
   if (!supplier.is_active) fail('DATO_INVALIDO', `El proveedor ${supplier.legal_name} está inactivo.`)
-  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId)) fail('DATO_INVALIDO', 'Elegí el depósito de destino.')
+  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
+    fail('DATO_INVALIDO', 'Elegí el depósito de destino.')
   const lines = input.lines.filter((l) => l.product_id)
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un ítem.')
   const usedByReqLine = new Map<string, number>()
@@ -775,7 +885,8 @@ function validatePurchaseOrder(ctx: Ctx, companyId: string, input: PurchaseOrder
       if (!['SOLICITADO', 'ORDENADO_PARCIAL', 'ORDENADO'].includes(req.status)) {
         fail('TRANSICION_INVALIDA', `${req.display_number} no está pendiente de atención.`)
       }
-      if (rl.product_id !== l.product_id) fail('DATO_INVALIDO', `El producto no coincide con el de ${req.display_number}.`)
+      if (rl.product_id !== l.product_id)
+        fail('DATO_INVALIDO', `El producto no coincide con el de ${req.display_number}.`)
       const orderedElsewhere = db.poLines
         .filter((pl) => pl.requisition_line_id === rl.id && pl.document_id !== currentDocId)
         .filter((pl) => db.documents.find((d) => d.id === pl.document_id)?.status !== 'ANULADO')
@@ -805,9 +916,19 @@ function writePurchaseOrderLines(ctx: Ctx, doc: T.Document, lines: PurchaseOrder
     subtotal += line_subtotal
     tax += line_tax
     ctx.db.poLines.push({
-      id: uid(), company_id: doc.company_id, document_id: doc.id, line_no: i + 1, product_id: l.product_id,
-      requisition_line_id: l.requisition_line_id, quantity: round3(l.quantity), unit_price: round4(l.unit_price),
-      vat_rate: l.vat_rate, line_subtotal, line_tax, line_total: round2(line_subtotal + line_tax), qty_received: 0,
+      id: uid(),
+      company_id: doc.company_id,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: l.product_id,
+      requisition_line_id: l.requisition_line_id,
+      quantity: round3(l.quantity),
+      unit_price: round4(l.unit_price),
+      vat_rate: l.vat_rate,
+      line_subtotal,
+      line_tax,
+      line_total: round2(line_subtotal + line_tax),
+      qty_received: 0,
     })
   })
   doc.subtotal = round2(subtotal)
@@ -817,7 +938,9 @@ function writePurchaseOrderLines(ctx: Ctx, doc: T.Document, lines: PurchaseOrder
 
 function syncOrderLinks(ctx: Ctx, doc: T.Document, previousRequisitions: string[]) {
   const current = requisitionsOfOrder(ctx.db, doc.id)
-  ctx.db.docLinks = ctx.db.docLinks.filter((l) => !(l.to_document_id === doc.id && !current.includes(l.from_document_id)))
+  ctx.db.docLinks = ctx.db.docLinks.filter(
+    (l) => !(l.to_document_id === doc.id && !current.includes(l.from_document_id)),
+  )
   for (const prId of current) link(ctx, doc.company_id, prId, doc.id)
   for (const prId of new Set([...previousRequisitions, ...current])) recomputeRequisition(ctx, prId)
 }
@@ -829,14 +952,24 @@ export function cmdCreatePurchaseOrder(ctx: Ctx, companyId: string, input: Purch
     supplier_id: supplier.id,
     notes: input.notes,
     po: {
-      expected_date: input.expected_date, warehouse_id: input.warehouse_id, payment_terms_days: input.payment_terms_days,
-      delivery_terms: input.delivery_terms, approved_at: null, sent_at: null,
+      expected_date: input.expected_date,
+      warehouse_id: input.warehouse_id,
+      payment_terms_days: input.payment_terms_days,
+      delivery_terms: input.delivery_terms,
+      approved_at: null,
+      sent_at: null,
     },
   })
   writePurchaseOrderLines(ctx, doc, lines)
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'CREATE', entity_type: 'purchase_order', entity_id: doc.id,
-    entity_label: doc.display_number, document_id: doc.id, to_status: 'BORRADOR',
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'purchase_order',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
     summary: `Creó ${doc.display_number} a ${supplier.legal_name} por ${money(doc.total)}`,
   })
   syncOrderLinks(ctx, doc, [])
@@ -846,18 +979,31 @@ export function cmdCreatePurchaseOrder(ctx: Ctx, companyId: string, input: Purch
 export function cmdUpdatePurchaseOrder(ctx: Ctx, docId: string, input: PurchaseOrderInput) {
   const doc = getDoc(ctx.db, docId, 'PURCHASE_ORDER')
   const actor = requirePermission(ctx, doc.company_id, 'purchase_order.update')
-  if (doc.status !== 'BORRADOR') fail('TRANSICION_INVALIDA', 'Sólo se puede modificar una orden en borrador. Si fue rechazada, primero reabrila.')
+  if (doc.status !== 'BORRADOR')
+    fail('TRANSICION_INVALIDA', 'Sólo se puede modificar una orden en borrador. Si fue rechazada, primero reabrila.')
   const previous = requisitionsOfOrder(ctx.db, doc.id)
   const { supplier, lines } = validatePurchaseOrder(ctx, doc.company_id, input, doc.id)
   doc.supplier_id = supplier.id
   doc.notes = input.notes
-  doc.po = { ...doc.po!, expected_date: input.expected_date, warehouse_id: input.warehouse_id, payment_terms_days: input.payment_terms_days, delivery_terms: input.delivery_terms }
+  doc.po = {
+    ...doc.po!,
+    expected_date: input.expected_date,
+    warehouse_id: input.warehouse_id,
+    payment_terms_days: input.payment_terms_days,
+    delivery_terms: input.delivery_terms,
+  }
   doc.updated_at = ctx.now
   doc.updated_by = ctx.userId
   writePurchaseOrderLines(ctx, doc, lines)
   logAudit(ctx, {
-    company_id: doc.company_id, actor, action: 'UPDATE', entity_type: 'purchase_order', entity_id: doc.id,
-    entity_label: doc.display_number, document_id: doc.id, summary: `Modificó ${doc.display_number} (total ${money(doc.total)})`,
+    company_id: doc.company_id,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'purchase_order',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    summary: `Modificó ${doc.display_number} (total ${money(doc.total)})`,
   })
   syncOrderLinks(ctx, doc, previous)
 }
@@ -876,9 +1022,19 @@ export function cmdSubmitPurchaseOrder(ctx: Ctx, docId: string) {
   const rule = findApprovalRule(ctx.db, doc.company_id, 'PURCHASE_ORDER', doc.total)
   if (!rule) fail('SIN_REGLA_APROBACION', 'No hay una regla de aprobación para este monto. Avisá al docente.')
   ctx.db.approvalRequests.push({
-    id: uid(), company_id: doc.company_id, document_id: doc.id, rule_id: rule.id, level: rule.level,
-    approver_role: rule.approver_role, amount: doc.total, status: 'PENDIENTE', requested_by: ctx.userId ?? '',
-    requested_at: ctx.now, decided_by: null, decided_at: null, comment: '',
+    id: uid(),
+    company_id: doc.company_id,
+    document_id: doc.id,
+    rule_id: rule.id,
+    level: rule.level,
+    approver_role: rule.approver_role,
+    amount: doc.total,
+    status: 'PENDIENTE',
+    requested_by: ctx.userId ?? '',
+    requested_at: ctx.now,
+    decided_by: null,
+    decided_at: null,
+    comment: '',
   })
   transition(ctx, doc, 'SUBMIT', {
     summary: `Envió ${doc.display_number} a aprobación (${money(doc.total)}: aprueba ${ROLES[rule.approver_role].name})`,
@@ -904,7 +1060,12 @@ function approverActor(ctx: Ctx, doc: T.Document, req: T.ApprovalRequest): Actor
   }
   const company = getCompany(ctx.db, doc.company_id)
   const rule = ctx.db.approvalRules.find((r) => r.id === req.rule_id)
-  if (!eff.supervisor && company.settings.sod_enabled && (rule?.require_different_user ?? true) && doc.created_by === ctx.userId) {
+  if (
+    !eff.supervisor &&
+    company.settings.sod_enabled &&
+    (rule?.require_different_user ?? true) &&
+    doc.created_by === ctx.userId
+  ) {
     fail(
       'SEPARACION_FUNCIONES',
       'No podés aprobar una orden de compra que creaste vos.',
@@ -928,10 +1089,19 @@ export function cmdApprovePurchaseOrder(ctx: Ctx, docId: string, comment: string
     comment,
     summary: `Aprobó ${doc.display_number} por ${money(doc.total)}${comment.trim() ? ` — ${comment.trim()}` : ''}`,
   })
-  notifyUsers(ctx, doc.company_id, doc.created_by ? [doc.created_by] : [], {
-    type: 'OC_APROBADA', title: `${doc.display_number} fue aprobada`, body: `Aprobó: ${actor.name} (${actor.sector_name}).`,
-    link_path: docPath(ctx.db, doc), document_id: doc.id,
-  }, ctx.userId)
+  notifyUsers(
+    ctx,
+    doc.company_id,
+    doc.created_by ? [doc.created_by] : [],
+    {
+      type: 'OC_APROBADA',
+      title: `${doc.display_number} fue aprobada`,
+      body: `Aprobó: ${actor.name} (${actor.sector_name}).`,
+      link_path: docPath(ctx.db, doc),
+      document_id: doc.id,
+    },
+    ctx.userId,
+  )
 }
 
 export function cmdRejectPurchaseOrder(ctx: Ctx, docId: string, reason: string) {
@@ -949,7 +1119,8 @@ export function cmdRejectPurchaseOrder(ctx: Ctx, docId: string, reason: string) 
 export function cmdWithdrawPurchaseOrder(ctx: Ctx, docId: string) {
   const doc = getDoc(ctx.db, docId, 'PURCHASE_ORDER')
   const eff = effectivePermissions(ctx.db, ctx.userId!, doc.company_id)
-  if (!eff.supervisor && doc.created_by !== ctx.userId) fail('SIN_PERMISO', 'Sólo quien creó la orden puede retirarla de aprobación.')
+  if (!eff.supervisor && doc.created_by !== ctx.userId)
+    fail('SIN_PERMISO', 'Sólo quien creó la orden puede retirarla de aprobación.')
   const req = pendingApproval(ctx.db, doc.id)
   req.status = 'CANCELADO'
   req.decided_at = ctx.now
@@ -1002,20 +1173,31 @@ export function cmdCreateGoodsReceipt(ctx: Ctx, companyId: string, input: GoodsR
   const po = getDoc(db, input.purchase_order_id, 'PURCHASE_ORDER')
   if (po.company_id !== companyId) fail('DATO_INVALIDO', 'La orden no pertenece a esta empresa.')
   if (!['ENVIADO', 'RECIBIDO_PARCIAL'].includes(po.status)) {
-    fail('TRANSICION_INVALIDA', `${po.display_number} está "${statusLabel('PURCHASE_ORDER', po.status)}": sólo se reciben órdenes enviadas al proveedor.`)
+    fail(
+      'TRANSICION_INVALIDA',
+      `${po.display_number} está "${statusLabel('PURCHASE_ORDER', po.status)}": sólo se reciben órdenes enviadas al proveedor.`,
+    )
   }
   if (input.supplier_delivery_note.trim().length < 3) {
-    fail('DATO_INVALIDO', 'Ingresá el número de remito del proveedor.', 'El remito es el comprobante que acompaña la mercadería: se controla contra la OC.')
+    fail(
+      'DATO_INVALIDO',
+      'Ingresá el número de remito del proveedor.',
+      'El remito es el comprobante que acompaña la mercadería: se controla contra la OC.',
+    )
   }
-  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId)) fail('DATO_INVALIDO', 'Elegí el depósito.')
+  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
+    fail('DATO_INVALIDO', 'Elegí el depósito.')
   const lines = input.lines.filter((l) => l.quantity > 0)
   if (!lines.length) fail('DATO_INVALIDO', 'Indicá la cantidad recibida de al menos un ítem.')
   const doc = newDocument(ctx, companyId, 'GOODS_RECEIPT', actor, {
     supplier_id: po.supplier_id,
     notes: input.notes,
     gr: {
-      purchase_order_id: po.id, warehouse_id: input.warehouse_id, supplier_delivery_note: input.supplier_delivery_note.trim(),
-      carrier_name: input.carrier_name.trim(), received_at: null,
+      purchase_order_id: po.id,
+      warehouse_id: input.warehouse_id,
+      supplier_delivery_note: input.supplier_delivery_note.trim(),
+      carrier_name: input.carrier_name.trim(),
+      received_at: null,
     },
   })
   let total = 0
@@ -1025,20 +1207,38 @@ export function cmdCreateGoodsReceipt(ctx: Ctx, companyId: string, input: GoodsR
     const p = getProduct(db, companyId, pl.product_id)
     const pending = round3(pl.quantity - receivedInConfirmed(db, pl.id))
     if (l.quantity > pending + EPS) {
-      fail('CANTIDAD_EXCEDE_PENDIENTE', `${p.code}: se reciben ${fmtQty(l.quantity)} pero sólo quedan ${fmtQty(pending, p.uom_code)} pendientes.`, 'No se puede recibir más de lo ordenado. Si llegó de más, se devuelve o se gestiona una nueva OC.')
+      fail(
+        'CANTIDAD_EXCEDE_PENDIENTE',
+        `${p.code}: se reciben ${fmtQty(l.quantity)} pero sólo quedan ${fmtQty(pending, p.uom_code)} pendientes.`,
+        'No se puede recibir más de lo ordenado. Si llegó de más, se devuelve o se gestiona una nueva OC.',
+      )
     }
     total += l.quantity * pl.unit_price
     db.grLines.push({
-      id: uid(), company_id: companyId, document_id: doc.id, line_no: i + 1, po_line_id: pl.id, product_id: pl.product_id,
-      quantity: round3(l.quantity), unit_cost: pl.unit_price, notes: l.notes ?? '',
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      po_line_id: pl.id,
+      product_id: pl.product_id,
+      quantity: round3(l.quantity),
+      unit_cost: pl.unit_price,
+      notes: l.notes ?? '',
     })
   })
   doc.subtotal = round2(total)
   doc.total = round2(total)
   link(ctx, companyId, po.id, doc.id)
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'CREATE', entity_type: 'goods_receipt', entity_id: doc.id, entity_label: doc.display_number,
-    document_id: doc.id, to_status: 'BORRADOR', summary: `Creó ${doc.display_number} contra ${po.display_number} (remito ${doc.gr!.supplier_delivery_note})`,
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'goods_receipt',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number} contra ${po.display_number} (remito ${doc.gr!.supplier_delivery_note})`,
   })
   if (confirm) confirmReceipt(ctx, doc)
   else openTasksForStatus(ctx, doc, actor)
@@ -1049,7 +1249,10 @@ function confirmReceipt(ctx: Ctx, doc: T.Document) {
   const { db } = ctx
   const po = getDoc(db, doc.gr!.purchase_order_id, 'PURCHASE_ORDER')
   if (!['ENVIADO', 'RECIBIDO_PARCIAL'].includes(po.status)) {
-    fail('TRANSICION_INVALIDA', `${po.display_number} ya no admite recepciones (estado "${statusLabel('PURCHASE_ORDER', po.status)}").`)
+    fail(
+      'TRANSICION_INVALIDA',
+      `${po.display_number} ya no admite recepciones (estado "${statusLabel('PURCHASE_ORDER', po.status)}").`,
+    )
   }
   const actor = transition(ctx, doc, 'CONFIRM', {
     summary: `Confirmó ${doc.display_number}: ingresó mercadería de ${po.display_number} (remito ${doc.gr!.supplier_delivery_note})`,
@@ -1059,31 +1262,63 @@ function confirmReceipt(ctx: Ctx, doc: T.Document) {
     const pending = round3(pl.quantity - pl.qty_received)
     if (line.quantity > pending + EPS) {
       const p = getProduct(db, doc.company_id, line.product_id)
-      fail('CANTIDAD_EXCEDE_PENDIENTE', `${p.code}: la cantidad supera lo pendiente de la orden (${fmtQty(pending, p.uom_code)}).`)
+      fail(
+        'CANTIDAD_EXCEDE_PENDIENTE',
+        `${p.code}: la cantidad supera lo pendiente de la orden (${fmtQty(pending, p.uom_code)}).`,
+      )
     }
     pl.qty_received = round3(pl.qty_received + line.quantity)
     postMovement(ctx, {
-      company_id: doc.company_id, product_id: line.product_id, warehouse_id: doc.gr!.warehouse_id, type: 'RECEPCION_COMPRA',
-      quantity: line.quantity, unit_cost: line.unit_cost, document_id: doc.id, document_line_id: line.id, date: doc.document_date,
+      company_id: doc.company_id,
+      product_id: line.product_id,
+      warehouse_id: doc.gr!.warehouse_id,
+      type: 'RECEPCION_COMPRA',
+      quantity: line.quantity,
+      unit_cost: line.unit_cost,
+      document_id: doc.id,
+      document_line_id: line.id,
+      date: doc.document_date,
     })
   }
   doc.gr = { ...doc.gr!, received_at: ctx.now }
   recomputePurchaseOrder(ctx, po.id)
   const full = po.status === 'RECIBIDO'
-  notifyRoles(ctx, doc.company_id, ['COMPRAS'], {
-    type: 'OC_RECIBIDA',
-    title: `${po.display_number} ${full ? 'recibida' : 'recibida parcialmente'}`,
-    body: `Depósito registró ${doc.display_number} (remito ${doc.gr!.supplier_delivery_note}).`,
-    link_path: docPath(db, po), document_id: po.id,
-  }, actor.user_id)
+  notifyRoles(
+    ctx,
+    doc.company_id,
+    ['COMPRAS'],
+    {
+      type: 'OC_RECIBIDA',
+      title: `${po.display_number} ${full ? 'recibida' : 'recibida parcialmente'}`,
+      body: `Depósito registró ${doc.display_number} (remito ${doc.gr!.supplier_delivery_note}).`,
+      link_path: docPath(db, po),
+      document_id: po.id,
+    },
+    actor.user_id,
+  )
   const requesters = requisitionsOfOrder(db, po.id)
     .map((id) => db.documents.find((d) => d.id === id)?.created_by)
     .filter((x): x is string => !!x)
-  const productNames = [...new Set(db.grLines.filter((l) => l.document_id === doc.id).map((l) => db.products.find((p) => p.id === l.product_id)?.code))].join(', ')
-  notifyUsers(ctx, doc.company_id, requesters, {
-    type: 'MATERIAL_DISPONIBLE', title: `Material disponible: ${productNames}`,
-    body: `Ingresó al stock con ${doc.display_number}.`, link_path: docPath(db, doc), document_id: doc.id,
-  }, actor.user_id)
+  const productNames = [
+    ...new Set(
+      db.grLines
+        .filter((l) => l.document_id === doc.id)
+        .map((l) => db.products.find((p) => p.id === l.product_id)?.code),
+    ),
+  ].join(', ')
+  notifyUsers(
+    ctx,
+    doc.company_id,
+    requesters,
+    {
+      type: 'MATERIAL_DISPONIBLE',
+      title: `Material disponible: ${productNames}`,
+      body: `Ingresó al stock con ${doc.display_number}.`,
+      link_path: docPath(db, doc),
+      document_id: doc.id,
+    },
+    actor.user_id,
+  )
 }
 
 export function cmdConfirmGoodsReceipt(ctx: Ctx, docId: string) {
@@ -1096,18 +1331,37 @@ export function cmdCancelGoodsReceipt(ctx: Ctx, docId: string, reason: string) {
   if (doc.status === 'CONFIRMADO') {
     const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
     const company = getCompany(db, doc.company_id)
-    if (company.settings.sod_enabled && !eff.supervisor && !eff.roles.includes('GERENCIA') && doc.created_by === ctx.userId) {
-      fail('SEPARACION_FUNCIONES', 'No podés anular una recepción que registraste vos.', 'Otro integrante de Depósito o Gerencia debe revisar y anular.')
+    if (
+      company.settings.sod_enabled &&
+      !eff.supervisor &&
+      !eff.roles.includes('GERENCIA') &&
+      doc.created_by === ctx.userId
+    ) {
+      fail(
+        'SEPARACION_FUNCIONES',
+        'No podés anular una recepción que registraste vos.',
+        'Otro integrante de Depósito o Gerencia debe revisar y anular.',
+      )
     }
     const po = getDoc(db, doc.gr!.purchase_order_id, 'PURCHASE_ORDER')
-    if (po.status === 'CERRADO') fail('TRANSICION_INVALIDA', `${po.display_number} está cerrada: la recepción ya no puede anularse.`)
-    transition(ctx, doc, 'CANCEL', { comment: reason, summary: `Anuló ${doc.display_number} con contramovimiento — ${reason.trim()}` })
+    if (po.status === 'CERRADO')
+      fail('TRANSICION_INVALIDA', `${po.display_number} está cerrada: la recepción ya no puede anularse.`)
+    transition(ctx, doc, 'CANCEL', {
+      comment: reason,
+      summary: `Anuló ${doc.display_number} con contramovimiento — ${reason.trim()}`,
+    })
     for (const line of db.grLines.filter((l) => l.document_id === doc.id)) {
       const pl = db.poLines.find((x) => x.id === line.po_line_id)!
       pl.qty_received = round3(pl.qty_received - line.quantity)
       postMovement(ctx, {
-        company_id: doc.company_id, product_id: line.product_id, warehouse_id: doc.gr!.warehouse_id, type: 'ANULACION_RECEPCION',
-        quantity: -line.quantity, document_id: doc.id, document_line_id: line.id, date: businessDate(company),
+        company_id: doc.company_id,
+        product_id: line.product_id,
+        warehouse_id: doc.gr!.warehouse_id,
+        type: 'ANULACION_RECEPCION',
+        quantity: -line.quantity,
+        document_id: doc.id,
+        document_line_id: line.id,
+        date: businessDate(company),
       })
     }
     recomputePurchaseOrder(ctx, po.id)
@@ -1128,30 +1382,47 @@ export interface StockAdjustmentInput {
 export function cmdCreateStockAdjustment(ctx: Ctx, companyId: string, input: StockAdjustmentInput, confirm: boolean) {
   const { db } = ctx
   const actor = requirePermission(ctx, companyId, 'stock_adjustment.create')
-  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId)) fail('DATO_INVALIDO', 'Elegí el depósito.')
-  if (input.notes.trim().length < 3 && input.reason_code === 'OTRO') fail('DATO_INVALIDO', 'Explicá el motivo del ajuste.')
+  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
+    fail('DATO_INVALIDO', 'Elegí el depósito.')
+  if (input.notes.trim().length < 3 && input.reason_code === 'OTRO')
+    fail('DATO_INVALIDO', 'Explicá el motivo del ajuste.')
   const lines = input.lines.filter((l) => l.product_id && l.quantity_delta !== 0)
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un producto con una cantidad distinta de cero.')
   const doc = newDocument(ctx, companyId, 'STOCK_ADJUSTMENT', actor, {
-    notes: input.notes, sa: { warehouse_id: input.warehouse_id, reason_code: input.reason_code },
+    notes: input.notes,
+    sa: { warehouse_id: input.warehouse_id, reason_code: input.reason_code },
   })
   let total = 0
   lines.forEach((l, i) => {
     const p = getProduct(db, companyId, l.product_id)
-    if (!p.is_stockable) fail('DATO_INVALIDO', `${p.code} es un ${PRODUCT_TYPES[p.product_type].toLowerCase()}: no lleva stock.`)
+    if (!p.is_stockable)
+      fail('DATO_INVALIDO', `${p.code} es un ${PRODUCT_TYPES[p.product_type].toLowerCase()}: no lleva stock.`)
     const bal = db.stockBalances.find((b) => b.product_id === p.id && b.warehouse_id === input.warehouse_id)
     const cost = l.unit_cost && l.unit_cost > 0 ? l.unit_cost : bal?.avg_unit_cost || p.standard_cost
     total += l.quantity_delta * cost
     db.saLines.push({
-      id: uid(), company_id: companyId, document_id: doc.id, line_no: i + 1, product_id: p.id,
-      quantity_delta: round3(l.quantity_delta), unit_cost: round4(cost), notes: l.notes ?? '',
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: p.id,
+      quantity_delta: round3(l.quantity_delta),
+      unit_cost: round4(cost),
+      notes: l.notes ?? '',
     })
   })
   doc.subtotal = round2(total)
   doc.total = round2(total)
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'CREATE', entity_type: 'stock_adjustment', entity_id: doc.id, entity_label: doc.display_number,
-    document_id: doc.id, to_status: 'BORRADOR', summary: `Creó ${doc.display_number} (${lines.length} ítem${lines.length > 1 ? 's' : ''})`,
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'stock_adjustment',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number} (${lines.length} ítem${lines.length > 1 ? 's' : ''})`,
   })
   if (confirm) confirmAdjustment(ctx, doc)
   else openTasksForStatus(ctx, doc, actor)
@@ -1162,10 +1433,21 @@ function confirmAdjustment(ctx: Ctx, doc: T.Document) {
   transition(ctx, doc, 'CONFIRM')
   for (const line of ctx.db.saLines.filter((l) => l.document_id === doc.id)) {
     const type: T.MovementType =
-      doc.sa!.reason_code === 'INVENTARIO_INICIAL' && line.quantity_delta > 0 ? 'STOCK_INICIAL' : line.quantity_delta > 0 ? 'AJUSTE_POSITIVO' : 'AJUSTE_NEGATIVO'
+      doc.sa!.reason_code === 'INVENTARIO_INICIAL' && line.quantity_delta > 0
+        ? 'STOCK_INICIAL'
+        : line.quantity_delta > 0
+          ? 'AJUSTE_POSITIVO'
+          : 'AJUSTE_NEGATIVO'
     postMovement(ctx, {
-      company_id: doc.company_id, product_id: line.product_id, warehouse_id: doc.sa!.warehouse_id, type,
-      quantity: line.quantity_delta, unit_cost: line.unit_cost, document_id: doc.id, document_line_id: line.id, date: doc.document_date,
+      company_id: doc.company_id,
+      product_id: line.product_id,
+      warehouse_id: doc.sa!.warehouse_id,
+      type,
+      quantity: line.quantity_delta,
+      unit_cost: line.unit_cost,
+      document_id: doc.id,
+      document_line_id: line.id,
+      date: doc.document_date,
     })
   }
 }
@@ -1192,18 +1474,26 @@ function masterLabel(kind: MasterKind, row: T.Customer | T.Supplier | T.Product)
   return kind === 'product' ? productLabel(row as T.Product) : `${row.code} ${(row as T.Partner).legal_name}`
 }
 
-export function cmdSaveMaster(ctx: Ctx, kind: MasterKind, companyId: string, input: Record<string, unknown> & { id?: string }) {
+export function cmdSaveMaster(
+  ctx: Ctx,
+  kind: MasterKind,
+  companyId: string,
+  input: Record<string, unknown> & { id?: string },
+) {
   const { db } = ctx
   const isNew = !input.id
   const actor = requirePermission(ctx, companyId, `${kind}.${isNew ? 'create' : 'update'}`)
   const table = masterTable(db, kind)
-  const code = String(input.code ?? '').trim().toUpperCase()
+  const code = String(input.code ?? '')
+    .trim()
+    .toUpperCase()
   if (!code) fail('DATO_INVALIDO', 'Ingresá el código.')
   if (table.some((r) => r.company_id === companyId && r.code === code && r.id !== input.id)) {
     fail('DATO_INVALIDO', `Ya existe un ${MASTER_LABEL[kind]} con el código ${code}.`)
   }
   const nameField = kind === 'product' ? 'name' : 'legal_name'
-  if (String(input[nameField] ?? '').trim().length < 2) fail('DATO_INVALIDO', kind === 'product' ? 'Ingresá la descripción del producto.' : 'Ingresá la razón social.')
+  if (String(input[nameField] ?? '').trim().length < 2)
+    fail('DATO_INVALIDO', kind === 'product' ? 'Ingresá la descripción del producto.' : 'Ingresá la razón social.')
   const clean: Record<string, unknown> = { ...input, code }
   if (kind === 'product') clean.is_stockable = input.product_type !== 'SERVICIO'
   delete clean.id
@@ -1211,12 +1501,23 @@ export function cmdSaveMaster(ctx: Ctx, kind: MasterKind, companyId: string, inp
 
   if (isNew) {
     const row = {
-      ...clean, id: uid(), company_id: companyId, is_active: true,
-      created_at: ctx.now, created_by: ctx.userId, updated_at: ctx.now, updated_by: ctx.userId,
+      ...clean,
+      id: uid(),
+      company_id: companyId,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
     } as unknown as T.Customer & T.Supplier & T.Product
     table.push(row)
     logAudit(ctx, {
-      company_id: companyId, actor, action: 'CREATE', entity_type: kind, entity_id: row.id, entity_label: masterLabel(kind, row),
+      company_id: companyId,
+      actor,
+      action: 'CREATE',
+      entity_type: kind,
+      entity_id: row.id,
+      entity_label: masterLabel(kind, row),
       summary: `Dio de alta el ${MASTER_LABEL[kind]} ${masterLabel(kind, row)}`,
     })
     return row.id
@@ -1229,8 +1530,14 @@ export function cmdSaveMaster(ctx: Ctx, kind: MasterKind, companyId: string, inp
   const changes = diff(before, row, keys)
   if (Object.keys(changes).length) {
     logAudit(ctx, {
-      company_id: companyId, actor, action: 'UPDATE', entity_type: kind, entity_id: row.id, entity_label: masterLabel(kind, row),
-      summary: `Modificó el ${MASTER_LABEL[kind]} ${masterLabel(kind, row)}`, changes,
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: kind,
+      entity_id: row.id,
+      entity_label: masterLabel(kind, row),
+      summary: `Modificó el ${MASTER_LABEL[kind]} ${masterLabel(kind, row)}`,
+      changes,
     })
   }
   return row.id
@@ -1244,8 +1551,13 @@ export function cmdSetMasterActive(ctx: Ctx, kind: MasterKind, companyId: string
   row.updated_at = ctx.now
   row.updated_by = ctx.userId
   logAudit(ctx, {
-    company_id: companyId, actor, action: active ? 'ACTIVATE' : 'DEACTIVATE', entity_type: kind, entity_id: row.id,
-    entity_label: masterLabel(kind, row), summary: `${active ? 'Activó' : 'Desactivó'} el ${MASTER_LABEL[kind]} ${masterLabel(kind, row)}`,
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: kind,
+    entity_id: row.id,
+    entity_label: masterLabel(kind, row),
+    summary: `${active ? 'Activó' : 'Desactivó'} el ${MASTER_LABEL[kind]} ${masterLabel(kind, row)}`,
   })
 }
 
@@ -1254,7 +1566,8 @@ export function cmdSetMasterActive(ctx: Ctx, kind: MasterKind, companyId: string
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
   const task = ctx.db.tasks.find((t) => t.id === taskId)
   if (!task) fail('DATO_INVALIDO', 'La tarea no existe.')
-  if (task.status !== 'PENDIENTE' && task.status !== 'EN_CURSO') fail('TRANSICION_INVALIDA', 'La tarea ya está resuelta.')
+  if (task.status !== 'PENDIENTE' && task.status !== 'EN_CURSO')
+    fail('TRANSICION_INVALIDA', 'La tarea ya está resuelta.')
   if (claim) {
     if (task.claimed_by && task.claimed_by !== ctx.userId) {
       fail('TAREA_TOMADA', `La tarea ya la tomó ${fullName(getProfile(ctx.db, task.claimed_by))}.`)
@@ -1292,7 +1605,12 @@ export function cmdAssignRole(ctx: Ctx, companyId: string, userId: string, role:
   db.memberRoles.push({ id: uid(), company_id: companyId, member_id: member.id, role_code: role, sector_id: sectorId })
   const profile = getProfile(db, userId)
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'ASSIGN_ROLE', entity_type: 'member_role', entity_id: member.id, entity_label: fullName(profile),
+    company_id: companyId,
+    actor,
+    action: 'ASSIGN_ROLE',
+    entity_type: 'member_role',
+    entity_id: member.id,
+    entity_label: fullName(profile),
     summary: `Asignó el rol ${ROLES[role].name} (${sectorName(db, sectorId)}) a ${fullName(profile)}`,
   })
 }
@@ -1303,11 +1621,17 @@ export function cmdRemoveRole(ctx: Ctx, companyId: string, memberRoleId: string)
   const mr = db.memberRoles.find((r) => r.id === memberRoleId && r.company_id === companyId)
   if (!mr) fail('DATO_INVALIDO', 'La asignación no existe.')
   const member = db.members.find((m) => m.id === mr.member_id)
-  if (mr.role_code === 'DOCENTE' && member?.user_id === ctx.userId) fail('DATO_INVALIDO', 'No podés quitarte tu propio rol de supervisor.')
+  if (mr.role_code === 'DOCENTE' && member?.user_id === ctx.userId)
+    fail('DATO_INVALIDO', 'No podés quitarte tu propio rol de supervisor.')
   db.memberRoles = db.memberRoles.filter((r) => r.id !== memberRoleId)
   const profile = getProfile(db, member?.user_id ?? null)
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'REMOVE_ROLE', entity_type: 'member_role', entity_id: mr.member_id, entity_label: fullName(profile),
+    company_id: companyId,
+    actor,
+    action: 'REMOVE_ROLE',
+    entity_type: 'member_role',
+    entity_id: mr.member_id,
+    entity_label: fullName(profile),
     summary: `Quitó el rol ${ROLES[mr.role_code].name} a ${fullName(profile)}`,
   })
 }
@@ -1323,18 +1647,32 @@ export function cmdCreateStudent(ctx: Ctx, companyId: string, input: StudentInpu
   const actor = requireSupervisor(ctx, companyId)
   const { db } = ctx
   const username = input.username.trim().toLowerCase()
-  if (!/^[a-z0-9._-]{3,30}$/.test(username)) fail('DATO_INVALIDO', 'El usuario debe tener entre 3 y 30 caracteres: letras, números, punto o guion.')
+  if (!/^[a-z0-9._-]{3,30}$/.test(username))
+    fail('DATO_INVALIDO', 'El usuario debe tener entre 3 y 30 caracteres: letras, números, punto o guion.')
   if (db.profiles.some((p) => p.username === username)) fail('DATO_INVALIDO', `El usuario ${username} ya existe.`)
-  if (input.first_name.trim().length < 2 || input.last_name.trim().length < 2) fail('DATO_INVALIDO', 'Ingresá nombre y apellido.')
+  if (input.first_name.trim().length < 2 || input.last_name.trim().length < 2)
+    fail('DATO_INVALIDO', 'Ingresá nombre y apellido.')
   if (input.password.length < 6) fail('DATO_INVALIDO', 'La contraseña inicial debe tener al menos 6 caracteres.')
   const profile: T.Profile = {
-    id: uid(), username, password: input.password, first_name: input.first_name.trim(), last_name: input.last_name.trim(),
-    app_role: 'ESTUDIANTE', is_active: true, must_change_password: false, created_at: ctx.now,
+    id: uid(),
+    username,
+    password: input.password,
+    first_name: input.first_name.trim(),
+    last_name: input.last_name.trim(),
+    app_role: 'ESTUDIANTE',
+    is_active: true,
+    must_change_password: false,
+    created_at: ctx.now,
   }
   db.profiles.push(profile)
   db.members.push({ id: uid(), company_id: companyId, user_id: profile.id, job_title: '', is_active: true })
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'CREATE', entity_type: 'profile', entity_id: profile.id, entity_label: fullName(profile),
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'profile',
+    entity_id: profile.id,
+    entity_label: fullName(profile),
     summary: `Dio de alta al estudiante ${fullName(profile)} (${username})`,
   })
   return profile.id
@@ -1346,7 +1684,12 @@ export function cmdSetModule(ctx: Ctx, companyId: string, module: T.ModuleCode, 
   if (row) row.is_enabled = enabled
   else ctx.db.companyModules.push({ company_id: companyId, module_code: module, is_enabled: enabled })
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'SETTINGS', entity_type: 'company_module', entity_id: companyId, entity_label: MODULES[module].name,
+    company_id: companyId,
+    actor,
+    action: 'SETTINGS',
+    entity_type: 'company_module',
+    entity_id: companyId,
+    entity_label: MODULES[module].name,
     summary: `${enabled ? 'Habilitó' : 'Bloqueó'} el módulo ${MODULES[module].name}`,
   })
 }
@@ -1357,7 +1700,13 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
   const before = { ...company.settings }
   company.settings = { ...company.settings, ...settings }
   logAudit(ctx, {
-    company_id: companyId, actor, action: 'SETTINGS', entity_type: 'company', entity_id: companyId, entity_label: company.legal_name,
-    summary: 'Cambió la configuración de control interno de la empresa', changes: diff(before, company.settings, ['sod_enabled', 'allow_negative_stock']),
+    company_id: companyId,
+    actor,
+    action: 'SETTINGS',
+    entity_type: 'company',
+    entity_id: companyId,
+    entity_label: company.legal_name,
+    summary: 'Cambió la configuración de control interno de la empresa',
+    changes: diff(before, company.settings, ['sod_enabled', 'allow_negative_stock']),
   })
 }

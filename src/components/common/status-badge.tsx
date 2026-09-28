@@ -11,7 +11,13 @@ export const BADGE_CLASSES: Record<Badge, string> = {
 
 export function StatusBadge({ label, badge, className }: { label: string; badge: Badge; className?: string }) {
   return (
-    <span className={cn('inline-flex h-5 items-center rounded-full px-2 text-xs font-medium whitespace-nowrap ring-1 ring-inset', BADGE_CLASSES[badge], className)}>
+    <span
+      className={cn(
+        'inline-flex h-5 items-center rounded-full px-2 text-xs font-medium whitespace-nowrap ring-1 ring-inset',
+        BADGE_CLASSES[badge],
+        className,
+      )}
+    >
       {label}
     </span>
   )

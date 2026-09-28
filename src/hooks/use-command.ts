@@ -22,7 +22,8 @@ export function useCommand<A extends unknown[], R>(fn: (...args: A) => Promise<R
     mutationFn: (args: A) => fn(...args),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries()
-      if (options.success) toast.success(typeof options.success === 'function' ? options.success(result) : options.success)
+      if (options.success)
+        toast.success(typeof options.success === 'function' ? options.success(result) : options.success)
       options.onSuccess?.(result)
     },
     onError: showError,

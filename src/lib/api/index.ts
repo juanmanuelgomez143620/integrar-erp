@@ -29,7 +29,14 @@ export type {
   StockRow,
   TaskItem,
 } from '../mock/queries'
-export type { GoodsReceiptInput, PurchaseOrderInput, RequisitionInput, StockAdjustmentInput, StudentInput, MasterKind } from '../mock/engine'
+export type {
+  GoodsReceiptInput,
+  PurchaseOrderInput,
+  RequisitionInput,
+  StockAdjustmentInput,
+  StudentInput,
+  MasterKind,
+} from '../mock/engine'
 
 const SESSION_KEY = 'integrar-erp.session'
 
@@ -68,8 +75,10 @@ export const auth = {
     await wait(250)
     const name = username.trim().toLowerCase()
     const profile = read((db) => db.profiles.find((p) => p.username === name))
-    if (!profile || profile.password !== password) throw new E.BusinessError('CREDENCIALES', 'Usuario o contraseña incorrectos.')
-    if (!profile.is_active) throw new E.BusinessError('USUARIO_INACTIVO', 'Tu usuario está desactivado. Consultá a tu docente.')
+    if (!profile || profile.password !== password)
+      throw new E.BusinessError('CREDENCIALES', 'Usuario o contraseña incorrectos.')
+    if (!profile.is_active)
+      throw new E.BusinessError('USUARIO_INACTIVO', 'Tu usuario está desactivado. Consultá a tu docente.')
     sessionStorage.setItem(SESSION_KEY, profile.id)
     return profile.id
   },
@@ -96,11 +105,13 @@ export const api = {
   product: (companyId: string, code: string) => query((db, u) => Q.productDetail(db, u, companyId, code)),
   stock: (companyId: string) => query((db, u) => Q.listStock(db, u, companyId)),
   documents: (companyId: string, docType: T.DocType) => query((db, u) => Q.listDocuments(db, u, companyId, docType)),
-  document: (companyId: string, docType: T.DocType, number: string) => query((db, u) => Q.documentDetail(db, u, companyId, docType, number)),
+  document: (companyId: string, docType: T.DocType, number: string) =>
+    query((db, u) => Q.documentDetail(db, u, companyId, docType, number)),
   documentById: (docId: string) => query((db, u) => Q.documentDetailById(db, u, docId)),
   pendingRequisitionLines: (companyId: string) => query((db, u) => Q.pendingRequisitionLines(db, u, companyId)),
   receivableOrders: (companyId: string) => query((db, u) => Q.receivableOrders(db, u, companyId)),
-  tasks: (companyId: string, scope: 'mine' | 'all', includeClosed = false) => query((db, u) => Q.listTasks(db, u, companyId, scope, includeClosed)),
+  tasks: (companyId: string, scope: 'mine' | 'all', includeClosed = false) =>
+    query((db, u) => Q.listTasks(db, u, companyId, scope, includeClosed)),
   notifications: (companyId: string) => query((db, u) => Q.listNotifications(db, u, companyId)),
   audit: (companyId: string) => query((db, u) => Q.listAudit(db, u, companyId)),
   dashboard: (companyId: string) => query((db, u) => Q.dashboard(db, u, companyId)),
@@ -111,17 +122,22 @@ export const api = {
 // ------------------------------------------------------------ Comandos (futuras RPC)
 
 export const commands = {
-  createRequisition: (companyId: string, input: E.RequisitionInput, submit: boolean) => command((c) => E.cmdCreateRequisition(c, companyId, input, submit)),
-  updateRequisition: (docId: string, input: E.RequisitionInput) => command((c) => E.cmdUpdateRequisition(c, docId, input)),
+  createRequisition: (companyId: string, input: E.RequisitionInput, submit: boolean) =>
+    command((c) => E.cmdCreateRequisition(c, companyId, input, submit)),
+  updateRequisition: (docId: string, input: E.RequisitionInput) =>
+    command((c) => E.cmdUpdateRequisition(c, docId, input)),
   submitRequisition: (docId: string) => command((c) => E.cmdSubmitRequisition(c, docId)),
   rejectRequisition: (docId: string, reason: string) => command((c) => E.cmdRejectRequisition(c, docId, reason)),
   cancelRequisition: (docId: string, reason: string) => command((c) => E.cmdCancelRequisition(c, docId, reason)),
   closeRequisition: (docId: string, reason: string) => command((c) => E.cmdCloseRequisition(c, docId, reason)),
 
-  createPurchaseOrder: (companyId: string, input: E.PurchaseOrderInput) => command((c) => E.cmdCreatePurchaseOrder(c, companyId, input)),
-  updatePurchaseOrder: (docId: string, input: E.PurchaseOrderInput) => command((c) => E.cmdUpdatePurchaseOrder(c, docId, input)),
+  createPurchaseOrder: (companyId: string, input: E.PurchaseOrderInput) =>
+    command((c) => E.cmdCreatePurchaseOrder(c, companyId, input)),
+  updatePurchaseOrder: (docId: string, input: E.PurchaseOrderInput) =>
+    command((c) => E.cmdUpdatePurchaseOrder(c, docId, input)),
   submitPurchaseOrder: (docId: string) => command((c) => E.cmdSubmitPurchaseOrder(c, docId)),
-  approvePurchaseOrder: (docId: string, comment: string) => command((c) => E.cmdApprovePurchaseOrder(c, docId, comment)),
+  approvePurchaseOrder: (docId: string, comment: string) =>
+    command((c) => E.cmdApprovePurchaseOrder(c, docId, comment)),
   rejectPurchaseOrder: (docId: string, reason: string) => command((c) => E.cmdRejectPurchaseOrder(c, docId, reason)),
   withdrawPurchaseOrder: (docId: string) => command((c) => E.cmdWithdrawPurchaseOrder(c, docId)),
   reopenPurchaseOrder: (docId: string) => command((c) => E.cmdReopenPurchaseOrder(c, docId)),
@@ -129,25 +145,34 @@ export const commands = {
   cancelPurchaseOrder: (docId: string, reason: string) => command((c) => E.cmdCancelPurchaseOrder(c, docId, reason)),
   closePurchaseOrder: (docId: string, reason: string) => command((c) => E.cmdClosePurchaseOrder(c, docId, reason)),
 
-  createGoodsReceipt: (companyId: string, input: E.GoodsReceiptInput, confirm: boolean) => command((c) => E.cmdCreateGoodsReceipt(c, companyId, input, confirm)),
+  createGoodsReceipt: (companyId: string, input: E.GoodsReceiptInput, confirm: boolean) =>
+    command((c) => E.cmdCreateGoodsReceipt(c, companyId, input, confirm)),
   confirmGoodsReceipt: (docId: string) => command((c) => E.cmdConfirmGoodsReceipt(c, docId)),
   cancelGoodsReceipt: (docId: string, reason: string) => command((c) => E.cmdCancelGoodsReceipt(c, docId, reason)),
 
-  createStockAdjustment: (companyId: string, input: E.StockAdjustmentInput, confirm: boolean) => command((c) => E.cmdCreateStockAdjustment(c, companyId, input, confirm)),
+  createStockAdjustment: (companyId: string, input: E.StockAdjustmentInput, confirm: boolean) =>
+    command((c) => E.cmdCreateStockAdjustment(c, companyId, input, confirm)),
   confirmStockAdjustment: (docId: string) => command((c) => E.cmdConfirmStockAdjustment(c, docId)),
-  cancelStockAdjustment: (docId: string, reason: string) => command((c) => E.cmdCancelStockAdjustment(c, docId, reason)),
+  cancelStockAdjustment: (docId: string, reason: string) =>
+    command((c) => E.cmdCancelStockAdjustment(c, docId, reason)),
 
-  saveMaster: (kind: E.MasterKind, companyId: string, input: Record<string, unknown> & { id?: string }) => command((c) => E.cmdSaveMaster(c, kind, companyId, input)),
-  setMasterActive: (kind: E.MasterKind, companyId: string, id: string, active: boolean) => command((c) => E.cmdSetMasterActive(c, kind, companyId, id, active)),
+  saveMaster: (kind: E.MasterKind, companyId: string, input: Record<string, unknown> & { id?: string }) =>
+    command((c) => E.cmdSaveMaster(c, kind, companyId, input)),
+  setMasterActive: (kind: E.MasterKind, companyId: string, id: string, active: boolean) =>
+    command((c) => E.cmdSetMasterActive(c, kind, companyId, id, active)),
 
   claimTask: (taskId: string, claim: boolean) => command((c) => E.cmdClaimTask(c, taskId, claim)),
-  markNotificationsRead: (companyId: string, ids: string[] | 'all') => command((c) => E.cmdMarkNotificationsRead(c, ids, companyId)),
+  markNotificationsRead: (companyId: string, ids: string[] | 'all') =>
+    command((c) => E.cmdMarkNotificationsRead(c, ids, companyId)),
 
-  assignRole: (companyId: string, userId: string, role: T.RoleCode, sectorId: string | null) => command((c) => E.cmdAssignRole(c, companyId, userId, role, sectorId)),
+  assignRole: (companyId: string, userId: string, role: T.RoleCode, sectorId: string | null) =>
+    command((c) => E.cmdAssignRole(c, companyId, userId, role, sectorId)),
   removeRole: (companyId: string, memberRoleId: string) => command((c) => E.cmdRemoveRole(c, companyId, memberRoleId)),
   createStudent: (companyId: string, input: E.StudentInput) => command((c) => E.cmdCreateStudent(c, companyId, input)),
-  setModule: (companyId: string, module: T.ModuleCode, enabled: boolean) => command((c) => E.cmdSetModule(c, companyId, module, enabled)),
-  updateCompanySettings: (companyId: string, settings: Partial<T.CompanySettings>) => command((c) => E.cmdUpdateCompanySettings(c, companyId, settings)),
+  setModule: (companyId: string, module: T.ModuleCode, enabled: boolean) =>
+    command((c) => E.cmdSetModule(c, companyId, module, enabled)),
+  updateCompanySettings: (companyId: string, settings: Partial<T.CompanySettings>) =>
+    command((c) => E.cmdUpdateCompanySettings(c, companyId, settings)),
 
   async resetDemoData() {
     await wait(300)

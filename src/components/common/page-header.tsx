@@ -7,7 +7,13 @@ export interface Crumb {
   to?: string
 }
 
-export function PageHeader({ crumbs, title, description, actions, meta }: {
+export function PageHeader({
+  crumbs,
+  title,
+  description,
+  actions,
+  meta,
+}: {
   crumbs?: Crumb[]
   title: ReactNode
   description?: ReactNode
@@ -21,7 +27,13 @@ export function PageHeader({ crumbs, title, description, actions, meta }: {
           {crumbs.map((c, i) => (
             <span key={i} className="flex items-center gap-1">
               {i > 0 && <ChevronRight className="size-3" />}
-              {c.to ? <Link to={c.to} className="hover:text-foreground hover:underline">{c.label}</Link> : <span className="text-foreground">{c.label}</span>}
+              {c.to ? (
+                <Link to={c.to} className="hover:text-foreground hover:underline">
+                  {c.label}
+                </Link>
+              ) : (
+                <span className="text-foreground">{c.label}</span>
+              )}
             </span>
           ))}
         </nav>

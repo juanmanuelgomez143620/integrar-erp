@@ -51,7 +51,8 @@ export function MyWorkPage() {
       </Tabs>
       {!isLoading && rows.length === 0 && tab === 'mine' ? (
         <EmptyState icon={Inbox} title="No tenés tareas pendientes">
-          Cuando otro sector envíe algo que requiere tu intervención (una solicitud, una orden para aprobar, mercadería para recibir), va a aparecer acá.
+          Cuando otro sector envíe algo que requiere tu intervención (una solicitud, una orden para aprobar, mercadería
+          para recibir), va a aparecer acá.
         </EmptyState>
       ) : (
         <DataTable<TaskItem>
@@ -62,36 +63,77 @@ export function MyWorkPage() {
           onRowClick={(t) => t.path && navigate(t.path)}
           columns={[
             {
-              key: 'title', header: 'Tarea', cell: (t) => (
+              key: 'title',
+              header: 'Tarea',
+              cell: (t) => (
                 <div className="min-w-64">
                   <div className="font-medium">{t.title}</div>
                   <div className="text-xs text-muted-foreground">{t.description}</div>
                 </div>
               ),
             },
-            { key: 'type', header: 'Tipo', cell: (t) => <span className="text-xs">{TASK_TYPE_LABELS[t.task_type] ?? t.task_type}</span> },
-            { key: 'doc', header: 'Documento', cell: (t) => (t.document_label ? <Mono>{t.document_label}</Mono> : '—') },
             {
-              key: 'assignee', header: 'Asignada a', cell: (t) => (
+              key: 'type',
+              header: 'Tipo',
+              cell: (t) => <span className="text-xs">{TASK_TYPE_LABELS[t.task_type] ?? t.task_type}</span>,
+            },
+            {
+              key: 'doc',
+              header: 'Documento',
+              cell: (t) => (t.document_label ? <Mono>{t.document_label}</Mono> : '—'),
+            },
+            {
+              key: 'assignee',
+              header: 'Asignada a',
+              cell: (t) => (
                 <div className="text-xs">
                   <div>{t.assignee_label}</div>
-                  {t.claimed_by_name && t.status === 'EN_CURSO' && <div className="text-muted-foreground">Tomada por {t.claimed_by_name}</div>}
-                  {t.completed_by_name && tab === 'closed' && <div className="text-muted-foreground">Resuelta por {t.completed_by_name}</div>}
+                  {t.claimed_by_name && t.status === 'EN_CURSO' && (
+                    <div className="text-muted-foreground">Tomada por {t.claimed_by_name}</div>
+                  )}
+                  {t.completed_by_name && tab === 'closed' && (
+                    <div className="text-muted-foreground">Resuelta por {t.completed_by_name}</div>
+                  )}
                 </div>
               ),
             },
-            { key: 'created', header: 'Desde', sort: (t) => t.created_at, cell: (t) => <span className="text-xs text-muted-foreground" title={dateTime(t.created_at)}>{relative(t.created_at)}</span> },
+            {
+              key: 'created',
+              header: 'Desde',
+              sort: (t) => t.created_at,
+              cell: (t) => (
+                <span className="text-xs text-muted-foreground" title={dateTime(t.created_at)}>
+                  {relative(t.created_at)}
+                </span>
+              ),
+            },
             { key: 'status', header: 'Estado', cell: (t) => <StatusBadge {...TASK_STATUS[t.status]} /> },
             {
-              key: 'actions', header: '', align: 'right', cell: (t) => (
+              key: 'actions',
+              header: '',
+              align: 'right',
+              cell: (t) => (
                 <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                   {t.mine && t.status === 'PENDIENTE' && (
-                    <Button size="xs" variant="outline" onClick={() => claim.mutate([t.id, true])} title="Avisá al resto de tu isla que te ocupás vos"><Hand /> Tomar</Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => claim.mutate([t.id, true])}
+                      title="Avisá al resto de tu isla que te ocupás vos"
+                    >
+                      <Hand /> Tomar
+                    </Button>
                   )}
                   {t.status === 'EN_CURSO' && t.claimed_by === userId && (
-                    <Button size="xs" variant="ghost" onClick={() => claim.mutate([t.id, false])}><Undo2 /> Liberar</Button>
+                    <Button size="xs" variant="ghost" onClick={() => claim.mutate([t.id, false])}>
+                      <Undo2 /> Liberar
+                    </Button>
                   )}
-                  {t.path && <Button size="xs" asChild><Link to={t.path}>Abrir</Link></Button>}
+                  {t.path && (
+                    <Button size="xs" asChild>
+                      <Link to={t.path}>Abrir</Link>
+                    </Button>
+                  )}
                 </div>
               ),
             },

@@ -42,7 +42,13 @@ export function buildSeed(): DB {
     version: DB_VERSION,
     seededAt: now,
     seq: { audit: 0, movement: 0 },
-    school: { official_name: 'Escuela Normal Superior N.º 9', short_name: 'ENS N.º 9', city: '', province: '', features: {} },
+    school: {
+      official_name: 'Escuela Normal Superior N.º 9',
+      short_name: 'ENS N.º 9',
+      city: '',
+      province: '',
+      features: {},
+    },
     profiles: [],
     courses: [],
     companies: [],
@@ -72,7 +78,12 @@ export function buildSeed(): DB {
   }
 
   // ------------------------------------------------------------ Escuela y curso
-  const course: T.Course = { id: id('crs'), academic_year: 2027, name: '5.º A', orientation: 'Gestión y Administración de las Organizaciones' }
+  const course: T.Course = {
+    id: id('crs'),
+    academic_year: 2027,
+    name: '5.º A',
+    orientation: 'Gestión y Administración de las Organizaciones',
+  }
   db.courses.push(course)
 
   // ------------------------------------------------------------ Empresa
@@ -97,12 +108,19 @@ export function buildSeed(): DB {
   })
 
   const islandNames = [
-    'Gerencia y Control de Gestión', 'Compras', 'Ventas y Clientes', 'Contabilidad e Impuestos',
-    'Tesorería y Finanzas', 'RRHH y Sueldos', 'Producción y Costos', 'Depósito y Logística',
+    'Gerencia y Control de Gestión',
+    'Compras',
+    'Ventas y Clientes',
+    'Contabilidad e Impuestos',
+    'Tesorería y Finanzas',
+    'RRHH y Sueldos',
+    'Producción y Costos',
+    'Depósito y Logística',
   ]
   const islands = islandNames.map((name, i) => ({ id: id('isl'), company_id: companyId, number: i + 1, name }))
   db.islands.push(...islands)
 
+  // prettier-ignore
   const sectorDefs: [string, string, number][] = [
     ['GER', 'Gerencia', 1], ['CGE', 'Control de Gestión', 1], ['COM', 'Compras', 2], ['VEN', 'Ventas', 3],
     ['CON', 'Contabilidad', 4], ['IMP', 'Impuestos', 4], ['TES', 'Tesorería y Finanzas', 5], ['RRH', 'RRHH y Sueldos', 6],
@@ -123,6 +141,7 @@ export function buildSeed(): DB {
     db.companyModules.push({ company_id: companyId, module_code: module, is_enabled: true })
   }
 
+  // prettier-ignore
   db.approvalRules.push(
     { id: id('apr'), company_id: companyId, doc_type: 'PURCHASE_ORDER', level: 1, min_amount: 0, max_amount: 500000, approver_role: 'COMPRAS', require_different_user: true, is_active: true, description: 'Órdenes de hasta $ 500.000 (IVA incluido): las aprueba otro integrante de Compras.' },
     { id: id('apr'), company_id: companyId, doc_type: 'PURCHASE_ORDER', level: 1, min_amount: 500000.01, max_amount: null, approver_role: 'GERENCIA', require_different_user: true, is_active: true, description: 'Órdenes de más de $ 500.000 (IVA incluido): las aprueba Gerencia.' },
@@ -130,11 +149,24 @@ export function buildSeed(): DB {
 
   // ------------------------------------------------------------ Usuarios demo
   const users: Record<string, string> = {}
-  const addUser = (username: string, first: string, last: string, appRole: T.AppRole, roles: [T.RoleCode, string | null][], jobTitle: string) => {
+  const addUser = (
+    username: string,
+    first: string,
+    last: string,
+    appRole: T.AppRole,
+    roles: [T.RoleCode, string | null][],
+    jobTitle: string,
+  ) => {
     const profile: T.Profile = {
       id: `usr-${username}`, // estable: la sesión sobrevive a un reinicio de datos
-      username, password: DEMO_PASSWORD, first_name: first, last_name: last, app_role: appRole,
-      is_active: true, must_change_password: false, created_at: now,
+      username,
+      password: DEMO_PASSWORD,
+      first_name: first,
+      last_name: last,
+      app_role: appRole,
+      is_active: true,
+      must_change_password: false,
+      created_at: now,
     }
     db.profiles.push(profile)
     users[username] = profile.id
@@ -142,7 +174,13 @@ export function buildSeed(): DB {
       const member = { id: id('mbr'), company_id: companyId, user_id: profile.id, job_title: jobTitle, is_active: true }
       db.members.push(member)
       for (const [role, sectorCode] of roles) {
-        db.memberRoles.push({ id: id('mro'), company_id: companyId, member_id: member.id, role_code: role, sector_id: sectorCode ? sector[sectorCode] : null })
+        db.memberRoles.push({
+          id: id('mro'),
+          company_id: companyId,
+          member_id: member.id,
+          role_code: role,
+          sector_id: sectorCode ? sector[sectorCode] : null,
+        })
       }
     }
   }
@@ -153,14 +191,35 @@ export function buildSeed(): DB {
   addUser('compras1', 'Juan', 'Pérez', 'ESTUDIANTE', [['COMPRAS', 'COM']], 'Jefe de Compras')
   addUser('compras2', 'Lucía', 'Benítez', 'ESTUDIANTE', [['COMPRAS', 'COM']], 'Analista de Compras')
   addUser('ventas', 'Carlos', 'Ramírez', 'ESTUDIANTE', [['VENTAS', 'VEN']], 'Ejecutivo de Ventas')
-  addUser('contabilidad', 'Diego', 'Fernández', 'ESTUDIANTE', [['CONTABILIDAD', 'CON'], ['IMPUESTOS', 'IMP']], 'Contador')
+  addUser(
+    'contabilidad',
+    'Diego',
+    'Fernández',
+    'ESTUDIANTE',
+    [
+      ['CONTABILIDAD', 'CON'],
+      ['IMPUESTOS', 'IMP'],
+    ],
+    'Contador',
+  )
   addUser('tesoreria', 'Valentina', 'Ruiz', 'ESTUDIANTE', [['TESORERIA', 'TES']], 'Tesorera')
   addUser('rrhh', 'Martín', 'Silva', 'ESTUDIANTE', [['RRHH', 'RRH']], 'Analista de RRHH')
   addUser('produccion', 'Ana', 'Sosa', 'ESTUDIANTE', [['PRODUCCION', 'PRO']], 'Jefa de Producción')
-  addUser('deposito', 'Pedro', 'Gómez', 'ESTUDIANTE', [['DEPOSITO', 'DEP'], ['LOGISTICA', 'LOG']], 'Encargado de Depósito')
+  addUser(
+    'deposito',
+    'Pedro',
+    'Gómez',
+    'ESTUDIANTE',
+    [
+      ['DEPOSITO', 'DEP'],
+      ['LOGISTICA', 'LOG'],
+    ],
+    'Encargado de Depósito',
+  )
 
   // ------------------------------------------------------------ Proveedores
   const audited = { created_at: now, created_by: null, updated_at: now, updated_by: null }
+  // prettier-ignore
   const supplierDefs: [string, string, string, T.VatCondition, string, string, number][] = [
     ['PRV-001', 'Aserradero Monte Verde SRL', 'Aserradero', 'RESPONSABLE_INSCRIPTO', 'Montecarlo', 'Rubén Ayala', 5],
     ['PRV-002', 'Placas del Litoral SA', 'Placas y tableros', 'RESPONSABLE_INSCRIPTO', 'Posadas', 'Gabriela Núñez', 7],
@@ -176,16 +235,32 @@ export function buildSeed(): DB {
   const supplier: Record<string, string> = {}
   supplierDefs.forEach(([code, name, category, vat, city, contact, lead], i) => {
     const s: T.Supplier = {
-      id: id('sup'), company_id: companyId, code, legal_name: name, trade_name: '', tax_id: cuit(vat === 'MONOTRIBUTO' ? 20 : 30, 100 + i),
-      vat_condition: vat, address_line: 'Domicilio ficticio', city, province: city === 'Resistencia' ? 'Chaco' : 'Misiones',
-      phone: '', email: '', contact_name: contact, payment_terms_days: vat === 'MONOTRIBUTO' ? 0 : 30, notes: '', is_active: true,
-      lead_time_days: lead, category, ...audited,
+      id: id('sup'),
+      company_id: companyId,
+      code,
+      legal_name: name,
+      trade_name: '',
+      tax_id: cuit(vat === 'MONOTRIBUTO' ? 20 : 30, 100 + i),
+      vat_condition: vat,
+      address_line: 'Domicilio ficticio',
+      city,
+      province: city === 'Resistencia' ? 'Chaco' : 'Misiones',
+      phone: '',
+      email: '',
+      contact_name: contact,
+      payment_terms_days: vat === 'MONOTRIBUTO' ? 0 : 30,
+      notes: '',
+      is_active: true,
+      lead_time_days: lead,
+      category,
+      ...audited,
     }
     supplier[code] = s.id
     db.suppliers.push(s)
   })
 
   // ------------------------------------------------------------ Clientes
+  // prettier-ignore
   const customerDefs: [string, string, T.VatCondition, string, number, number | null][] = [
     ['CLI-001', 'Mueblería El Ceibo SRL', 'RESPONSABLE_INSCRIPTO', 'Posadas', 30, 4000000],
     ['CLI-002', 'Hogar Colonial SA', 'RESPONSABLE_INSCRIPTO', 'Oberá', 30, 6000000],
@@ -200,16 +275,44 @@ export function buildSeed(): DB {
   ]
   customerDefs.forEach(([code, name, vat, city, terms, limit], i) => {
     db.customers.push({
-      id: id('cus'), company_id: companyId, code, legal_name: name, trade_name: '',
-      tax_id: vat === 'CONSUMIDOR_FINAL' ? '' : cuit(vat === 'MONOTRIBUTO' ? 20 : 30, 200 + i), vat_condition: vat,
-      address_line: 'Domicilio ficticio', city, province: city === 'Corrientes' ? 'Corrientes' : 'Misiones', phone: '', email: '',
-      contact_name: '', payment_terms_days: terms, credit_limit: limit, notes: '', is_active: true, ...audited,
+      id: id('cus'),
+      company_id: companyId,
+      code,
+      legal_name: name,
+      trade_name: '',
+      tax_id: vat === 'CONSUMIDOR_FINAL' ? '' : cuit(vat === 'MONOTRIBUTO' ? 20 : 30, 200 + i),
+      vat_condition: vat,
+      address_line: 'Domicilio ficticio',
+      city,
+      province: city === 'Corrientes' ? 'Corrientes' : 'Misiones',
+      phone: '',
+      email: '',
+      contact_name: '',
+      payment_terms_days: terms,
+      credit_limit: limit,
+      notes: '',
+      is_active: true,
+      ...audited,
     })
   })
 
   // ------------------------------------------------------------ Productos
-  type ProductDef = [string, string, T.ProductType, string, number, number | null, number, number | null, string | null, 'MP' | 'PT', number, string]
+  type ProductDef = [
+    string,
+    string,
+    T.ProductType,
+    string,
+    number,
+    number | null,
+    number,
+    number | null,
+    string | null,
+    'MP' | 'PT',
+    number,
+    string,
+  ]
   // código, descripción, tipo, unidad, costo, precio venta, stock mínimo, reposición, proveedor, depósito, stock inicial, categoría
+  // prettier-ignore
   const productDefs: ProductDef[] = [
     ['MP-001', 'Tabla de pino elliottis 1" × 6"', 'MATERIA_PRIMA', 'PIE', 1300, null, 800, 1000, 'PRV-001', 'MP', 1200, 'Madera maciza'],
     ['MP-002', 'Tabla de eucalipto grandis 1" × 8"', 'MATERIA_PRIMA', 'PIE', 1600, null, 600, 800, 'PRV-001', 'MP', 900, 'Madera maciza'],
@@ -235,10 +338,25 @@ export function buildSeed(): DB {
   const product: Record<string, T.Product> = {}
   for (const [code, name, type, uom, cost, price, min, reorder, supplierCode, wh, , category] of productDefs) {
     const p: T.Product = {
-      id: id('prd'), company_id: companyId, code, name, description: '', category, product_type: type, uom_code: uom,
-      is_stockable: type !== 'SERVICIO', standard_cost: cost, sale_price: price, vat_rate: 21, min_stock: min, reorder_qty: reorder,
-      default_supplier_id: supplierCode ? supplier[supplierCode] : null, default_warehouse_id: wh === 'MP' ? whMP.id : whPT.id,
-      location: wh === 'MP' ? 'Nave 1' : 'Nave 2', is_active: true, ...audited,
+      id: id('prd'),
+      company_id: companyId,
+      code,
+      name,
+      description: '',
+      category,
+      product_type: type,
+      uom_code: uom,
+      is_stockable: type !== 'SERVICIO',
+      standard_cost: cost,
+      sale_price: price,
+      vat_rate: 21,
+      min_stock: min,
+      reorder_qty: reorder,
+      default_supplier_id: supplierCode ? supplier[supplierCode] : null,
+      default_warehouse_id: wh === 'MP' ? whMP.id : whPT.id,
+      location: wh === 'MP' ? 'Nave 1' : 'Nave 2',
+      is_active: true,
+      ...audited,
     }
     product[code] = p
     db.products.push(p)
@@ -248,28 +366,41 @@ export function buildSeed(): DB {
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
   const ctx = (userId: string | null, minutes: number): Ctx => ({ db, userId, now: minutesAgo(minutes) })
 
-  for (const [wh, whId] of [['MP', whMP.id], ['PT', whPT.id]] as const) {
-    cmdCreateStockAdjustment(ctx(null, 300), companyId, {
-      warehouse_id: whId,
-      reason_code: 'INVENTARIO_INICIAL',
-      notes: 'Carga del inventario inicial de la empresa.',
-      lines: productDefs
-        .filter((d) => d[9] === wh && d[10] > 0)
-        .map((d) => ({ product_id: product[d[0]].id, quantity_delta: d[10], unit_cost: d[4] })),
-    }, true)
+  for (const [wh, whId] of [
+    ['MP', whMP.id],
+    ['PT', whPT.id],
+  ] as const) {
+    cmdCreateStockAdjustment(
+      ctx(null, 300),
+      companyId,
+      {
+        warehouse_id: whId,
+        reason_code: 'INVENTARIO_INICIAL',
+        notes: 'Carga del inventario inicial de la empresa.',
+        lines: productDefs
+          .filter((d) => d[9] === wh && d[10] > 0)
+          .map((d) => ({ product_id: product[d[0]].id, quantity_delta: d[10], unit_cost: d[4] })),
+      },
+      true,
+    )
   }
 
   // ------------------------------------------------------------ Un circuito completo previo (historial de ejemplo)
-  const sc = cmdCreateRequisition(ctx(users.produccion, 240), companyId, {
-    needed_by: null,
-    priority: 'NORMAL',
-    reason: 'Reposición de insumos de terminación para la producción de la semana.',
-    notes: '',
-    lines: [
-      { product_id: product['IN-001'].id, quantity: 20 },
-      { product_id: product['IN-006'].id, quantity: 100 },
-    ],
-  }, true)
+  const sc = cmdCreateRequisition(
+    ctx(users.produccion, 240),
+    companyId,
+    {
+      needed_by: null,
+      priority: 'NORMAL',
+      reason: 'Reposición de insumos de terminación para la producción de la semana.',
+      notes: '',
+      lines: [
+        { product_id: product['IN-001'].id, quantity: 20 },
+        { product_id: product['IN-006'].id, quantity: 100 },
+      ],
+    },
+    true,
+  )
   const reqLines = db.prLines.filter((l) => l.document_id === sc.id)
   const oc = cmdCreatePurchaseOrder(ctx(users.compras1, 200), companyId, {
     supplier_id: supplier['PRV-009'],
@@ -279,21 +410,29 @@ export function buildSeed(): DB {
     delivery_terms: 'Entrega en planta Eldorado',
     notes: '',
     lines: reqLines.map((l) => ({
-      product_id: l.product_id, requisition_line_id: l.id, quantity: l.quantity,
-      unit_price: db.products.find((p) => p.id === l.product_id)!.standard_cost, vat_rate: 21,
+      product_id: l.product_id,
+      requisition_line_id: l.id,
+      quantity: l.quantity,
+      unit_price: db.products.find((p) => p.id === l.product_id)!.standard_cost,
+      vat_rate: 21,
     })),
   })
   cmdSubmitPurchaseOrder(ctx(users.compras1, 195), oc.id)
   cmdApprovePurchaseOrder(ctx(users.compras2, 170), oc.id, 'Precios dentro de lo habitual.')
   cmdSendPurchaseOrder(ctx(users.compras1, 160), oc.id)
-  cmdCreateGoodsReceipt(ctx(users.deposito, 60), companyId, {
-    purchase_order_id: oc.id,
-    warehouse_id: whMP.id,
-    supplier_delivery_note: '0003-00004521',
-    carrier_name: 'Transportes Ruta 12 SRL',
-    notes: 'Mercadería en buen estado.',
-    lines: db.poLines.filter((l) => l.document_id === oc.id).map((l) => ({ po_line_id: l.id, quantity: l.quantity })),
-  }, true)
+  cmdCreateGoodsReceipt(
+    ctx(users.deposito, 60),
+    companyId,
+    {
+      purchase_order_id: oc.id,
+      warehouse_id: whMP.id,
+      supplier_delivery_note: '0003-00004521',
+      carrier_name: 'Transportes Ruta 12 SRL',
+      notes: 'Mercadería en buen estado.',
+      lines: db.poLines.filter((l) => l.document_id === oc.id).map((l) => ({ po_line_id: l.id, quantity: l.quantity })),
+    },
+    true,
+  )
 
   // Alertas de los productos que ya empiezan por debajo del mínimo.
   scanStockAlerts(ctx(null, 30), companyId)

@@ -33,7 +33,12 @@ export function date(value: string | null | undefined): string {
 export function dateTime(iso: string | null | undefined): string {
   if (!iso) return '—'
   return new Intl.DateTimeFormat('es-AR', {
-    timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: TZ,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   }).format(new Date(iso))
 }
 
@@ -52,7 +57,9 @@ export function relative(iso: string): string {
 
 /** Fecha de negocio de hoy en Argentina (aaaa-mm-dd). */
 export function todayAR(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+    new Date(),
+  )
 }
 
 export function addDays(isoDate: string, days: number): string {

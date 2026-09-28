@@ -7,7 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { DataTable } from '@/components/common/data-table'
 import { Field, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
@@ -24,16 +31,33 @@ import { useCompany } from '@/app/company'
 export function TeacherPage() {
   const company = useCompany()
   const navigate = useNavigate()
-  const members = useQuery({ queryKey: ['members', company.companyId], queryFn: () => api.members(company.companyId), enabled: company.supervisor })
-  const audit = useQuery({ queryKey: ['audit', company.companyId], queryFn: () => api.audit(company.companyId), enabled: company.supervisor })
+  const members = useQuery({
+    queryKey: ['members', company.companyId],
+    queryFn: () => api.members(company.companyId),
+    enabled: company.supervisor,
+  })
+  const audit = useQuery({
+    queryKey: ['audit', company.companyId],
+    queryFn: () => api.audit(company.companyId),
+    enabled: company.supervisor,
+  })
   const [assignFor, setAssignFor] = useState<MemberView | null>(null)
   const [newStudent, setNewStudent] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const removeRole = useCommand((id: string) => commands.removeRole(company.companyId, id), { success: 'Rol quitado.' })
-  const setModule = useCommand((m: ModuleCode, v: boolean) => commands.setModule(company.companyId, m, v), { success: 'Módulo actualizado.' })
-  const setSettings = useCommand((s: Parameters<typeof commands.updateCompanySettings>[1]) => commands.updateCompanySettings(company.companyId, s), { success: 'Configuración actualizada.' })
+  const setModule = useCommand((m: ModuleCode, v: boolean) => commands.setModule(company.companyId, m, v), {
+    success: 'Módulo actualizado.',
+  })
+  const setSettings = useCommand(
+    (s: Parameters<typeof commands.updateCompanySettings>[1]) => commands.updateCompanySettings(company.companyId, s),
+    { success: 'Configuración actualizada.' },
+  )
   const reset = useCommand(commands.resetDemoData, {
-    onSuccess: () => { setResetOpen(false); toast.success('Datos de demostración reiniciados.'); navigate(company.to()) },
+    onSuccess: () => {
+      setResetOpen(false)
+      toast.success('Datos de demostración reiniciados.')
+      navigate(company.to())
+    },
   })
 
   if (!company.supervisor) return <p className="py-20 text-center text-sm text-muted-foreground">Sólo docentes.</p>
@@ -65,50 +89,106 @@ export function TeacherPage() {
           <DataTable<MemberView>
             rows={members.data}
             rowKey={(m) => m.user.id}
-            search={(m) => `${m.user.first_name} ${m.user.last_name} ${m.user.username} ${m.roles.map((r) => r.role_name).join(' ')}`}
-            toolbar={<Button size="sm" onClick={() => setNewStudent(true)}><UserPlus /> Agregar estudiante</Button>}
+            search={(m) =>
+              `${m.user.first_name} ${m.user.last_name} ${m.user.username} ${m.roles.map((r) => r.role_name).join(' ')}`
+            }
+            toolbar={
+              <Button size="sm" onClick={() => setNewStudent(true)}>
+                <UserPlus /> Agregar estudiante
+              </Button>
+            }
             columns={[
               {
-                key: 'name', header: 'Integrante', sort: (m) => m.user.last_name, cell: (m) => (
+                key: 'name',
+                header: 'Integrante',
+                sort: (m) => m.user.last_name,
+                cell: (m) => (
                   <div>
-                    <div className="font-medium">{m.user.last_name}, {m.user.first_name}</div>
+                    <div className="font-medium">
+                      {m.user.last_name}, {m.user.first_name}
+                    </div>
                     <div className="font-mono text-xs text-muted-foreground">{m.user.username}</div>
                   </div>
                 ),
               },
               {
-                key: 'roles', header: 'Roles · sector · isla', cell: (m) => (
+                key: 'roles',
+                header: 'Roles · sector · isla',
+                cell: (m) => (
                   <div className="flex flex-wrap gap-1">
                     {m.roles.map((r) => (
-                      <span key={r.id} className="inline-flex items-center gap-1 rounded-full bg-brand-blue-soft px-2 py-0.5 text-xs text-navy">
-                        {r.role_name}{r.sector_name !== '—' ? ` · ${r.sector_name}` : ''}{r.island ? ` · Isla ${r.island}` : ''}
-                        <button type="button" className="text-muted-foreground hover:text-red-600" aria-label="Quitar rol" onClick={() => removeRole.mutate([r.id])}><X className="size-3" /></button>
+                      <span
+                        key={r.id}
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-blue-soft px-2 py-0.5 text-xs text-navy"
+                      >
+                        {r.role_name}
+                        {r.sector_name !== '—' ? ` · ${r.sector_name}` : ''}
+                        {r.island ? ` · Isla ${r.island}` : ''}
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-red-600"
+                          aria-label="Quitar rol"
+                          onClick={() => removeRole.mutate([r.id])}
+                        >
+                          <X className="size-3" />
+                        </button>
                       </span>
                     ))}
                     {!m.roles.length && <span className="text-xs text-amber-700">Sin rol asignado</span>}
                   </div>
                 ),
               },
-              { key: 'actions', header: 'Acciones registradas', align: 'right', sort: (m) => m.actions_count, cell: (m) => <span className="tabular">{m.actions_count}</span> },
-              { key: 'last', header: 'Última actividad', cell: (m) => <span className="text-xs text-muted-foreground">{m.last_activity ? relative(m.last_activity) : '—'}</span> },
-              { key: 'add', header: '', align: 'right', cell: (m) => <Button size="xs" variant="outline" onClick={() => setAssignFor(m)}><Plus /> Rol</Button> },
+              {
+                key: 'actions',
+                header: 'Acciones registradas',
+                align: 'right',
+                sort: (m) => m.actions_count,
+                cell: (m) => <span className="tabular">{m.actions_count}</span>,
+              },
+              {
+                key: 'last',
+                header: 'Última actividad',
+                cell: (m) => (
+                  <span className="text-xs text-muted-foreground">
+                    {m.last_activity ? relative(m.last_activity) : '—'}
+                  </span>
+                ),
+              },
+              {
+                key: 'add',
+                header: '',
+                align: 'right',
+                cell: (m) => (
+                  <Button size="xs" variant="outline" onClick={() => setAssignFor(m)}>
+                    <Plus /> Rol
+                  </Button>
+                ),
+              },
             ]}
           />
-          <p className="mt-2 text-xs text-muted-foreground">Rotá los roles entre clases para que cada estudiante recorra todo el circuito. Los cambios quedan en la auditoría.</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Rotá los roles entre clases para que cada estudiante recorra todo el circuito. Los cambios quedan en la
+            auditoría.
+          </p>
         </TabsContent>
 
         <TabsContent value="config" className="mt-3 grid gap-4 lg:grid-cols-2">
-          <Section title="Módulos" description="Un módulo bloqueado deja de estar disponible para los estudiantes (no para el docente).">
+          <Section
+            title="Módulos"
+            description="Un módulo bloqueado deja de estar disponible para los estudiantes (no para el docente)."
+          >
             <ul className="flex flex-col gap-3">
-              {(Object.keys(MODULES) as ModuleCode[]).filter((m) => MODULES[m].lockable).map((m) => {
-                const row = company.modules.find((x) => x.module_code === m)
-                return (
-                  <li key={m} className="flex items-center justify-between gap-3 text-sm">
-                    {MODULES[m].name}
-                    <Switch checked={row?.is_enabled ?? true} onCheckedChange={(v) => setModule.mutate([m, v])} />
-                  </li>
-                )
-              })}
+              {(Object.keys(MODULES) as ModuleCode[])
+                .filter((m) => MODULES[m].lockable)
+                .map((m) => {
+                  const row = company.modules.find((x) => x.module_code === m)
+                  return (
+                    <li key={m} className="flex items-center justify-between gap-3 text-sm">
+                      {MODULES[m].name}
+                      <Switch checked={row?.is_enabled ?? true} onCheckedChange={(v) => setModule.mutate([m, v])} />
+                    </li>
+                  )
+                })}
             </ul>
           </Section>
           <Section title="Control interno">
@@ -116,16 +196,27 @@ export function TeacherPage() {
               <li className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-medium">Separación de funciones</div>
-                  <div className="text-xs text-muted-foreground">Quien crea una orden no puede aprobarla; quien registra una recepción no puede anularla. Desactivala sólo si una isla tiene un único estudiante.</div>
+                  <div className="text-xs text-muted-foreground">
+                    Quien crea una orden no puede aprobarla; quien registra una recepción no puede anularla. Desactivala
+                    sólo si una isla tiene un único estudiante.
+                  </div>
                 </div>
-                <Switch checked={company.company.settings.sod_enabled} onCheckedChange={(v) => setSettings.mutate([{ sod_enabled: v }])} />
+                <Switch
+                  checked={company.company.settings.sod_enabled}
+                  onCheckedChange={(v) => setSettings.mutate([{ sod_enabled: v }])}
+                />
               </li>
               <li className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-medium">Permitir stock negativo</div>
-                  <div className="text-xs text-muted-foreground">Desactivado, el sistema impide sacar más de lo que hay (recomendado).</div>
+                  <div className="text-xs text-muted-foreground">
+                    Desactivado, el sistema impide sacar más de lo que hay (recomendado).
+                  </div>
                 </div>
-                <Switch checked={company.company.settings.allow_negative_stock} onCheckedChange={(v) => setSettings.mutate([{ allow_negative_stock: v }])} />
+                <Switch
+                  checked={company.company.settings.allow_negative_stock}
+                  onCheckedChange={(v) => setSettings.mutate([{ allow_negative_stock: v }])}
+                />
               </li>
             </ul>
           </Section>
@@ -134,9 +225,16 @@ export function TeacherPage() {
         <TabsContent value="activity" className="mt-3 grid gap-4 lg:grid-cols-[280px_1fr]">
           <Section title="Acciones por isla">
             <ul className="flex flex-col gap-2 text-sm">
-              {[...company.islands].sort((a, b) => a.number - b.number).map((i) => (
-                <li key={i.id} className="flex justify-between gap-2"><span className="text-muted-foreground">{i.number} · {i.name}</span><span className="tabular font-semibold">{byIsland.get(i.number) ?? 0}</span></li>
-              ))}
+              {[...company.islands]
+                .sort((a, b) => a.number - b.number)
+                .map((i) => (
+                  <li key={i.id} className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">
+                      {i.number} · {i.name}
+                    </span>
+                    <span className="tabular font-semibold">{byIsland.get(i.number) ?? 0}</span>
+                  </li>
+                ))}
             </ul>
           </Section>
           <Section title="Últimos movimientos">
@@ -147,10 +245,13 @@ export function TeacherPage() {
         <TabsContent value="data" className="mt-3">
           <Section title="Reiniciar datos de demostración">
             <p className="text-sm text-muted-foreground">
-              Vuelve la empresa Forestal del Norte SRL a su estado inicial: stock de apertura, alertas de stock mínimo y un circuito de compra completo de ejemplo.
-              Se borran los documentos, las tareas y la auditoría creados después. Los usuarios de demostración se mantienen.
+              Vuelve la empresa Forestal del Norte SRL a su estado inicial: stock de apertura, alertas de stock mínimo y
+              un circuito de compra completo de ejemplo. Se borran los documentos, las tareas y la auditoría creados
+              después. Los usuarios de demostración se mantienen.
             </p>
-            <Button variant="destructive" className="mt-4" onClick={() => setResetOpen(true)}><RotateCcw /> Reiniciar datos</Button>
+            <Button variant="destructive" className="mt-4" onClick={() => setResetOpen(true)}>
+              <RotateCcw /> Reiniciar datos
+            </Button>
           </Section>
         </TabsContent>
       </Tabs>
@@ -188,21 +289,39 @@ function AssignRoleDialog({ member, onClose }: { member: MemberView; onClose: ()
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Asignar rol a {member.user.first_name} {member.user.last_name}</DialogTitle>
-          <DialogDescription>El rol define qué puede hacer; el sector, dónde trabaja (queda en la auditoría de cada acción).</DialogDescription>
+          <DialogTitle>
+            Asignar rol a {member.user.first_name} {member.user.last_name}
+          </DialogTitle>
+          <DialogDescription>
+            El rol define qué puede hacer; el sector, dónde trabaja (queda en la auditoría de cada acción).
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <Field label="Rol funcional">
-            <SimpleSelect value={role} onChange={onRole} options={ROLE_ORDER.map((r) => ({ value: r, label: ROLES[r].name }))} placeholder="Elegí el rol" />
+            <SimpleSelect
+              value={role}
+              onChange={onRole}
+              options={ROLE_ORDER.map((r) => ({ value: r, label: ROLES[r].name }))}
+              placeholder="Elegí el rol"
+            />
           </Field>
           {role && <p className="-mt-2 text-xs text-muted-foreground">{ROLES[role].description}</p>}
           <Field label="Sector">
-            <SimpleSelect value={sector} onChange={setSector} options={company.sectors.map((s) => ({ value: s.id, label: s.name }))} placeholder="Sin sector" />
+            <SimpleSelect
+              value={sector}
+              onChange={setSector}
+              options={company.sectors.map((s) => ({ value: s.id, label: s.name }))}
+              placeholder="Sin sector"
+            />
           </Field>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={!role || assign.isPending} onClick={() => assign.mutate([])}>Asignar</Button>
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button disabled={!role || assign.isPending} onClick={() => assign.mutate([])}>
+            Asignar
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -217,25 +336,65 @@ function NewStudentDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [password, setPassword] = useState('')
   const create = useCommand(
     () => commands.createStudent(company.companyId, { first_name: first, last_name: last, username, password }),
-    { success: 'Estudiante agregado. Ahora asignale un rol.', onSuccess: () => { onOpenChange(false); setFirst(''); setLast(''); setUsername(''); setPassword('') } },
+    {
+      success: 'Estudiante agregado. Ahora asignale un rol.',
+      onSuccess: () => {
+        onOpenChange(false)
+        setFirst('')
+        setLast('')
+        setUsername('')
+        setPassword('')
+      },
+    },
   )
-  const suggest = (f: string, l: string) => `${f.trim()[0] ?? ''}${l.trim().split(' ')[0] ?? ''}`.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
+  const suggest = (f: string, l: string) =>
+    `${f.trim()[0] ?? ''}${l.trim().split(' ')[0] ?? ''}`
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]/g, '')
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Agregar estudiante</DialogTitle>
-          <DialogDescription>Sólo se registran nombre, apellido y usuario: no se piden datos personales ni email.</DialogDescription>
+          <DialogDescription>
+            Sólo se registran nombre, apellido y usuario: no se piden datos personales ni email.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Nombre"><Input value={first} onChange={(e) => { setFirst(e.target.value); setUsername(suggest(e.target.value, last)) }} /></Field>
-          <Field label="Apellido"><Input value={last} onChange={(e) => { setLast(e.target.value); setUsername(suggest(first, e.target.value)) }} /></Field>
-          <Field label="Usuario"><Input value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
-          <Field label="Contraseña inicial" hint="Mínimo 6 caracteres."><Input value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+          <Field label="Nombre">
+            <Input
+              value={first}
+              onChange={(e) => {
+                setFirst(e.target.value)
+                setUsername(suggest(e.target.value, last))
+              }}
+            />
+          </Field>
+          <Field label="Apellido">
+            <Input
+              value={last}
+              onChange={(e) => {
+                setLast(e.target.value)
+                setUsername(suggest(first, e.target.value))
+              }}
+            />
+          </Field>
+          <Field label="Usuario">
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+          </Field>
+          <Field label="Contraseña inicial" hint="Mínimo 6 caracteres.">
+            <Input value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Field>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button disabled={create.isPending} onClick={() => create.mutate([])}>Agregar</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button disabled={create.isPending} onClick={() => create.mutate([])}>
+            Agregar
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

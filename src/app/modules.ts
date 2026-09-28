@@ -43,7 +43,12 @@ export const NAV: NavGroup[] = [
   {
     label: 'Compras',
     items: [
-      { label: 'Solicitudes de compra', path: 'compras/solicitudes', icon: ClipboardList, permission: 'purchase_requisition.read' },
+      {
+        label: 'Solicitudes de compra',
+        path: 'compras/solicitudes',
+        icon: ClipboardList,
+        permission: 'purchase_requisition.read',
+      },
       { label: 'Órdenes de compra', path: 'compras/ordenes', icon: ShoppingCart, permission: 'purchase_order.read' },
     ],
   },
@@ -52,7 +57,12 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Recepciones', path: 'deposito/recepciones', icon: PackageCheck, permission: 'goods_receipt.read' },
       { label: 'Stock', path: 'stock', icon: Boxes, permission: 'stock.read' },
-      { label: 'Ajustes de stock', path: 'stock/ajustes', icon: SlidersHorizontal, permission: 'stock_adjustment.read' },
+      {
+        label: 'Ajustes de stock',
+        path: 'stock/ajustes',
+        icon: SlidersHorizontal,
+        permission: 'stock_adjustment.read',
+      },
     ],
   },
   {

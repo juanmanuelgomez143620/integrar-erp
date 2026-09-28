@@ -1,9 +1,24 @@
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { PRODUCT_TYPES } from '@/lib/domain/catalog'
 import type { Product, ProductType } from '@/lib/domain/types'
 import { cn } from '@/lib/utils'
 
-export function ProductSelect({ products, value, onChange, placeholder = 'Elegí un producto', className, disabled }: {
+export function ProductSelect({
+  products,
+  value,
+  onChange,
+  placeholder = 'Elegí un producto',
+  className,
+  disabled,
+}: {
   products: Product[]
   value: string
   onChange: (id: string) => void
@@ -35,7 +50,14 @@ export function ProductSelect({ products, value, onChange, placeholder = 'Elegí
   )
 }
 
-export function SimpleSelect<V extends string>({ value, onChange, options, placeholder, className, disabled }: {
+export function SimpleSelect<V extends string>({
+  value,
+  onChange,
+  options,
+  placeholder,
+  className,
+  disabled,
+}: {
   value: V | ''
   onChange: (value: V) => void
   options: { value: V; label: string }[]
@@ -49,7 +71,11 @@ export function SimpleSelect<V extends string>({ value, onChange, options, place
         <SelectValue placeholder={placeholder ?? 'Elegí una opción'} />
       </SelectTrigger>
       <SelectContent>
-        {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   )

@@ -50,35 +50,79 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
     columns.push(
       { key: 'sector', header: 'Sector solicitante', sort: (d) => d.sector_name, cell: (d) => d.sector_name },
       { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
-      { key: 'priority', header: 'Prioridad', cell: (d) => <StatusBadge label={PRIORITIES[d.pr!.priority]} badge={PRIORITY_BADGE[d.pr!.priority]} /> },
+      {
+        key: 'priority',
+        header: 'Prioridad',
+        cell: (d) => <StatusBadge label={PRIORITIES[d.pr!.priority]} badge={PRIORITY_BADGE[d.pr!.priority]} />,
+      },
       { key: 'needed', header: 'Necesaria para', cell: (d) => date(d.pr?.needed_by) },
     )
   }
   if (docType === 'PURCHASE_ORDER') {
     columns.push(
       { key: 'supplier', header: 'Proveedor', sort: (d) => d.supplier_name, cell: (d) => d.supplier_name },
-      { key: 'ref', header: 'Origen', cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span> },
-      { key: 'approver', header: 'Espera a', cell: (d) => (d.pending_approver ? <span className="text-xs font-medium text-amber-700">{d.pending_approver}</span> : '—') },
-      { key: 'total', header: 'Total', align: 'right', sort: (d) => d.total, cell: (d) => <span className="tabular">{money(d.total)}</span> },
+      {
+        key: 'ref',
+        header: 'Origen',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      {
+        key: 'approver',
+        header: 'Espera a',
+        cell: (d) =>
+          d.pending_approver ? <span className="text-xs font-medium text-amber-700">{d.pending_approver}</span> : '—',
+      },
+      {
+        key: 'total',
+        header: 'Total',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
     )
   }
   if (docType === 'GOODS_RECEIPT') {
     columns.push(
-      { key: 'ref', header: 'Orden de compra', cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span> },
+      {
+        key: 'ref',
+        header: 'Orden de compra',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
       { key: 'supplier', header: 'Proveedor', sort: (d) => d.supplier_name, cell: (d) => d.supplier_name },
-      { key: 'note', header: 'Remito proveedor', cell: (d) => <span className="font-mono text-xs">{d.gr?.supplier_delivery_note}</span> },
+      {
+        key: 'note',
+        header: 'Remito proveedor',
+        cell: (d) => <span className="font-mono text-xs">{d.gr?.supplier_delivery_note}</span>,
+      },
       { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
-      { key: 'total', header: 'Valor recibido', align: 'right', sort: (d) => d.total, cell: (d) => <span className="tabular">{money(d.total)}</span> },
+      {
+        key: 'total',
+        header: 'Valor recibido',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
     )
   }
   if (docType === 'STOCK_ADJUSTMENT') {
     columns.push(
       { key: 'reason', header: 'Motivo', cell: (d) => ADJUSTMENT_REASONS[d.sa!.reason_code] },
       { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
-      { key: 'total', header: 'Valor', align: 'right', sort: (d) => d.total, cell: (d) => <span className="tabular">{money(d.total)}</span> },
+      {
+        key: 'total',
+        header: 'Valor',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
     )
   }
-  columns.push({ key: 'by', header: 'Creado por', sort: (d) => d.created_by_name, cell: (d) => <span className="text-xs">{d.created_by_name}</span> })
+  columns.push({
+    key: 'by',
+    header: 'Creado por',
+    sort: (d) => d.created_by_name,
+    cell: (d) => <span className="text-xs">{d.created_by_name}</span>,
+  })
 
   const newPath = company.docPath(docType, docType === 'STOCK_ADJUSTMENT' ? 'nuevo' : 'nueva')
 
@@ -88,15 +132,29 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         crumbs={[{ label: 'Inicio', to: company.to() }, { label: section.area }, { label: info.plural }]}
         title={info.plural}
         description={info.description}
-        actions={company.can(section.createPerm) ? <Button asChild><Link to={newPath}><Plus /> {section.newLabel}</Link></Button> : undefined}
+        actions={
+          company.can(section.createPerm) ? (
+            <Button asChild>
+              <Link to={newPath}>
+                <Plus /> {section.newLabel}
+              </Link>
+            </Button>
+          ) : undefined
+        }
       />
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {[['ALL', `Todos (${data.length})`] as const, ...[...counts.keys()].map((s) => [s, `${DOC_STATUSES[docType][s]?.label ?? s} (${counts.get(s)})`] as const)].map(([code, label]) => (
+        {[
+          ['ALL', `Todos (${data.length})`] as const,
+          ...[...counts.keys()].map((s) => [s, `${DOC_STATUSES[docType][s]?.label ?? s} (${counts.get(s)})`] as const),
+        ].map(([code, label]) => (
           <button
             key={code}
             type="button"
             onClick={() => setStatus(code)}
-            className={cn('rounded-full border px-3 py-1 text-xs transition-colors', status === code ? 'border-brand-blue bg-brand-blue text-white' : 'bg-card hover:border-brand-blue/40')}
+            className={cn(
+              'rounded-full border px-3 py-1 text-xs transition-colors',
+              status === code ? 'border-brand-blue bg-brand-blue text-white' : 'bg-card hover:border-brand-blue/40',
+            )}
           >
             {label}
           </button>
@@ -107,7 +165,9 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         loading={isLoading}
         columns={columns}
         rowKey={(d) => d.id}
-        search={(d) => `${d.display_number} ${d.supplier_name} ${d.summary} ${d.sector_name} ${d.created_by_name} ${d.reference_label ?? ''}`}
+        search={(d) =>
+          `${d.display_number} ${d.supplier_name} ${d.summary} ${d.sector_name} ${d.created_by_name} ${d.reference_label ?? ''}`
+        }
         searchPlaceholder="Buscar por número, proveedor, producto…"
         onRowClick={(d) => navigate(d.path)}
         empty={`Todavía no hay ${info.plural.toLowerCase()}.`}

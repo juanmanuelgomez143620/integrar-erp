@@ -58,6 +58,7 @@ export interface RoleInfo {
   isSupervisor: boolean
 }
 
+// prettier-ignore
 export const ROLES: Record<RoleCode, RoleInfo> = {
   GERENCIA: { code: 'GERENCIA', name: 'Gerencia', island: 1, defaultSector: 'GER', isSupervisor: false, description: 'Aprueba operaciones relevantes y supervisa indicadores y alertas.' },
   AUDITOR: { code: 'AUDITOR', name: 'Auditoría interna', island: 1, defaultSector: 'CGE', isSupervisor: false, description: 'Consulta todo y revisa la auditoría. No modifica nada.' },
@@ -74,8 +75,18 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
 }
 
 export const ROLE_ORDER: RoleCode[] = [
-  'GERENCIA', 'AUDITOR', 'COMPRAS', 'VENTAS', 'CONTABILIDAD', 'IMPUESTOS',
-  'TESORERIA', 'RRHH', 'PRODUCCION', 'DEPOSITO', 'LOGISTICA', 'DOCENTE',
+  'GERENCIA',
+  'AUDITOR',
+  'COMPRAS',
+  'VENTAS',
+  'CONTABILIDAD',
+  'IMPUESTOS',
+  'TESORERIA',
+  'RRHH',
+  'PRODUCCION',
+  'DEPOSITO',
+  'LOGISTICA',
+  'DOCENTE',
 ]
 
 // ---------------------------------------------------------------- Permisos
@@ -83,6 +94,7 @@ export const ROLE_ORDER: RoleCode[] = [
 const CORE_READ = ['company.read', 'member.read', 'sector.read']
 
 /** Matriz del MVP (docs/ROLES_Y_PERMISOS.md §4). DOCENTE es supervisor: todo. */
+// prettier-ignore
 export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   GERENCIA: [
     ...CORE_READ,
@@ -147,6 +159,7 @@ export interface DocTypeInfo {
   description: string
 }
 
+// prettier-ignore
 export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
   PURCHASE_REQUISITION: {
     code: 'PURCHASE_REQUISITION', prefix: 'SC', name: 'Solicitud de compra', plural: 'Solicitudes de compra',
@@ -177,6 +190,7 @@ export interface StatusInfo {
   final: boolean
 }
 
+// prettier-ignore
 export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
   PURCHASE_REQUISITION: {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'El solicitante la está preparando.' },
@@ -223,10 +237,18 @@ export interface TransitionInfo {
 }
 
 const t = (
-  docType: DocType, from: string, action: TransitionAction, to: string, permission: string | null,
-  label: string, help: string, requiresComment = false, tone: TransitionInfo['tone'] = 'default',
+  docType: DocType,
+  from: string,
+  action: TransitionAction,
+  to: string,
+  permission: string | null,
+  label: string,
+  help: string,
+  requiresComment = false,
+  tone: TransitionInfo['tone'] = 'default',
 ): TransitionInfo => ({ docType, from, action, to, permission, label, help, requiresComment, tone })
 
+// prettier-ignore
 export const TRANSITIONS: TransitionInfo[] = [
   // Solicitud de compra
   t('PURCHASE_REQUISITION', 'BORRADOR', 'SUBMIT', 'SOLICITADO', 'purchase_requisition.create', 'Enviar a Compras', 'Compras recibirá una tarea para atenderla.'),
@@ -304,6 +326,7 @@ export interface TaskRule {
   description: string
 }
 
+// prettier-ignore
 export const TASK_RULES: TaskRule[] = [
   { docType: 'PURCHASE_REQUISITION', status: 'SOLICITADO', taskType: 'ATENDER_SC', assignee: 'ROLE', role: 'COMPRAS', title: 'Atender {number}', description: 'Incluir la solicitud en una orden de compra o rechazarla con motivo.' },
   { docType: 'PURCHASE_REQUISITION', status: 'ORDENADO_PARCIAL', taskType: 'ATENDER_SC', assignee: 'ROLE', role: 'COMPRAS', title: 'Completar {number} (saldo sin ordenar)', description: 'Ordenar el saldo pendiente o cerrarlo con motivo.' },

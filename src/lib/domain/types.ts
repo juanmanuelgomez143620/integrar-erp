@@ -23,35 +23,17 @@ export type PermissionAction = 'read' | 'create' | 'update' | 'approve' | 'cance
 
 export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 'CONSUMIDOR_FINAL'
 
-export type ProductType =
-  | 'MATERIA_PRIMA'
-  | 'INSUMO'
-  | 'PRODUCTO_TERMINADO'
-  | 'MERCADERIA_REVENTA'
-  | 'SERVICIO'
+export type ProductType = 'MATERIA_PRIMA' | 'INSUMO' | 'PRODUCTO_TERMINADO' | 'MERCADERIA_REVENTA' | 'SERVICIO'
 
 export type DocType = 'PURCHASE_REQUISITION' | 'PURCHASE_ORDER' | 'GOODS_RECEIPT' | 'STOCK_ADJUSTMENT'
 
 export type TransitionAction =
-  | 'SUBMIT'
-  | 'APPROVE'
-  | 'REJECT'
-  | 'WITHDRAW'
-  | 'REOPEN'
-  | 'SEND'
-  | 'CONFIRM'
-  | 'CANCEL'
-  | 'CLOSE'
-  | 'SYSTEM'
+  'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW' | 'REOPEN' | 'SEND' | 'CONFIRM' | 'CANCEL' | 'CLOSE' | 'SYSTEM'
 
 export type Badge = 'neutral' | 'info' | 'warning' | 'success' | 'danger'
 
 export type MovementType =
-  | 'STOCK_INICIAL'
-  | 'RECEPCION_COMPRA'
-  | 'ANULACION_RECEPCION'
-  | 'AJUSTE_POSITIVO'
-  | 'AJUSTE_NEGATIVO'
+  'STOCK_INICIAL' | 'RECEPCION_COMPRA' | 'ANULACION_RECEPCION' | 'AJUSTE_POSITIVO' | 'AJUSTE_NEGATIVO'
 
 export type AdjustmentReason = 'INVENTARIO_INICIAL' | 'CONTEO_FISICO' | 'ROTURA' | 'CONSUMO_INTERNO' | 'OTRO'
 

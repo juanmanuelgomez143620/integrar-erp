@@ -4,7 +4,8 @@ import { dateTime, relative } from '@/lib/format'
 import { ROLES } from '@/lib/domain/catalog'
 import { cn } from '@/lib/utils'
 
-const roleName = (code: string) => (code in ROLES ? ROLES[code as keyof typeof ROLES].name : code === 'SISTEMA' ? 'Sistema' : code)
+const roleName = (code: string) =>
+  code in ROLES ? ROLES[code as keyof typeof ROLES].name : code === 'SISTEMA' ? 'Sistema' : code
 
 const ACTION_DOT: Record<string, string> = {
   APPROVE: 'bg-green-600',
@@ -15,7 +16,11 @@ const ACTION_DOT: Record<string, string> = {
   SYSTEM: 'bg-slate-400',
 }
 
-export function AuditTimeline({ events, compact = false, linkFor }: {
+export function AuditTimeline({
+  events,
+  compact = false,
+  linkFor,
+}: {
   events: AuditEvent[]
   compact?: boolean
   linkFor?: (e: AuditEvent) => string | null
@@ -33,18 +38,35 @@ export function AuditTimeline({ events, compact = false, linkFor }: {
             </div>
             <div className="min-w-0 flex-1 pb-1">
               <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-                <span title={dateTime(e.occurred_at)}>{compact ? relative(e.occurred_at) : dateTime(e.occurred_at)}</span>
+                <span title={dateTime(e.occurred_at)}>
+                  {compact ? relative(e.occurred_at) : dateTime(e.occurred_at)}
+                </span>
                 <span className="font-medium text-foreground">{e.actor_name}</span>
-                <span>· {roleName(e.actor_role_code)}{e.actor_sector_name !== '—' && e.actor_sector_name !== roleName(e.actor_role_code) ? ` (${e.actor_sector_name})` : ''}</span>
+                <span>
+                  · {roleName(e.actor_role_code)}
+                  {e.actor_sector_name !== '—' && e.actor_sector_name !== roleName(e.actor_role_code)
+                    ? ` (${e.actor_sector_name})`
+                    : ''}
+                </span>
               </div>
               <div className="mt-0.5 text-sm">
-                {link ? <Link to={link} className="hover:underline">{e.summary}</Link> : e.summary}
+                {link ? (
+                  <Link to={link} className="hover:underline">
+                    {e.summary}
+                  </Link>
+                ) : (
+                  e.summary
+                )}
               </div>
               {!compact && e.changes && Object.keys(e.changes).length > 0 && (
                 <ul className="mt-1 text-xs text-muted-foreground">
-                  {Object.entries(e.changes).slice(0, 6).map(([field, c]) => (
-                    <li key={field}><span className="font-mono">{field}</span>: {String(c.from ?? '—')} → {String(c.to ?? '—')}</li>
-                  ))}
+                  {Object.entries(e.changes)
+                    .slice(0, 6)
+                    .map(([field, c]) => (
+                      <li key={field}>
+                        <span className="font-mono">{field}</span>: {String(c.from ?? '—')} → {String(c.to ?? '—')}
+                      </li>
+                    ))}
                 </ul>
               )}
             </div>

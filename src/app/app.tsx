@@ -16,7 +16,13 @@ const queryClient = new QueryClient({
 /** Refresca todo cuando cambian los datos en otra pestaña (hoy) o por Realtime (con Supabase). */
 function RealtimeBridge() {
   const client = useQueryClient()
-  useEffect(() => realtime.subscribe(() => { client.invalidateQueries() }), [client])
+  useEffect(
+    () =>
+      realtime.subscribe(() => {
+        client.invalidateQueries()
+      }),
+    [client],
+  )
   return null
 }
 

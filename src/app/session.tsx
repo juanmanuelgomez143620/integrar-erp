@@ -15,17 +15,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(() => currentUserId())
   const queryClient = useQueryClient()
 
-  const login = useCallback(async (username: string, password: string) => {
-    const id = await auth.login(username, password)
-    queryClient.clear()
-    setUserId(id)
-  }, [queryClient])
+  const login = useCallback(
+    async (username: string, password: string) => {
+      const id = await auth.login(username, password)
+      queryClient.clear()
+      setUserId(id)
+    },
+    [queryClient],
+  )
 
-  const loginAs = useCallback(async (username: string) => {
-    const id = await auth.loginAs(username)
-    queryClient.clear()
-    setUserId(id)
-  }, [queryClient])
+  const loginAs = useCallback(
+    async (username: string) => {
+      const id = await auth.loginAs(username)
+      queryClient.clear()
+      setUserId(id)
+    },
+    [queryClient],
+  )
 
   const logout = useCallback(() => {
     auth.logout()

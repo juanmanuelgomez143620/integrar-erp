@@ -55,7 +55,12 @@ export function meContext(db: DB, userId: string): MeContext {
         roles: roles.map((r) => {
           const sector = db.sectors.find((s) => s.id === r.sector_id)
           const island = db.islands.find((i) => i.id === sector?.island_id)
-          return { role_code: r.role_code, role_name: ROLES[r.role_code].name, sector_name: sector?.name ?? '—', island: island?.number ?? null }
+          return {
+            role_code: r.role_code,
+            role_name: ROLES[r.role_code].name,
+            sector_name: sector?.name ?? '—',
+            island: island?.number ?? null,
+          }
         }),
       }
     }),
@@ -91,7 +96,12 @@ export function companyContext(db: DB, userId: string, slug: string): CompanyCon
     warehouses: db.warehouses.filter((w) => w.company_id === company.id),
     modules: db.companyModules.filter((m) => m.company_id === company.id),
     approval_rules: db.approvalRules.filter((r) => r.company_id === company.id && r.is_active),
-    roles: roles.map((r) => ({ id: r.id, role_code: r.role_code, sector_id: r.sector_id, sector_name: db.sectors.find((s) => s.id === r.sector_id)?.name ?? '—' })),
+    roles: roles.map((r) => ({
+      id: r.id,
+      role_code: r.role_code,
+      sector_id: r.sector_id,
+      sector_name: db.sectors.find((s) => s.id === r.sector_id)?.name ?? '—',
+    })),
     permissions: [...eff.perms],
     all: eff.all,
     supervisor: eff.supervisor,
@@ -125,7 +135,7 @@ function stockOf(db: DB, productId: string) {
   const balances = db.stockBalances.filter((b) => b.product_id === productId)
   const qty = balances.reduce((s, b) => s + b.qty_on_hand, 0)
   const value = balances.reduce((s, b) => s + b.qty_on_hand * b.avg_unit_cost, 0)
-  return { qty, avg: qty > 0 ? value / qty : balances[0]?.avg_unit_cost ?? 0 }
+  return { qty, avg: qty > 0 ? value / qty : (balances[0]?.avg_unit_cost ?? 0) }
 }
 
 function productRow(db: DB, p: T.Product): ProductRow {
@@ -141,7 +151,10 @@ function productRow(db: DB, p: T.Product): ProductRow {
 
 export function listProducts(db: DB, userId: string, companyId: string): ProductRow[] {
   assertPerm(db, userId, companyId, 'product.read')
-  return db.products.filter((p) => p.company_id === companyId).sort((a, b) => a.code.localeCompare(b.code)).map((p) => productRow(db, p))
+  return db.products
+    .filter((p) => p.company_id === companyId)
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((p) => productRow(db, p))
 }
 
 export interface KardexRow extends T.StockMovement {
@@ -165,7 +178,9 @@ export function productDetail(db: DB, userId: string, companyId: string, code: s
   return {
     product: productRow(db, p),
     balances: canStock
-      ? db.stockBalances.filter((b) => b.product_id === p.id).map((b) => ({ ...b, warehouse_name: db.warehouses.find((w) => w.id === b.warehouse_id)?.name ?? '' }))
+      ? db.stockBalances
+          .filter((b) => b.product_id === p.id)
+          .map((b) => ({ ...b, warehouse_name: db.warehouses.find((w) => w.id === b.warehouse_id)?.name ?? '' }))
       : [],
     kardex: canStock
       ? db.stockMovements
@@ -198,16 +213,25 @@ export interface StockRow {
 export function listStock(db: DB, userId: string, companyId: string): StockRow[] {
   assertPerm(db, userId, companyId, 'stock.read')
   const rows: StockRow[] = []
-  for (const p of db.products.filter((x) => x.company_id === companyId && x.is_stockable).sort((a, b) => a.code.localeCompare(b.code))) {
+  for (const p of db.products
+    .filter((x) => x.company_id === companyId && x.is_stockable)
+    .sort((a, b) => a.code.localeCompare(b.code))) {
     const total = stockOf(db, p.id).qty
     const balances = db.stockBalances.filter((b) => b.product_id === p.id)
-    const list = balances.length ? balances : [{ warehouse_id: p.default_warehouse_id!, qty_on_hand: 0, avg_unit_cost: p.standard_cost } as T.StockBalance]
+    const list = balances.length
+      ? balances
+      : [{ warehouse_id: p.default_warehouse_id!, qty_on_hand: 0, avg_unit_cost: p.standard_cost } as T.StockBalance]
     for (const b of list) {
       const warehouse = db.warehouses.find((w) => w.id === b.warehouse_id)
       if (!warehouse) continue
       rows.push({
-        product: p, warehouse, qty: b.qty_on_hand, avg_cost: b.avg_unit_cost, value: b.qty_on_hand * b.avg_unit_cost,
-        total_qty: total, below_min: p.min_stock > 0 && total < p.min_stock,
+        product: p,
+        warehouse,
+        qty: b.qty_on_hand,
+        avg_cost: b.avg_unit_cost,
+        value: b.qty_on_hand * b.avg_unit_cost,
+        total_qty: total,
+        below_min: p.min_stock > 0 && total < p.min_stock,
       })
     }
   }
@@ -235,24 +259,34 @@ function readableDocTypes(db: DB, userId: string, companyId: string): T.DocType[
 
 function lineCount(db: DB, doc: T.Document) {
   switch (doc.doc_type) {
-    case 'PURCHASE_REQUISITION': return db.prLines.filter((l) => l.document_id === doc.id).length
-    case 'PURCHASE_ORDER': return db.poLines.filter((l) => l.document_id === doc.id).length
-    case 'GOODS_RECEIPT': return db.grLines.filter((l) => l.document_id === doc.id).length
-    case 'STOCK_ADJUSTMENT': return db.saLines.filter((l) => l.document_id === doc.id).length
+    case 'PURCHASE_REQUISITION':
+      return db.prLines.filter((l) => l.document_id === doc.id).length
+    case 'PURCHASE_ORDER':
+      return db.poLines.filter((l) => l.document_id === doc.id).length
+    case 'GOODS_RECEIPT':
+      return db.grLines.filter((l) => l.document_id === doc.id).length
+    case 'STOCK_ADJUSTMENT':
+      return db.saLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
 function docLines(db: DB, doc: T.Document): { product_id: string }[] {
   switch (doc.doc_type) {
-    case 'PURCHASE_REQUISITION': return db.prLines.filter((l) => l.document_id === doc.id)
-    case 'PURCHASE_ORDER': return db.poLines.filter((l) => l.document_id === doc.id)
-    case 'GOODS_RECEIPT': return db.grLines.filter((l) => l.document_id === doc.id)
-    case 'STOCK_ADJUSTMENT': return db.saLines.filter((l) => l.document_id === doc.id)
+    case 'PURCHASE_REQUISITION':
+      return db.prLines.filter((l) => l.document_id === doc.id)
+    case 'PURCHASE_ORDER':
+      return db.poLines.filter((l) => l.document_id === doc.id)
+    case 'GOODS_RECEIPT':
+      return db.grLines.filter((l) => l.document_id === doc.id)
+    case 'STOCK_ADJUSTMENT':
+      return db.saLines.filter((l) => l.document_id === doc.id)
   }
 }
 
 function listItem(db: DB, doc: T.Document): DocumentListItem {
-  const products = docLines(db, doc).map((l) => db.products.find((p) => p.id === l.product_id)?.code).filter(Boolean)
+  const products = docLines(db, doc)
+    .map((l) => db.products.find((p) => p.id === l.product_id)?.code)
+    .filter(Boolean)
   const pending = db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')
   const origins = db.docLinks
     .filter((l) => l.to_document_id === doc.id)
@@ -297,7 +331,8 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
   while (queue.length) {
     const current = queue.shift()!
     for (const l of db.docLinks) {
-      const next = l.from_document_id === current ? l.to_document_id : l.to_document_id === current ? l.from_document_id : null
+      const next =
+        l.from_document_id === current ? l.to_document_id : l.to_document_id === current ? l.from_document_id : null
       if (next && !seen.has(next)) {
         seen.add(next)
         queue.push(next)
@@ -310,8 +345,14 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     .filter((d) => seen.has(d.id))
     .sort((a, b) => order.indexOf(a.doc_type) - order.indexOf(b.doc_type) || a.number - b.number)
     .map((d) => ({
-      id: d.id, doc_type: d.doc_type, display_number: d.display_number, status_info: DOC_STATUSES[d.doc_type][d.status],
-      path: docPath(db, d), current: d.id === doc.id, readable: readable.has(d.doc_type), date: d.created_at,
+      id: d.id,
+      doc_type: d.doc_type,
+      display_number: d.display_number,
+      status_info: DOC_STATUSES[d.doc_type][d.status],
+      path: docPath(db, d),
+      current: d.id === doc.id,
+      readable: readable.has(d.doc_type),
+      date: d.created_at,
     }))
 }
 
@@ -329,7 +370,9 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
   const eff = effectivePermissions(db, userId, doc.company_id)
   const company = db.companies.find((c) => c.id === doc.company_id)!
   const result: AvailableAction[] = []
-  for (const tr of TRANSITIONS.filter((t) => t.docType === doc.doc_type && t.from === doc.status && t.action !== 'SYSTEM')) {
+  for (const tr of TRANSITIONS.filter(
+    (t) => t.docType === doc.doc_type && t.from === doc.status && t.action !== 'SYSTEM',
+  )) {
     if (!tr.permission || !can(eff, tr.permission)) continue
     let reason: string | null = null
     if (doc.doc_type === 'PURCHASE_ORDER' && (tr.action === 'APPROVE' || tr.action === 'REJECT')) {
@@ -343,18 +386,43 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     if (doc.doc_type === 'PURCHASE_ORDER' && tr.action === 'WITHDRAW' && !eff.supervisor && doc.created_by !== userId) {
       reason = 'Sólo quien creó la orden puede retirarla.'
     }
-    if (doc.doc_type === 'PURCHASE_ORDER' && tr.action === 'CANCEL' && db.poLines.some((l) => l.document_id === doc.id && l.qty_received > 0)) {
+    if (
+      doc.doc_type === 'PURCHASE_ORDER' &&
+      tr.action === 'CANCEL' &&
+      db.poLines.some((l) => l.document_id === doc.id && l.qty_received > 0)
+    ) {
       reason = 'Tiene recepciones: usá "Cerrar saldo".'
     }
-    if (doc.doc_type === 'PURCHASE_REQUISITION' && (tr.action === 'SUBMIT' || tr.action === 'CANCEL') && !eff.supervisor && doc.created_by !== userId) {
+    if (
+      doc.doc_type === 'PURCHASE_REQUISITION' &&
+      (tr.action === 'SUBMIT' || tr.action === 'CANCEL') &&
+      !eff.supervisor &&
+      doc.created_by !== userId
+    ) {
       const member = getMember(db, userId, doc.company_id)
       const sectors = member ? getMemberRoles(db, member.id).map((r) => r.sector_id) : []
       if (!doc.sector_id || !sectors.includes(doc.sector_id)) reason = 'Sólo el sector solicitante puede hacerlo.'
     }
-    if (doc.doc_type === 'GOODS_RECEIPT' && doc.status === 'CONFIRMADO' && tr.action === 'CANCEL' && company.settings.sod_enabled && !eff.supervisor && !eff.roles.includes('GERENCIA') && doc.created_by === userId) {
+    if (
+      doc.doc_type === 'GOODS_RECEIPT' &&
+      doc.status === 'CONFIRMADO' &&
+      tr.action === 'CANCEL' &&
+      company.settings.sod_enabled &&
+      !eff.supervisor &&
+      !eff.roles.includes('GERENCIA') &&
+      doc.created_by === userId
+    ) {
       reason = 'Separación de funciones: otro integrante de Depósito o Gerencia debe anularla.'
     }
-    result.push({ action: tr.action, label: tr.label, help: tr.help, tone: tr.tone, requires_comment: tr.requiresComment, enabled: !reason, reason })
+    result.push({
+      action: tr.action,
+      label: tr.label,
+      help: tr.help,
+      tone: tr.tone,
+      requires_comment: tr.requiresComment,
+      enabled: !reason,
+      reason,
+    })
   }
   return result
 }
@@ -362,11 +430,25 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
 function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
   const sector = db.sectors.find((s) => s.id === doc.sector_id)?.name ?? 'el sector solicitante'
   switch (`${doc.doc_type}:${doc.status}`) {
-    case 'PURCHASE_REQUISITION:BORRADOR': return { who: sector, text: 'Completar los ítems, justificar la necesidad y enviar la solicitud a Compras.' }
-    case 'PURCHASE_REQUISITION:SOLICITADO': return { who: 'Compras', text: 'Debe incluir la solicitud en una orden de compra a un proveedor, o rechazarla indicando el motivo.' }
-    case 'PURCHASE_REQUISITION:ORDENADO_PARCIAL': return { who: 'Compras', text: 'Resta ordenar el saldo pendiente o cerrarlo con motivo.' }
-    case 'PURCHASE_REQUISITION:ORDENADO': return { who: 'Compras y Depósito', text: 'La necesidad ya está cubierta por órdenes de compra. Seguí su avance en "Flujo documental".' }
-    case 'PURCHASE_ORDER:BORRADOR': return { who: 'Compras', text: 'Revisar proveedor, precios, cantidades y fecha de entrega, y enviar la orden a aprobación.' }
+    case 'PURCHASE_REQUISITION:BORRADOR':
+      return { who: sector, text: 'Completar los ítems, justificar la necesidad y enviar la solicitud a Compras.' }
+    case 'PURCHASE_REQUISITION:SOLICITADO':
+      return {
+        who: 'Compras',
+        text: 'Debe incluir la solicitud en una orden de compra a un proveedor, o rechazarla indicando el motivo.',
+      }
+    case 'PURCHASE_REQUISITION:ORDENADO_PARCIAL':
+      return { who: 'Compras', text: 'Resta ordenar el saldo pendiente o cerrarlo con motivo.' }
+    case 'PURCHASE_REQUISITION:ORDENADO':
+      return {
+        who: 'Compras y Depósito',
+        text: 'La necesidad ya está cubierta por órdenes de compra. Seguí su avance en "Flujo documental".',
+      }
+    case 'PURCHASE_ORDER:BORRADOR':
+      return {
+        who: 'Compras',
+        text: 'Revisar proveedor, precios, cantidades y fecha de entrega, y enviar la orden a aprobación.',
+      }
     case 'PURCHASE_ORDER:PENDIENTE_APROBACION': {
       const req = db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')
       const rule = db.approvalRules.find((r) => r.id === req?.rule_id)
@@ -375,16 +457,47 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         text: `${rule?.description ?? ''} Quien creó la orden no puede aprobarla: es un control de separación de funciones.`.trim(),
       }
     }
-    case 'PURCHASE_ORDER:RECHAZADO': return { who: 'Compras', text: `Motivo del rechazo: "${doc.status_reason}". Reabrir, corregir y reenviar, o anular la orden.` }
-    case 'PURCHASE_ORDER:APROBADO': return { who: 'Compras', text: 'Comunicar la orden al proveedor (imprimirla o enviarla) y marcarla como enviada.' }
-    case 'PURCHASE_ORDER:ENVIADO': return { who: 'Depósito', text: 'Cuando llegue la mercadería, controlarla contra esta orden y el remito del proveedor, y registrar la recepción.' }
-    case 'PURCHASE_ORDER:RECIBIDO_PARCIAL': return { who: 'Depósito o Compras', text: 'Falta recibir el saldo. Si no va a llegar, Compras puede cerrar el saldo con motivo.' }
-    case 'PURCHASE_ORDER:RECIBIDO': return { who: 'Próxima fase', text: 'Circuito de compra completo. En la Fase 3 continuará con la factura del proveedor, el pago y el asiento contable.' }
-    case 'GOODS_RECEIPT:BORRADOR': return { who: 'Depósito', text: 'Revisar cantidades contra el remito y confirmar la recepción para que ingrese al stock.' }
-    case 'GOODS_RECEIPT:CONFIRMADO': return { who: '—', text: 'La mercadería ingresó al stock (ver kardex). Compras y el solicitante fueron notificados.' }
-    case 'STOCK_ADJUSTMENT:BORRADOR': return { who: 'Depósito', text: 'Revisar y confirmar el ajuste.' }
-    case 'STOCK_ADJUSTMENT:CONFIRMADO': return { who: '—', text: 'El ajuste impactó en el stock y quedó documentado.' }
-    default: return { who: '—', text: DOC_STATUSES[doc.doc_type][doc.status]?.description ?? '' }
+    case 'PURCHASE_ORDER:RECHAZADO':
+      return {
+        who: 'Compras',
+        text: `Motivo del rechazo: "${doc.status_reason}". Reabrir, corregir y reenviar, o anular la orden.`,
+      }
+    case 'PURCHASE_ORDER:APROBADO':
+      return {
+        who: 'Compras',
+        text: 'Comunicar la orden al proveedor (imprimirla o enviarla) y marcarla como enviada.',
+      }
+    case 'PURCHASE_ORDER:ENVIADO':
+      return {
+        who: 'Depósito',
+        text: 'Cuando llegue la mercadería, controlarla contra esta orden y el remito del proveedor, y registrar la recepción.',
+      }
+    case 'PURCHASE_ORDER:RECIBIDO_PARCIAL':
+      return {
+        who: 'Depósito o Compras',
+        text: 'Falta recibir el saldo. Si no va a llegar, Compras puede cerrar el saldo con motivo.',
+      }
+    case 'PURCHASE_ORDER:RECIBIDO':
+      return {
+        who: 'Próxima fase',
+        text: 'Circuito de compra completo. En la Fase 3 continuará con la factura del proveedor, el pago y el asiento contable.',
+      }
+    case 'GOODS_RECEIPT:BORRADOR':
+      return {
+        who: 'Depósito',
+        text: 'Revisar cantidades contra el remito y confirmar la recepción para que ingrese al stock.',
+      }
+    case 'GOODS_RECEIPT:CONFIRMADO':
+      return {
+        who: '—',
+        text: 'La mercadería ingresó al stock (ver kardex). Compras y el solicitante fueron notificados.',
+      }
+    case 'STOCK_ADJUSTMENT:BORRADOR':
+      return { who: 'Depósito', text: 'Revisar y confirmar el ajuste.' }
+    case 'STOCK_ADJUSTMENT:CONFIRMADO':
+      return { who: '—', text: 'El ajuste impactó en el stock y quedó documentado.' }
+    default:
+      return { who: '—', text: DOC_STATUSES[doc.doc_type][doc.status]?.description ?? '' }
   }
 }
 
@@ -433,9 +546,17 @@ export interface DocumentDetail {
   signatures: { label: string; name: string; sector: string; at: string }[]
 }
 
-export function documentDetail(db: DB, userId: string, companyId: string, docType: T.DocType, displayNumber: string): DocumentDetail | null {
+export function documentDetail(
+  db: DB,
+  userId: string,
+  companyId: string,
+  docType: T.DocType,
+  displayNumber: string,
+): DocumentDetail | null {
   assertPerm(db, userId, companyId, `${DOC_TYPES[docType].resource}.read`)
-  const doc = db.documents.find((d) => d.company_id === companyId && d.doc_type === docType && d.display_number === displayNumber)
+  const doc = db.documents.find(
+    (d) => d.company_id === companyId && d.doc_type === docType && d.display_number === displayNumber,
+  )
   if (!doc) return null
   return buildDetail(db, userId, doc)
 }
@@ -451,27 +572,70 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
   const product = (id: string) => db.products.find((p) => p.id === id)!
   let lines: DetailLine[] = []
   if (doc.doc_type === 'PURCHASE_REQUISITION') {
-    lines = db.prLines.filter((l) => l.document_id === doc.id).map((l) => ({ id: l.id, line_no: l.line_no, product: product(l.product_id), quantity: l.quantity, notes: l.notes, qty_ordered: l.qty_ordered }))
+    lines = db.prLines
+      .filter((l) => l.document_id === doc.id)
+      .map((l) => ({
+        id: l.id,
+        line_no: l.line_no,
+        product: product(l.product_id),
+        quantity: l.quantity,
+        notes: l.notes,
+        qty_ordered: l.qty_ordered,
+      }))
   }
   if (doc.doc_type === 'PURCHASE_ORDER') {
-    lines = db.poLines.filter((l) => l.document_id === doc.id).map((l) => {
-      const rl = db.prLines.find((x) => x.id === l.requisition_line_id)
-      const req = rl ? db.documents.find((d) => d.id === rl.document_id) : null
-      return {
-        id: l.id, line_no: l.line_no, product: product(l.product_id), quantity: l.quantity, notes: '', unit_price: l.unit_price, vat_rate: l.vat_rate,
-        line_subtotal: l.line_subtotal, line_tax: l.line_tax, line_total: l.line_total, qty_received: l.qty_received, requisition_label: req?.display_number ?? null,
-        requisition_line_id: l.requisition_line_id, requisition_max: rl ? rl.quantity - rl.qty_ordered + l.quantity : null,
-      }
-    })
+    lines = db.poLines
+      .filter((l) => l.document_id === doc.id)
+      .map((l) => {
+        const rl = db.prLines.find((x) => x.id === l.requisition_line_id)
+        const req = rl ? db.documents.find((d) => d.id === rl.document_id) : null
+        return {
+          id: l.id,
+          line_no: l.line_no,
+          product: product(l.product_id),
+          quantity: l.quantity,
+          notes: '',
+          unit_price: l.unit_price,
+          vat_rate: l.vat_rate,
+          line_subtotal: l.line_subtotal,
+          line_tax: l.line_tax,
+          line_total: l.line_total,
+          qty_received: l.qty_received,
+          requisition_label: req?.display_number ?? null,
+          requisition_line_id: l.requisition_line_id,
+          requisition_max: rl ? rl.quantity - rl.qty_ordered + l.quantity : null,
+        }
+      })
   }
   if (doc.doc_type === 'GOODS_RECEIPT') {
-    lines = db.grLines.filter((l) => l.document_id === doc.id).map((l) => {
-      const pl = db.poLines.find((x) => x.id === l.po_line_id)
-      return { id: l.id, line_no: l.line_no, product: product(l.product_id), quantity: l.quantity, notes: l.notes, po_line_id: l.po_line_id, qty_ordered_po: pl?.quantity, qty_received: pl?.qty_received, unit_cost: l.unit_cost }
-    })
+    lines = db.grLines
+      .filter((l) => l.document_id === doc.id)
+      .map((l) => {
+        const pl = db.poLines.find((x) => x.id === l.po_line_id)
+        return {
+          id: l.id,
+          line_no: l.line_no,
+          product: product(l.product_id),
+          quantity: l.quantity,
+          notes: l.notes,
+          po_line_id: l.po_line_id,
+          qty_ordered_po: pl?.quantity,
+          qty_received: pl?.qty_received,
+          unit_cost: l.unit_cost,
+        }
+      })
   }
   if (doc.doc_type === 'STOCK_ADJUSTMENT') {
-    lines = db.saLines.filter((l) => l.document_id === doc.id).map((l) => ({ id: l.id, line_no: l.line_no, product: product(l.product_id), quantity: l.quantity_delta, notes: l.notes, unit_cost: l.unit_cost }))
+    lines = db.saLines
+      .filter((l) => l.document_id === doc.id)
+      .map((l) => ({
+        id: l.id,
+        line_no: l.line_no,
+        product: product(l.product_id),
+        quantity: l.quantity_delta,
+        notes: l.notes,
+        unit_cost: l.unit_cost,
+      }))
   }
   const warehouseId = doc.po?.warehouse_id ?? doc.gr?.warehouse_id ?? doc.sa?.warehouse_id
   const relatedOrder = doc.gr ? db.documents.find((d) => d.id === doc.gr!.purchase_order_id) : undefined
@@ -482,10 +646,19 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
   }
   const signatures =
     doc.doc_type === 'PURCHASE_REQUISITION'
-      ? [{ label: 'Solicitó', ...firstBy(['SUBMIT', 'CREATE']) }, { label: 'Atendió (Compras)', ...firstBy(['SYSTEM']) }]
+      ? [
+          { label: 'Solicitó', ...firstBy(['SUBMIT', 'CREATE']) },
+          { label: 'Atendió (Compras)', ...firstBy(['SYSTEM']) },
+        ]
       : doc.doc_type === 'PURCHASE_ORDER'
-        ? [{ label: 'Emitió', ...firstBy(['SUBMIT', 'CREATE']) }, { label: 'Autorizó', ...firstBy(['APPROVE']) }]
-        : [{ label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) }, { label: 'Controló', name: '', sector: '', at: '' }]
+        ? [
+            { label: 'Emitió', ...firstBy(['SUBMIT', 'CREATE']) },
+            { label: 'Autorizó', ...firstBy(['APPROVE']) },
+          ]
+        : [
+            { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+            { label: 'Controló', name: '', sector: '', at: '' },
+          ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -494,7 +667,12 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
     approvals: db.approvalRequests
       .filter((a) => a.document_id === doc.id)
-      .map((a) => ({ ...a, approver_role_name: ROLES[a.approver_role].name, decided_by_name: a.decided_by ? nameOf(db, a.decided_by) : '', requested_by_name: nameOf(db, a.requested_by) })),
+      .map((a) => ({
+        ...a,
+        approver_role_name: ROLES[a.approver_role].name,
+        decided_by_name: a.decided_by ? nameOf(db, a.decided_by) : '',
+        requested_by_name: nameOf(db, a.requested_by),
+      })),
     flow: documentFlow(db, userId, doc),
     history,
     actions: availableActions(db, userId, doc),
@@ -515,11 +693,19 @@ export interface PendingRequisitionLine {
 export function pendingRequisitionLines(db: DB, userId: string, companyId: string): PendingRequisitionLine[] {
   assertPerm(db, userId, companyId, 'purchase_requisition.read')
   const result: PendingRequisitionLine[] = []
-  for (const doc of db.documents.filter((d) => d.company_id === companyId && d.doc_type === 'PURCHASE_REQUISITION' && ['SOLICITADO', 'ORDENADO_PARCIAL'].includes(d.status)).sort((a, b) => a.number - b.number)) {
+  for (const doc of db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PURCHASE_REQUISITION' &&
+        ['SOLICITADO', 'ORDENADO_PARCIAL'].includes(d.status),
+    )
+    .sort((a, b) => a.number - b.number)) {
     const item = listItem(db, doc)
     for (const line of db.prLines.filter((l) => l.document_id === doc.id)) {
       const pending = line.quantity - line.qty_ordered
-      if (pending > 1e-9) result.push({ line, pending, requisition: item, product: db.products.find((p) => p.id === line.product_id)! })
+      if (pending > 1e-9)
+        result.push({ line, pending, requisition: item, product: db.products.find((p) => p.id === line.product_id)! })
     }
   }
   return result
@@ -533,13 +719,22 @@ export interface ReceivableOrder {
 export function receivableOrders(db: DB, userId: string, companyId: string): ReceivableOrder[] {
   assertPerm(db, userId, companyId, 'purchase_order.read')
   return db.documents
-    .filter((d) => d.company_id === companyId && d.doc_type === 'PURCHASE_ORDER' && ['ENVIADO', 'RECIBIDO_PARCIAL'].includes(d.status))
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PURCHASE_ORDER' &&
+        ['ENVIADO', 'RECIBIDO_PARCIAL'].includes(d.status),
+    )
     .sort((a, b) => a.number - b.number)
     .map((d) => ({
       order: listItem(db, d),
       lines: db.poLines
         .filter((l) => l.document_id === d.id)
-        .map((l) => ({ line: l, product: db.products.find((p) => p.id === l.product_id)!, pending: l.quantity - l.qty_received }))
+        .map((l) => ({
+          line: l,
+          product: db.products.find((p) => p.id === l.product_id)!,
+          pending: l.quantity - l.qty_received,
+        }))
         .filter((x) => x.pending > 1e-9),
     }))
 }
@@ -556,7 +751,13 @@ export interface TaskItem extends T.Task {
   mine: boolean
 }
 
-export function listTasks(db: DB, userId: string, companyId: string, scope: 'mine' | 'all', includeClosed = false): TaskItem[] {
+export function listTasks(
+  db: DB,
+  userId: string,
+  companyId: string,
+  scope: 'mine' | 'all',
+  includeClosed = false,
+): TaskItem[] {
   const eff = effectivePermissions(db, userId, companyId)
   const canAll = eff.all || eff.perms.has('task.read')
   const company = db.companies.find((c) => c.id === companyId)!
@@ -568,7 +769,9 @@ export function listTasks(db: DB, userId: string, companyId: string, scope: 'min
       return { t, mine }
     })
     .filter(({ mine }) => mine || (scope === 'all' && canAll))
-    .sort((a, b) => (a.t.status === b.t.status ? b.t.created_at.localeCompare(a.t.created_at) : a.t.status === 'EN_CURSO' ? -1 : 1))
+    .sort((a, b) =>
+      a.t.status === b.t.status ? b.t.created_at.localeCompare(a.t.created_at) : a.t.status === 'EN_CURSO' ? -1 : 1,
+    )
     .map(({ t, mine }) => {
       const doc = db.documents.find((d) => d.id === t.document_id)
       return {
@@ -577,7 +780,11 @@ export function listTasks(db: DB, userId: string, companyId: string, scope: 'min
         document_label: doc?.display_number ?? null,
         document_type: doc?.doc_type ?? null,
         path: doc ? docPath(db, doc) : t.task_type === 'REPONER_STOCK' ? `/e/${company.slug}/stock` : null,
-        assignee_label: t.assigned_user_id ? nameOf(db, t.assigned_user_id) : t.assigned_role ? ROLES[t.assigned_role].name : '—',
+        assignee_label: t.assigned_user_id
+          ? nameOf(db, t.assigned_user_id)
+          : t.assigned_role
+            ? ROLES[t.assigned_role].name
+            : '—',
         claimed_by_name: t.claimed_by ? nameOf(db, t.claimed_by) : null,
         completed_by_name: t.completed_by ? nameOf(db, t.completed_by) : null,
       }
@@ -654,19 +861,30 @@ export function dashboard(db: DB, userId: string, companyId: string): Dashboard 
   const statusOrder = Object.keys(DOC_STATUSES.PURCHASE_ORDER)
   return {
     kpis: {
-      pr_pending: docs.filter((d) => d.doc_type === 'PURCHASE_REQUISITION' && ['SOLICITADO', 'ORDENADO_PARCIAL'].includes(d.status)).length,
+      pr_pending: docs.filter(
+        (d) => d.doc_type === 'PURCHASE_REQUISITION' && ['SOLICITADO', 'ORDENADO_PARCIAL'].includes(d.status),
+      ).length,
       po_pending_approval: pos.filter((d) => d.status === 'PENDIENTE_APROBACION').length,
       po_pending_amount: pos.filter((d) => d.status === 'PENDIENTE_APROBACION').reduce((s, d) => s + d.total, 0),
       po_in_transit: pos.filter((d) => ['ENVIADO', 'RECIBIDO_PARCIAL'].includes(d.status)).length,
       below_min: lowStock.length,
       inventory_value: canStock
-        ? db.stockBalances.filter((b) => b.company_id === companyId).reduce((s, b) => s + b.qty_on_hand * b.avg_unit_cost, 0)
+        ? db.stockBalances
+            .filter((b) => b.company_id === companyId)
+            .reduce((s, b) => s + b.qty_on_hand * b.avg_unit_cost, 0)
         : null,
-      purchases_month: pos.filter((d) => d.po?.approved_at?.startsWith(month) && d.status !== 'ANULADO').reduce((s, d) => s + d.total, 0),
+      purchases_month: pos
+        .filter((d) => d.po?.approved_at?.startsWith(month) && d.status !== 'ANULADO')
+        .reduce((s, d) => s + d.total, 0),
       my_tasks: tasks.length,
     },
     po_by_status: statusOrder
-      .map((status) => ({ status, label: DOC_STATUSES.PURCHASE_ORDER[status].label, badge: DOC_STATUSES.PURCHASE_ORDER[status].badge, count: pos.filter((d) => d.status === status).length }))
+      .map((status) => ({
+        status,
+        label: DOC_STATUSES.PURCHASE_ORDER[status].label,
+        badge: DOC_STATUSES.PURCHASE_ORDER[status].badge,
+        count: pos.filter((d) => d.status === status).length,
+      }))
       .filter((x) => x.count > 0),
     low_stock: canStock ? lowStock : [],
     activity: listAudit(db, userId, companyId).slice(0, 8),
@@ -682,7 +900,14 @@ export interface MemberView {
   user: PublicProfile
   member_id: string | null
   job_title: string
-  roles: { id: string; role_code: T.RoleCode; role_name: string; sector_id: string | null; sector_name: string; island: number | null }[]
+  roles: {
+    id: string
+    role_code: T.RoleCode
+    role_name: string
+    sector_id: string | null
+    sector_name: string
+    island: number | null
+  }[]
   last_activity: string | null
   actions_count: number
 }
@@ -702,15 +927,22 @@ export function listMembers(db: DB, userId: string, companyId: string): MemberVi
         roles: getMemberRoles(db, m.id).map((r) => {
           const sector = db.sectors.find((s) => s.id === r.sector_id)
           return {
-            id: r.id, role_code: r.role_code, role_name: ROLES[r.role_code].name, sector_id: r.sector_id,
-            sector_name: sector?.name ?? '—', island: db.islands.find((i) => i.id === sector?.island_id)?.number ?? null,
+            id: r.id,
+            role_code: r.role_code,
+            role_name: ROLES[r.role_code].name,
+            sector_id: r.sector_id,
+            sector_name: sector?.name ?? '—',
+            island: db.islands.find((i) => i.id === sector?.island_id)?.number ?? null,
           }
         }),
         last_activity: events.length ? events[events.length - 1].occurred_at : null,
         actions_count: events.length,
       }
     })
-    .sort((a, b) => (a.roles[0]?.island ?? 99) - (b.roles[0]?.island ?? 99) || a.user.last_name.localeCompare(b.user.last_name))
+    .sort(
+      (a, b) =>
+        (a.roles[0]?.island ?? 99) - (b.roles[0]?.island ?? 99) || a.user.last_name.localeCompare(b.user.last_name),
+    )
 }
 
 export function demoUsers(db: DB) {
@@ -725,7 +957,11 @@ export function demoUsers(db: DB) {
         username: p.username,
         name: fullName(p),
         app_role: p.app_role,
-        role_label: roles.length ? roles.map((r) => ROLES[r.role_code].name).join(' + ') : p.app_role === 'ADMIN' ? 'Administración escolar' : p.app_role,
+        role_label: roles.length
+          ? roles.map((r) => ROLES[r.role_code].name).join(' + ')
+          : p.app_role === 'ADMIN'
+            ? 'Administración escolar'
+            : p.app_role,
         island: island?.number ?? null,
       }
     })

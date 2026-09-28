@@ -24,7 +24,9 @@ function NotFound() {
   return (
     <div className="mx-auto max-w-md px-4 py-24 text-center">
       <h1 className="text-lg font-semibold text-navy">Página no encontrada</h1>
-      <Button asChild className="mt-6"><Link to="/">Ir al inicio</Link></Button>
+      <Button asChild className="mt-6">
+        <Link to="/">Ir al inicio</Link>
+      </Button>
     </div>
   )
 }
@@ -48,7 +50,10 @@ export const router = createBrowserRouter([
               { path: 'mi-trabajo', element: <MyWorkPage /> },
               { path: 'compras/solicitudes', element: <DocumentListPage key="pr" docType="PURCHASE_REQUISITION" /> },
               { path: 'compras/solicitudes/nueva', element: <RequisitionFormPage /> },
-              { path: 'compras/solicitudes/:number', element: <DocumentPage key="pr" docType="PURCHASE_REQUISITION" /> },
+              {
+                path: 'compras/solicitudes/:number',
+                element: <DocumentPage key="pr" docType="PURCHASE_REQUISITION" />,
+              },
               { path: 'compras/solicitudes/:number/editar', element: <RequisitionFormPage /> },
               { path: 'compras/ordenes', element: <DocumentListPage key="po" docType="PURCHASE_ORDER" /> },
               { path: 'compras/ordenes/nueva', element: <OrderFormPage /> },

@@ -14,18 +14,35 @@ function Mark({ className }: { className?: string }) {
 }
 
 /** Logotipo de la familia GEST-AR: nombre en marino con el sufijo "-AR" en azul. */
-export function BrandMark({ tone = 'light', subtitle = true, className }: { tone?: 'light' | 'dark'; subtitle?: boolean; className?: string }) {
+export function BrandMark({
+  tone = 'light',
+  subtitle = true,
+  className,
+}: {
+  tone?: 'light' | 'dark'
+  subtitle?: boolean
+  className?: string
+}) {
   const onDark = tone === 'dark'
   return (
     <div className={cn('flex items-center gap-2.5', className)}>
-      <div className={cn('flex size-9 shrink-0 items-center justify-center rounded-[10px]', onDark ? 'bg-white/10 text-white' : 'bg-navy text-white')}>
+      <div
+        className={cn(
+          'flex size-9 shrink-0 items-center justify-center rounded-[10px]',
+          onDark ? 'bg-white/10 text-white' : 'bg-navy text-white',
+        )}
+      >
         <Mark className="size-5" />
       </div>
       <div className="leading-none">
         <div className={cn('text-[17px] font-black tracking-tight', onDark ? 'text-white' : 'text-navy')}>
           INTEGR<span className={onDark ? 'text-sky-300' : 'text-brand-blue'}>-AR</span>
         </div>
-        {subtitle && <div className={cn('mt-1 text-[11px] font-medium', onDark ? 'text-slate-400' : 'text-muted-foreground')}>ERP educativo · familia GEST-AR</div>}
+        {subtitle && (
+          <div className={cn('mt-1 text-[11px] font-medium', onDark ? 'text-slate-400' : 'text-muted-foreground')}>
+            ERP educativo · familia GEST-AR
+          </div>
+        )}
       </div>
     </div>
   )

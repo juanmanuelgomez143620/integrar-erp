@@ -11,8 +11,14 @@ import { useSession } from '@/app/session'
 import { ROLES } from '@/lib/domain/catalog'
 
 const ISLANDS: Record<number, string> = {
-  1: 'Gerencia y Control', 2: 'Compras', 3: 'Ventas', 4: 'Contabilidad e Impuestos',
-  5: 'Tesorería', 6: 'RRHH', 7: 'Producción y Costos', 8: 'Depósito y Logística',
+  1: 'Gerencia y Control',
+  2: 'Compras',
+  3: 'Ventas',
+  4: 'Contabilidad e Impuestos',
+  5: 'Tesorería',
+  6: 'RRHH',
+  7: 'Producción y Costos',
+  8: 'Depósito y Logística',
 }
 
 export function LoginPage() {
@@ -47,7 +53,9 @@ export function LoginPage() {
       <aside className="relative hidden flex-col justify-between overflow-hidden bg-navy p-10 text-white lg:flex">
         <BrandMark tone="dark" />
         <div className="relative z-10 max-w-md">
-          <h1 className="text-3xl leading-tight font-bold tracking-tight">Una empresa, muchas áreas, <span className="text-sky-300">una sola base de datos.</span></h1>
+          <h1 className="text-3xl leading-tight font-bold tracking-tight">
+            Una empresa, muchas áreas, <span className="text-sky-300">una sola base de datos.</span>
+          </h1>
           <p className="mt-4 text-sm leading-relaxed text-slate-300">
             Cada operación nace en un sector y continúa en otro: Producción solicita, Compras ordena, Gerencia autoriza,
             Depósito recibe y el stock se actualiza. Todo queda documentado y auditado.
@@ -62,7 +70,8 @@ export function LoginPage() {
           </div>
         </div>
         <p className="relative z-10 text-xs text-slate-400">
-          Escuela Normal Superior N.º 9 · Aula empresarial<br />
+          Escuela Normal Superior N.º 9 · Aula empresarial
+          <br />
           Documentos de simulación educativa — sin validez fiscal.
         </p>
         <div className="pointer-events-none absolute -right-24 -bottom-24 size-96 rounded-full bg-brand-blue/25 blur-3xl" />
@@ -70,25 +79,42 @@ export function LoginPage() {
 
       <main className="flex items-center justify-center px-4 py-10 sm:px-8">
         <div className="w-full max-w-xl">
-          <div className="mb-8 lg:hidden"><BrandMark /></div>
+          <div className="mb-8 lg:hidden">
+            <BrandMark />
+          </div>
           <h2 className="text-xl font-semibold text-navy">Ingresar</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Ingresá con el usuario y la contraseña que te dio tu docente.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Ingresá con el usuario y la contraseña que te dio tu docente.
+          </p>
           <form onSubmit={onSubmit} className="mt-6 grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <Field label="Usuario">
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus placeholder="p. ej. compras1" />
+              <Input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                autoFocus
+                placeholder="p. ej. compras1"
+              />
             </Field>
             <Field label="Contraseña">
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
             </Field>
-            <Button type="submit" size="lg" disabled={busy || !username || !password}>Ingresar <ArrowRight /></Button>
+            <Button type="submit" size="lg" disabled={busy || !username || !password}>
+              Ingresar <ArrowRight />
+            </Button>
           </form>
 
           <div className="mt-10">
             <div className="flex items-center gap-2 text-sm font-semibold text-navy">Accesos de demostración</div>
             <p className="mt-1 flex gap-1.5 text-xs text-muted-foreground">
               <Info className="mt-0.5 size-3.5 shrink-0" />
-              Tocá un usuario para entrar con su rol. Para ver la integración en vivo, abrí otra pestaña y entrá con otro sector:
-              los cambios aparecen al instante. Los datos se guardan sólo en este navegador.
+              Tocá un usuario para entrar con su rol. Para ver la integración en vivo, abrí otra pestaña y entrá con
+              otro sector: los cambios aparecen al instante. Los datos se guardan sólo en este navegador.
             </p>
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
               {demo.map((u) => (
@@ -109,7 +135,9 @@ export function LoginPage() {
                       {u.island ? ` · Isla ${u.island} ${ISLANDS[u.island]}` : ''}
                     </span>
                   </span>
-                  <span className="font-mono text-[11px] text-muted-foreground group-hover:text-brand-blue">{u.username}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground group-hover:text-brand-blue">
+                    {u.username}
+                  </span>
                 </button>
               ))}
             </div>
