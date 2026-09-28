@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { PackageCheck, PackageOpen } from 'lucide-react'
@@ -30,15 +30,21 @@ function ReceiptForm({ orders }: { orders: ReceivableOrder[] }) {
   const [note, setNote] = useState('')
   const [carrier, setCarrier] = useState('')
   const [notes, setNotes] = useState('')
-  const [warehouseId, setWarehouseId] = useState('')
-  const [quantities, setQuantities] = useState<Record<string, string>>({})
+  const [warehouseId, setWarehouseId] = useState(() => order?.order.po?.warehouse_id ?? company.warehouses[0]?.id ?? '')
+  const [quantities, setQuantities] = useState<Record<string, string>>(() =>
+    order ? Object.fromEntries(order.lines.map((l) => [l.line.id, String(l.pending).replace('.', ',')])) : {},
+  )
   const [confirming, setConfirming] = useState(false)
 
-  useEffect(() => {
-    if (!order) return
+  // Cuando se elige otra orden de compra, reiniciamos depósito y cantidades con sus
+  // valores por defecto. Se ajusta durante el render (no en un efecto aparte) para
+  // no mostrar primero el formulario vacío y evitar una cascada extra de renders.
+  const [loadedOrderId, setLoadedOrderId] = useState(orderId)
+  if (order && orderId !== loadedOrderId) {
+    setLoadedOrderId(orderId)
     setWarehouseId(order.order.po?.warehouse_id ?? company.warehouses[0]?.id ?? '')
     setQuantities(Object.fromEntries(order.lines.map((l) => [l.line.id, String(l.pending).replace('.', ',')])))
-  }, [order, company.warehouses])
+  }
 
   const parsed = useMemo(() => Object.fromEntries(Object.entries(quantities).map(([k, v]) => [k, Number(v.replace(',', '.')) || 0])), [quantities])
   const partial = order?.lines.some((l) => (parsed[l.line.id] ?? 0) < l.pending - 1e-9)
