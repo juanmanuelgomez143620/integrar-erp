@@ -34,7 +34,7 @@ export function AuditPage() {
     const header = ['fecha_hora', 'usuario', 'rol', 'sector', 'accion', 'registro', 'estado_anterior', 'estado_nuevo', 'detalle']
     const lines = rows.map((e) => [dateTime(e.occurred_at), e.actor_name, e.actor_role_code, e.actor_sector_name, e.action, e.entity_label, e.from_status ?? '', e.to_status ?? '', e.summary]
       .map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';'))
-    const blob = new Blob([`﻿${[header.join(';'), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
+    const blob = new Blob([`\uFEFF${[header.join(';'), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
