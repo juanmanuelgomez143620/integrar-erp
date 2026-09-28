@@ -22,6 +22,8 @@ import {
   cmdCreateStudent,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
+  cmdWithdrawPurchaseOrder,
+  effectivePermissions,
   type Ctx,
   type PurchaseOrderInput,
 } from './engine'
@@ -138,10 +140,12 @@ describe('circuito completo de compras', () => {
         },
       ],
     })
-    expect(doc(sc.id).status).toBe('ORDENADO')
+    // Un borrador no compromete a la empresa: todavía no marca la SC como "Ordenada".
+    expect(doc(sc.id).status).toBe('SOLICITADO')
 
     cmdSubmitPurchaseOrder(ctx('compras1'), oc.id)
     expect(doc(oc.id).status).toBe('PENDIENTE_APROBACION')
+    expect(doc(sc.id).status).toBe('ORDENADO')
 
     cmdApprovePurchaseOrder(ctx('compras2'), oc.id, 'Precio habitual')
     expect(doc(oc.id).status).toBe('APROBADO')
@@ -265,6 +269,59 @@ describe('recepciones', () => {
       true,
     )
     expect(doc(oc.id).status).toBe('RECIBIDO')
+  })
+
+  it('no admite dos recepciones activas con el mismo remito contra la misma orden', () => {
+    const oc = sentOrder(100)
+    const poLine = db.poLines.find((l) => l.document_id === oc.id)!
+    cmdCreateGoodsReceipt(
+      ctx('deposito'),
+      companyId(),
+      {
+        purchase_order_id: oc.id,
+        warehouse_id: warehouseId('DEP-MP'),
+        supplier_delivery_note: '0001-00000099',
+        carrier_name: '',
+        notes: '',
+        lines: [{ po_line_id: poLine.id, quantity: 40 }],
+      },
+      true,
+    )
+
+    // Mismo remito (con mayúsculas/espacios distintos): se rechaza.
+    expectBusinessError(
+      () =>
+        cmdCreateGoodsReceipt(
+          ctx('deposito'),
+          companyId(),
+          {
+            purchase_order_id: oc.id,
+            warehouse_id: warehouseId('DEP-MP'),
+            supplier_delivery_note: '  0001-00000099 ',
+            carrier_name: '',
+            notes: '',
+            lines: [{ po_line_id: poLine.id, quantity: 10 }],
+          },
+          true,
+        ),
+      'REMITO_DUPLICADO',
+    )
+
+    // Un remito distinto contra la misma orden sí es válido.
+    const second = cmdCreateGoodsReceipt(
+      ctx('deposito'),
+      companyId(),
+      {
+        purchase_order_id: oc.id,
+        warehouse_id: warehouseId('DEP-MP'),
+        supplier_delivery_note: '0001-00000100',
+        carrier_name: '',
+        notes: '',
+        lines: [{ po_line_id: poLine.id, quantity: 10 }],
+      },
+      true,
+    )
+    expect(doc(second.id).status).toBe('CONFIRMADO')
   })
 
   it('no se puede recibir más de lo ordenado', () => {
@@ -438,6 +495,11 @@ describe('anulaciones y reapertura', () => {
         },
       ],
     })
+    expect(doc(sc.id).status).toBe('SOLICITADO') // todavía borrador: no cuenta como ordenado
+
+    // La lleva a un estado real (no un borrador) para poder verificar que anularla la libera de verdad.
+    cmdSubmitPurchaseOrder(ctx('compras1'), oc.id)
+    cmdApprovePurchaseOrder(ctx('compras2'), oc.id, 'OK')
     expect(doc(sc.id).status).toBe('ORDENADO')
 
     cmdCancelPurchaseOrder(ctx('compras1'), oc.id, 'Se decidió no comprar')
@@ -446,6 +508,40 @@ describe('anulaciones y reapertura', () => {
     expect(
       db.tasks.some((t) => t.document_id === sc.id && t.task_type === 'ATENDER_SC' && t.status === 'PENDIENTE'),
     ).toBe(true)
+  })
+
+  it('retirar una OC de aprobación también la vuelve a marcar como borrador para la SC', () => {
+    const sc = cmdCreateRequisition(
+      ctx('produccion'),
+      companyId(),
+      {
+        needed_by: null,
+        priority: 'NORMAL',
+        reason: 'Prueba de retiro de aprobación',
+        notes: '',
+        lines: [{ product_id: productId('MP-001'), quantity: 8 }],
+      },
+      true,
+    )
+    const reqLine = db.prLines.find((l) => l.document_id === sc.id)!
+    const oc = cmdCreatePurchaseOrder(ctx('compras1'), companyId(), {
+      ...orderInput(1000),
+      lines: [
+        {
+          product_id: reqLine.product_id,
+          requisition_line_id: reqLine.id,
+          quantity: 8,
+          unit_price: 1000,
+          vat_rate: 21,
+        },
+      ],
+    })
+    cmdSubmitPurchaseOrder(ctx('compras1'), oc.id)
+    expect(doc(sc.id).status).toBe('ORDENADO')
+
+    cmdWithdrawPurchaseOrder(ctx('compras1'), oc.id)
+    expect(doc(oc.id).status).toBe('BORRADOR')
+    expect(doc(sc.id).status).toBe('SOLICITADO') // vuelve a ser un borrador: ya no cuenta como ordenado
   })
 })
 
@@ -490,5 +586,29 @@ describe('auditoría y permisos', () => {
         ),
       'SIN_PERMISO',
     )
+  })
+
+  it('ADMIN (administración escolar) no hereda supervisor dentro de una empresa; DOCENTE y SUPERADMIN sí', () => {
+    const admin = effectivePermissions(db, db.profiles.find((p) => p.username === 'admin')!.id, companyId())
+    expect(admin.supervisor).toBe(false)
+    expect(admin.all).toBe(false)
+    expect(admin.perms.size).toBe(0) // ADMIN no tiene rol de empresa: no ve ni opera nada acá
+
+    const docente = effectivePermissions(db, db.profiles.find((p) => p.username === 'docente')!.id, companyId())
+    expect(docente.supervisor).toBe(true)
+
+    db.profiles.push({
+      id: 'usr-test-superadmin',
+      username: 'superadmin-test',
+      password: 'x',
+      first_name: 'Super',
+      last_name: 'Admin',
+      app_role: 'SUPERADMIN',
+      is_active: true,
+      must_change_password: false,
+      created_at: new Date().toISOString(),
+    })
+    const superadmin = effectivePermissions(db, 'usr-test-superadmin', companyId())
+    expect(superadmin.supervisor).toBe(true)
   })
 })
