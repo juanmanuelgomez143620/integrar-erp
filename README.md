@@ -1,5 +1,7 @@
 # INTEGR-AR · ERP educativo para el Aula Empresarial
 
+> **Revisión de Fase 0 (26/09/2026):** el nuevo pedido de arquitectura se documenta en [docs/fase-0-2027/README.md](docs/fase-0-2027/README.md). Esa propuesta identifica diferencias con el prototipo existente; este documento conserva el contexto anterior y no implica que Supabase ya esté implementado.
+
 > Aplicación de la **familia GEST-AR**. "INTEGR-AR" es su nombre de trabajo (D-01).
 
 Sistema de gestión empresarial (ERP) **educativo y original**, desarrollado para 4.º, 5.º y 6.º año de la **Escuela Normal Superior N.º 9**, orientación en **Gestión y Administración de las Organizaciones**.

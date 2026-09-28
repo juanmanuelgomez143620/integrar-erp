@@ -1,5 +1,7 @@
 # Arquitectura — INTEGR-AR · ERP Educativo
 
+> **Revisión de Fase 0 (26/09/2026):** el nuevo pedido de arquitectura se documenta en [docs/fase-0-2027/README.md](docs/fase-0-2027/README.md). Esa propuesta identifica diferencias con el prototipo existente; este documento conserva el contexto anterior y no implica que Supabase ya esté implementado.
+
 > **Versión 0.3 · Fase 1 en curso · septiembre 2026.** Documento vivo: toda decisión relevante se registra en la sección 17.
 > Aplicación de la **familia GEST-AR** (propiedad del autor). "INTEGR-AR" es su nombre de trabajo (D-01).
 > **Etapa actual:** interfaz del MVP funcionando con backend simulado en el navegador; integración con Supabase pendiente (§7.9).

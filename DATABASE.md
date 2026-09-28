@@ -1,5 +1,7 @@
 # Modelo de datos — INTEGR-AR
 
+> **Revisión de Fase 0 (26/09/2026):** el nuevo pedido de arquitectura se documenta en [docs/fase-0-2027/README.md](docs/fase-0-2027/README.md). Esa propuesta identifica diferencias con el prototipo existente; este documento conserva el contexto anterior y no implica que Supabase ya esté implementado.
+
 > **Versión 0.1 · Fase 0 · modelo preliminar.** Los bloques de definición son **borradores de diseño**, no migraciones ejecutables. Las migraciones reales se escriben y prueban en la Fase 1.
 > Contexto de arquitectura: [ARCHITECTURE.md](ARCHITECTURE.md). Estados y reglas del circuito: [docs/FLUJO_COMPRAS.md](docs/FLUJO_COMPRAS.md).
 > **Una base de datos por escuela** (instancia): este modelo describe la base de **una** escuela. No existen tablas de instituciones. Ver [docs/INSTANCIAS.md](docs/INSTANCIAS.md).

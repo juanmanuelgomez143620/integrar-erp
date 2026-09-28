@@ -1,5 +1,7 @@
 # Hoja de ruta 2026–2027 — INTEGR-AR
 
+> **Revisión de Fase 0 (26/09/2026):** el nuevo pedido de arquitectura se documenta en [docs/fase-0-2027/README.md](docs/fase-0-2027/README.md). Esa propuesta identifica diferencias con el prototipo existente; este documento conserva el contexto anterior y no implica que Supabase ya esté implementado.
+
 > Versión 0.1 · Fase 0. Fechas **tentativas**: se ajustan a la planificación anual real de 4.º, 5.º y 6.º año (decisión D-12) y al ritmo de desarrollo observado en la Fase 1.
 
 ## 1. Criterio de ordenamiento

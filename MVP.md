@@ -1,5 +1,7 @@
 # MVP — Fase 1
 
+> **Revisión de Fase 0 (26/09/2026):** el nuevo pedido de arquitectura se documenta en [docs/fase-0-2027/README.md](docs/fase-0-2027/README.md). Esa propuesta identifica diferencias con el prototipo existente; este documento conserva el contexto anterior y no implica que Supabase ya esté implementado.
+
 > Versión 0.1 · Fase 0. Arquitectura en [ARCHITECTURE.md](ARCHITECTURE.md); circuito detallado en [docs/FLUJO_COMPRAS.md](docs/FLUJO_COMPRAS.md).
 
 ## 1. Objetivo
