@@ -1,0 +1,6 @@
+# Commits de sólo formateo, ignorados por `git blame`.
+# Uso: git blame --ignore-revs-file .git-blame-ignore-revs <archivo>
+# (GitHub y GitLab lo leen automáticamente si está en la raíz del repo.)
+
+# style: aplica Prettier a todo el código
+971a095423d4a68c2089980678579b5ed9a8dc6c
