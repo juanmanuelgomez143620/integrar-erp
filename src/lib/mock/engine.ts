@@ -59,8 +59,18 @@ export function fullName(p: T.Profile | undefined): string {
   return p ? `${p.first_name} ${p.last_name}` : 'Sistema'
 }
 
+/**
+ * SUPERADMIN es quien instala y sostiene la instancia (el proveedor): tiene
+ * supervisor completo en cualquier empresa, igual que un DOCENTE.
+ *
+ * ADMIN es la administración de la escuela (altas de docentes y cursos, a
+ * nivel institución): no opera dentro de una empresa simulada, así que NO
+ * hereda supervisor ahí. Si alguna vez necesita actuar dentro de una, debe
+ * dársele un rol de empresa explícito (member + memberRole), igual que a
+ * cualquier otro miembro.
+ */
 export function isInstanceAdmin(p: T.Profile | undefined): boolean {
-  return p?.app_role === 'SUPERADMIN' || p?.app_role === 'ADMIN'
+  return p?.app_role === 'SUPERADMIN'
 }
 
 export function getMember(db: DB, userId: string, companyId: string) {
@@ -654,6 +664,12 @@ export function scanStockAlerts(ctx: Ctx, companyId: string) {
 
 // ============================================================ Recalculos derivados
 
+/** Un borrador todavía no compromete a la empresa con el proveedor: no cuenta como "ya ordenado". */
+function coversRequisitionLine(db: DB, poDocId: string): boolean {
+  const status = db.documents.find((d) => d.id === poDocId)?.status
+  return !!status && status !== 'ANULADO' && status !== 'BORRADOR'
+}
+
 function recomputeRequisition(ctx: Ctx, prId: string) {
   const { db } = ctx
   const doc = getDoc(db, prId, 'PURCHASE_REQUISITION')
@@ -662,7 +678,7 @@ function recomputeRequisition(ctx: Ctx, prId: string) {
     line.qty_ordered = round3(
       db.poLines
         .filter((pl) => pl.requisition_line_id === line.id)
-        .filter((pl) => db.documents.find((d) => d.id === pl.document_id)?.status !== 'ANULADO')
+        .filter((pl) => coversRequisitionLine(db, pl.document_id))
         .reduce((s, pl) => s + pl.quantity, 0),
     )
   }
@@ -1039,6 +1055,8 @@ export function cmdSubmitPurchaseOrder(ctx: Ctx, docId: string) {
   transition(ctx, doc, 'SUBMIT', {
     summary: `Envió ${doc.display_number} a aprobación (${money(doc.total)}: aprueba ${ROLES[rule.approver_role].name})`,
   })
+  // Recién ahora deja de ser un borrador: las solicitudes que cubre pasan a "Ordenada"/"Ordenada parcialmente".
+  for (const prId of requisitionsOfOrder(ctx.db, doc.id)) recomputeRequisition(ctx, prId)
 }
 
 function pendingApproval(db: DB, docId: string) {
@@ -1125,6 +1143,8 @@ export function cmdWithdrawPurchaseOrder(ctx: Ctx, docId: string) {
   req.status = 'CANCELADO'
   req.decided_at = ctx.now
   transition(ctx, doc, 'WITHDRAW')
+  // Vuelve a ser un borrador: las solicitudes que cubría dejan de contarla como "ya ordenado".
+  for (const prId of requisitionsOfOrder(ctx.db, doc.id)) recomputeRequisition(ctx, prId)
 }
 
 export function cmdReopenPurchaseOrder(ctx: Ctx, docId: string) {
@@ -1178,11 +1198,26 @@ export function cmdCreateGoodsReceipt(ctx: Ctx, companyId: string, input: GoodsR
       `${po.display_number} está "${statusLabel('PURCHASE_ORDER', po.status)}": sólo se reciben órdenes enviadas al proveedor.`,
     )
   }
-  if (input.supplier_delivery_note.trim().length < 3) {
+  const deliveryNote = input.supplier_delivery_note.trim()
+  if (deliveryNote.length < 3) {
     fail(
       'DATO_INVALIDO',
       'Ingresá el número de remito del proveedor.',
       'El remito es el comprobante que acompaña la mercadería: se controla contra la OC.',
+    )
+  }
+  const duplicate = db.documents.find(
+    (d) =>
+      d.doc_type === 'GOODS_RECEIPT' &&
+      d.status !== 'ANULADO' &&
+      d.gr?.purchase_order_id === po.id &&
+      d.gr.supplier_delivery_note.trim().toUpperCase() === deliveryNote.toUpperCase(),
+  )
+  if (duplicate) {
+    fail(
+      'REMITO_DUPLICADO',
+      `Ya existe ${duplicate.display_number} con el remito ${deliveryNote} contra ${po.display_number}.`,
+      'Revisá si esta entrega ya se registró antes de cargarla de nuevo. Si fue un error, anulá la recepción anterior primero.',
     )
   }
   if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
@@ -1195,7 +1230,7 @@ export function cmdCreateGoodsReceipt(ctx: Ctx, companyId: string, input: GoodsR
     gr: {
       purchase_order_id: po.id,
       warehouse_id: input.warehouse_id,
-      supplier_delivery_note: input.supplier_delivery_note.trim(),
+      supplier_delivery_note: deliveryNote,
       carrier_name: input.carrier_name.trim(),
       received_at: null,
     },
