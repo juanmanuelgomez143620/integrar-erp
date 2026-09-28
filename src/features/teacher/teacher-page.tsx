@@ -246,8 +246,8 @@ export function TeacherPage() {
           <Section title="Reiniciar datos de demostración">
             <p className="text-sm text-muted-foreground">
               Vuelve la empresa Forestal del Norte SRL a su estado inicial: stock de apertura, alertas de stock mínimo y
-              un circuito de compra completo de ejemplo. Se borran los documentos, las tareas y la auditoría creados
-              después. Los usuarios de demostración se mantienen.
+              un circuito de compra completo de ejemplo. Los documentos, las tareas y la auditoría creados después se
+              archivan (no se pierden) y dejan de verse en la empresa. Los usuarios de demostración se mantienen.
             </p>
             <Button variant="destructive" className="mt-4" onClick={() => setResetOpen(true)}>
               <RotateCcw /> Reiniciar datos
@@ -262,7 +262,7 @@ export function TeacherPage() {
         open={resetOpen}
         onOpenChange={setResetOpen}
         title="¿Reiniciar los datos de demostración?"
-        description="Se perderá todo lo registrado en esta empresa desde el inicio. Esta acción afecta a todos los usuarios que usen este navegador."
+        description="Todo lo registrado en esta empresa desde el inicio deja de verse (queda archivado, no se borra). Esta acción afecta a todos los usuarios que usen este navegador."
         confirmLabel="Reiniciar"
         tone="destructive"
         busy={reset.isPending}

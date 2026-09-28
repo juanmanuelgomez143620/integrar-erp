@@ -99,7 +99,25 @@ export function transact<R>(fn: (db: DB) => R): R {
   return result
 }
 
+/**
+ * La auditoría se declara "de sólo inserción" (ARCHITECTURE.md, decisión
+ * 009), así que reiniciar no puede simplemente destruirla junto con el
+ * resto: antes de reconstruir, se archiva la base completa (incluida su
+ * auditoría) bajo una clave propia. No hay todavía una pantalla para
+ * consultar el archivo; por ahora es una red de contención recuperable a
+ * mano desde localStorage, no una papelera de reciclaje con vencimiento.
+ */
+function archiveBeforeReset(db: DB) {
+  try {
+    localStorage.setItem(`integrar-erp.archive.${new Date().toISOString()}`, JSON.stringify(db))
+  } catch {
+    // Sin espacio disponible: no se bloquea el reinicio por esto.
+  }
+}
+
 export function resetDatabase() {
+  const previous = readStorage()
+  if (previous) archiveBeforeReset(previous)
   const seeded = buildSeed()
   writeStorage(seeded)
   cache = seeded
