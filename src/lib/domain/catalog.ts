@@ -310,6 +310,8 @@ export const ACTION_VERBS: Record<string, string> = {
   ASSIGN_ROLE: 'Asignó rol',
   REMOVE_ROLE: 'Quitó rol',
   SETTINGS: 'Cambió configuración',
+  CHANGE_PASSWORD: 'Cambió su contraseña',
+  RESET_PASSWORD: 'Restableció contraseña',
   LOGIN: 'Ingresó',
   RESET: 'Reinició',
 }

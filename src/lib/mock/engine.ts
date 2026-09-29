@@ -1696,7 +1696,10 @@ export function cmdCreateStudent(ctx: Ctx, companyId: string, input: StudentInpu
     last_name: input.last_name.trim(),
     app_role: 'ESTUDIANTE',
     is_active: true,
-    must_change_password: false,
+    // La contraseña inicial la conoce el docente (y a veces queda impresa
+    // para toda la clase): el primer ingreso obliga a cambiarla por una que
+    // sólo conozca el estudiante.
+    must_change_password: true,
     created_at: ctx.now,
   }
   db.profiles.push(profile)
@@ -1711,6 +1714,60 @@ export function cmdCreateStudent(ctx: Ctx, companyId: string, input: StudentInpu
     summary: `Dio de alta al estudiante ${fullName(profile)} (${username})`,
   })
   return profile.id
+}
+
+/** Restablece la contraseña de un integrante de la empresa (H-25): la persona vuelve a elegir la suya al ingresar. */
+export function cmdResetPassword(ctx: Ctx, companyId: string, userId: string, newPassword: string) {
+  const actor = requireSupervisor(ctx, companyId)
+  const { db } = ctx
+  if (!getMember(db, userId, companyId)) fail('DATO_INVALIDO', 'El usuario no participa en esta empresa.')
+  const profile = db.profiles.find((p) => p.id === userId)
+  if (!profile) fail('DATO_INVALIDO', 'El usuario no existe.')
+  if (newPassword.length < 6) fail('DATO_INVALIDO', 'La contraseña debe tener al menos 6 caracteres.')
+  profile.password = newPassword
+  profile.must_change_password = true
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'RESET_PASSWORD',
+    entity_type: 'profile',
+    entity_id: profile.id,
+    entity_label: fullName(profile),
+    summary: `Restableció la contraseña de ${fullName(profile)}`,
+  })
+}
+
+export interface ChangePasswordInput {
+  current_password: string
+  new_password: string
+}
+
+/** Cambio de contraseña por el propio usuario: no depende de ninguna empresa. */
+export function cmdChangePassword(ctx: Ctx, input: ChangePasswordInput) {
+  if (!ctx.userId) fail('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
+  const profile = getProfile(ctx.db, ctx.userId)
+  if (!profile) fail('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
+  if (profile.password !== input.current_password) fail('DATO_INVALIDO', 'La contraseña actual no coincide.')
+  if (input.new_password.length < 6) fail('DATO_INVALIDO', 'La contraseña nueva debe tener al menos 6 caracteres.')
+  if (input.new_password === input.current_password)
+    fail('DATO_INVALIDO', 'Elegí una contraseña distinta de la actual.')
+  profile.password = input.new_password
+  profile.must_change_password = false
+  logAudit(ctx, {
+    company_id: null,
+    actor: {
+      user_id: profile.id,
+      name: fullName(profile),
+      role_code: profile.app_role,
+      sector_id: null,
+      sector_name: '—',
+    },
+    action: 'CHANGE_PASSWORD',
+    entity_type: 'profile',
+    entity_id: profile.id,
+    entity_label: fullName(profile),
+    summary: 'Cambió su contraseña',
+  })
 }
 
 export function cmdSetModule(ctx: Ctx, companyId: string, module: T.ModuleCode, enabled: boolean) {
@@ -1744,4 +1801,106 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
     summary: 'Cambió la configuración de control interno de la empresa',
     changes: diff(before, company.settings, ['sod_enabled', 'allow_negative_stock']),
   })
+}
+
+// ============================================================ Administración de la escuela
+
+/**
+ * ADMIN es la administración de la escuela (altas de docentes y cursos, a
+ * nivel institución): no pertenece a ninguna empresa. SUPERADMIN (el
+ * proveedor) puede hacer lo mismo. Ver isInstanceAdmin() más arriba: ese
+ * bypass es para operar *dentro* de una empresa; éste es un permiso aparte,
+ * a nivel escuela.
+ */
+export function isSchoolAdmin(p: T.Profile | undefined): boolean {
+  return p?.app_role === 'ADMIN' || p?.app_role === 'SUPERADMIN'
+}
+
+function requireSchoolAdmin(ctx: Ctx): Actor {
+  const profile = getProfile(ctx.db, ctx.userId)
+  if (!isSchoolAdmin(profile)) fail('SIN_PERMISO', 'Sólo la administración de la escuela puede hacer esto.')
+  return {
+    user_id: ctx.userId,
+    name: fullName(profile),
+    role_code: profile!.app_role,
+    sector_id: null,
+    sector_name: '—',
+  }
+}
+
+export interface TeacherInput {
+  first_name: string
+  last_name: string
+  username: string
+  password: string
+}
+
+/** Da de alta la identidad de un docente (H-26). Asignarlo a una empresa/curso es un paso aparte. */
+export function cmdCreateTeacher(ctx: Ctx, input: TeacherInput) {
+  const actor = requireSchoolAdmin(ctx)
+  const { db } = ctx
+  const username = input.username.trim().toLowerCase()
+  if (!/^[a-z0-9._-]{3,30}$/.test(username))
+    fail('DATO_INVALIDO', 'El usuario debe tener entre 3 y 30 caracteres: letras, números, punto o guion.')
+  if (db.profiles.some((p) => p.username === username)) fail('DATO_INVALIDO', `El usuario ${username} ya existe.`)
+  if (input.first_name.trim().length < 2 || input.last_name.trim().length < 2)
+    fail('DATO_INVALIDO', 'Ingresá nombre y apellido.')
+  if (input.password.length < 6) fail('DATO_INVALIDO', 'La contraseña inicial debe tener al menos 6 caracteres.')
+  const profile: T.Profile = {
+    id: uid(),
+    username,
+    password: input.password,
+    first_name: input.first_name.trim(),
+    last_name: input.last_name.trim(),
+    app_role: 'DOCENTE',
+    is_active: true,
+    must_change_password: true,
+    created_at: ctx.now,
+  }
+  db.profiles.push(profile)
+  logAudit(ctx, {
+    company_id: null,
+    actor,
+    action: 'CREATE',
+    entity_type: 'profile',
+    entity_id: profile.id,
+    entity_label: fullName(profile),
+    summary: `Dio de alta al docente ${fullName(profile)} (${username})`,
+  })
+  return profile.id
+}
+
+export interface CourseInput {
+  academic_year: number
+  name: string
+  orientation: string
+}
+
+/** Da de alta un curso del año lectivo (H-26). No crea la empresa simulada: eso es un paso aparte (H-20). */
+export function cmdCreateCourse(ctx: Ctx, input: CourseInput) {
+  const actor = requireSchoolAdmin(ctx)
+  const { db } = ctx
+  const name = input.name.trim()
+  if (!name) fail('DATO_INVALIDO', 'Ingresá el nombre del curso (por ejemplo, "5.º A").')
+  if (!Number.isInteger(input.academic_year) || input.academic_year < 2020 || input.academic_year > 2100)
+    fail('DATO_INVALIDO', 'Indicá un año lectivo válido.')
+  if (db.courses.some((c) => c.academic_year === input.academic_year && c.name.toLowerCase() === name.toLowerCase()))
+    fail('DATO_INVALIDO', `Ya existe un curso "${name}" en ${input.academic_year}.`)
+  const course: T.Course = {
+    id: uid(),
+    academic_year: input.academic_year,
+    name,
+    orientation: input.orientation.trim(),
+  }
+  db.courses.push(course)
+  logAudit(ctx, {
+    company_id: null,
+    actor,
+    action: 'CREATE',
+    entity_type: 'course',
+    entity_id: course.id,
+    entity_label: `${course.name} (${course.academic_year})`,
+    summary: `Dio de alta el curso ${course.name} (${course.academic_year})`,
+  })
+  return course.id
 }

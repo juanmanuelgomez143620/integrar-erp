@@ -9,11 +9,13 @@ import {
   can,
   docPath,
   effectivePermissions,
+  fail,
   fullName,
   getMember,
   getMemberRoles,
   getProfile,
   isInstanceAdmin,
+  isSchoolAdmin,
 } from './engine'
 
 export type PublicProfile = Omit<T.Profile, 'password'>
@@ -966,4 +968,24 @@ export function demoUsers(db: DB) {
       }
     })
     .sort((a, b) => (a.island ?? (a.app_role === 'ADMIN' ? -2 : -1)) - (b.island ?? (b.app_role === 'ADMIN' ? -2 : -1)))
+}
+
+// ============================================================ Administración de la escuela
+
+function requireSchoolAdminRead(db: DB, userId: string) {
+  if (!isSchoolAdmin(getProfile(db, userId)))
+    fail('SIN_PERMISO', 'Sólo la administración de la escuela puede ver esto.')
+}
+
+export function listCourses(db: DB, userId: string): T.Course[] {
+  requireSchoolAdminRead(db, userId)
+  return [...db.courses].sort((a, b) => b.academic_year - a.academic_year || a.name.localeCompare(b.name))
+}
+
+export function listTeachers(db: DB, userId: string): PublicProfile[] {
+  requireSchoolAdminRead(db, userId)
+  return db.profiles
+    .filter((p) => p.app_role === 'DOCENTE')
+    .map(publicProfile)
+    .sort((a, b) => a.last_name.localeCompare(b.last_name))
 }

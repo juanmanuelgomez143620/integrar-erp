@@ -30,11 +30,14 @@ export type {
   TaskItem,
 } from '../mock/queries'
 export type {
+  ChangePasswordInput,
+  CourseInput,
   GoodsReceiptInput,
   PurchaseOrderInput,
   RequisitionInput,
   StockAdjustmentInput,
   StudentInput,
+  TeacherInput,
   MasterKind,
 } from '../mock/engine'
 
@@ -126,6 +129,8 @@ export const api = {
   dashboard: (companyId: string) => query((db, u) => Q.dashboard(db, u, companyId)),
   members: (companyId: string) => query((db, u) => Q.listMembers(db, u, companyId)),
   users: () => query((db) => db.profiles.map(({ password: _p, ...rest }) => rest)),
+  courses: () => query((db, u) => Q.listCourses(db, u)),
+  teachers: () => query((db, u) => Q.listTeachers(db, u)),
 }
 
 // ------------------------------------------------------------ Comandos (futuras RPC)
@@ -178,10 +183,16 @@ export const commands = {
     command((c) => E.cmdAssignRole(c, companyId, userId, role, sectorId)),
   removeRole: (companyId: string, memberRoleId: string) => command((c) => E.cmdRemoveRole(c, companyId, memberRoleId)),
   createStudent: (companyId: string, input: E.StudentInput) => command((c) => E.cmdCreateStudent(c, companyId, input)),
+  resetPassword: (companyId: string, userId: string, newPassword: string) =>
+    command((c) => E.cmdResetPassword(c, companyId, userId, newPassword)),
   setModule: (companyId: string, module: T.ModuleCode, enabled: boolean) =>
     command((c) => E.cmdSetModule(c, companyId, module, enabled)),
   updateCompanySettings: (companyId: string, settings: Partial<T.CompanySettings>) =>
     command((c) => E.cmdUpdateCompanySettings(c, companyId, settings)),
+
+  changePassword: (input: E.ChangePasswordInput) => command((c) => E.cmdChangePassword(c, input)),
+  createTeacher: (input: E.TeacherInput) => command((c) => E.cmdCreateTeacher(c, input)),
+  createCourse: (input: E.CourseInput) => command((c) => E.cmdCreateCourse(c, input)),
 
   async resetDemoData() {
     await wait(300)
