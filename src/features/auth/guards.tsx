@@ -1,4 +1,4 @@
-import { Link, Navigate, Outlet, useParams } from 'react-router'
+import { Link, Navigate, Outlet, useLocation, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Building2, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -8,16 +8,26 @@ import { api } from '@/lib/api'
 import { CompanyProvider } from '@/app/company'
 import { useMe, useSession } from '@/app/session'
 
+/** Rutas que no dependen de una empresa: hay que poder llegar a ellas sin quedar atrapado en el redireccionamiento. */
+const ACCOUNT_ROUTES = ['/cambiar-contrasena', '/perfil']
+
 export function RequireAuth() {
   const { userId } = useSession()
+  const { data: me, isLoading } = useMe()
+  const location = useLocation()
   if (!userId) return <Navigate to="/login" replace />
+  if (isLoading || !me) return <Loading />
+  if (me.user.must_change_password && !ACCOUNT_ROUTES.includes(location.pathname)) {
+    return <Navigate to="/cambiar-contrasena" replace />
+  }
   return <Outlet />
 }
 
-/** Redirige a la empresa del usuario (o al selector si participa en varias). */
+/** Redirige a la empresa del usuario, al panel de administración escolar, o al selector si participa en varias. */
 export function HomeRedirect() {
   const { data, isLoading } = useMe()
   if (isLoading || !data) return <Loading />
+  if (data.user.app_role === 'ADMIN' || data.user.app_role === 'SUPERADMIN') return <Navigate to="/admin" replace />
   if (data.memberships.length === 1) return <Navigate to={`/e/${data.memberships[0].company.slug}`} replace />
   return <Navigate to="/empresas" replace />
 }

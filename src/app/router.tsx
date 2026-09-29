@@ -1,7 +1,10 @@
 import { createBrowserRouter, Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { LoginPage } from '@/features/auth/login-page'
+import { ChangePasswordPage } from '@/features/auth/change-password-page'
+import { ProfilePage } from '@/features/auth/profile-page'
 import { CompanyRoute, CompanySelectPage, HomeRedirect, RequireAuth } from '@/features/auth/guards'
+import { AdminPage } from '@/features/admin/admin-page'
 import { DashboardPage } from '@/features/dashboard/dashboard-page'
 import { MyWorkPage } from '@/features/my-work/my-work-page'
 import { DocumentListPage } from '@/features/documents/document-list-page'
@@ -38,6 +41,9 @@ export const router = createBrowserRouter([
     children: [
       { path: '/', element: <HomeRedirect /> },
       { path: '/empresas', element: <CompanySelectPage /> },
+      { path: '/cambiar-contrasena', element: <ChangePasswordPage /> },
+      { path: '/perfil', element: <ProfilePage /> },
+      { path: '/admin', element: <AdminPage /> },
       {
         path: '/e/:slug',
         element: <CompanyRoute />,

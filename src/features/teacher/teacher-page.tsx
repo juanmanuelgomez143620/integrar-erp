@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, RotateCcw, UserPlus, X } from 'lucide-react'
+import { KeyRound, Plus, RotateCcw, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,6 +42,7 @@ export function TeacherPage() {
     enabled: company.supervisor,
   })
   const [assignFor, setAssignFor] = useState<MemberView | null>(null)
+  const [resetPasswordFor, setResetPasswordFor] = useState<MemberView | null>(null)
   const [newStudent, setNewStudent] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const removeRole = useCommand((id: string) => commands.removeRole(company.companyId, id), { success: 'Rol quitado.' })
@@ -159,9 +160,14 @@ export function TeacherPage() {
                 header: '',
                 align: 'right',
                 cell: (m) => (
-                  <Button size="xs" variant="outline" onClick={() => setAssignFor(m)}>
-                    <Plus /> Rol
-                  </Button>
+                  <div className="flex justify-end gap-1.5">
+                    <Button size="xs" variant="outline" onClick={() => setResetPasswordFor(m)}>
+                      <KeyRound /> Contraseña
+                    </Button>
+                    <Button size="xs" variant="outline" onClick={() => setAssignFor(m)}>
+                      <Plus /> Rol
+                    </Button>
+                  </div>
                 ),
               },
             ]}
@@ -257,6 +263,7 @@ export function TeacherPage() {
       </Tabs>
 
       {assignFor && <AssignRoleDialog member={assignFor} onClose={() => setAssignFor(null)} />}
+      {resetPasswordFor && <ResetPasswordDialog member={resetPasswordFor} onClose={() => setResetPasswordFor(null)} />}
       <NewStudentDialog open={newStudent} onOpenChange={setNewStudent} />
       <ActionDialog
         open={resetOpen}
@@ -321,6 +328,40 @@ function AssignRoleDialog({ member, onClose }: { member: MemberView; onClose: ()
           </Button>
           <Button disabled={!role || assign.isPending} onClick={() => assign.mutate([])}>
             Asignar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ResetPasswordDialog({ member, onClose }: { member: MemberView; onClose: () => void }) {
+  const company = useCompany()
+  const [password, setPassword] = useState('')
+  const reset = useCommand(() => commands.resetPassword(company.companyId, member.user.id, password), {
+    success: 'Contraseña restablecida.',
+    onSuccess: onClose,
+  })
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            Restablecer la contraseña de {member.user.first_name} {member.user.last_name}
+          </DialogTitle>
+          <DialogDescription>
+            La persona va a tener que cambiarla por una propia la próxima vez que ingrese.
+          </DialogDescription>
+        </DialogHeader>
+        <Field label="Contraseña nueva" hint="Mínimo 6 caracteres.">
+          <Input value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+        </Field>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button disabled={password.length < 6 || reset.isPending} onClick={() => reset.mutate([])}>
+            Restablecer
           </Button>
         </DialogFooter>
       </DialogContent>

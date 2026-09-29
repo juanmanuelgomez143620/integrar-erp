@@ -239,6 +239,9 @@ function UserMenu() {
           <div className="mt-1 text-xs text-muted-foreground">{roleLine}</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => navigate('/perfil')}>
+          <UserRound /> Mi perfil
+        </DropdownMenuItem>
         {me.memberships.length > 1 && (
           <DropdownMenuItem onClick={() => navigate('/empresas')}>
             <UserRound /> Cambiar de empresa
