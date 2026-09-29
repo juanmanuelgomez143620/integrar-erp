@@ -6,7 +6,7 @@
 // de armar una base mínima aparte.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { buildSeed } from './seed'
+import { buildSeed, DEMO_PASSWORD } from './seed'
 import type { DB } from './db'
 import type { RoleCode } from '../domain/types'
 import {
@@ -15,11 +15,15 @@ import {
   cmdAssignRole,
   cmdCancelGoodsReceipt,
   cmdCancelPurchaseOrder,
+  cmdChangePassword,
+  cmdCreateCourse,
   cmdCreateGoodsReceipt,
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
   cmdCreateStockAdjustment,
   cmdCreateStudent,
+  cmdCreateTeacher,
+  cmdResetPassword,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
   cmdWithdrawPurchaseOrder,
@@ -610,5 +614,99 @@ describe('auditoría y permisos', () => {
     })
     const superadmin = effectivePermissions(db, 'usr-test-superadmin', companyId())
     expect(superadmin.supervisor).toBe(true)
+  })
+})
+
+describe('contraseñas', () => {
+  it('un estudiante nuevo debe cambiar su contraseña en el primer ingreso', () => {
+    const id = cmdCreateStudent(ctx('docente'), companyId(), {
+      first_name: 'Nueva',
+      last_name: 'Alumna',
+      username: 'nueva1',
+      password: 'inicial1',
+    })
+    expect(db.profiles.find((p) => p.id === id)!.must_change_password).toBe(true)
+  })
+
+  it('cambia la contraseña con la actual correcta', () => {
+    cmdChangePassword(ctx('ventas'), { current_password: DEMO_PASSWORD, new_password: 'nueva-clave-1' })
+    const profile = db.profiles.find((p) => p.username === 'ventas')!
+    expect(profile.password).toBe('nueva-clave-1')
+    expect(profile.must_change_password).toBe(false)
+  })
+
+  it('rechaza el cambio si la actual no coincide, la nueva es muy corta, o es igual a la actual', () => {
+    expectBusinessError(
+      () => cmdChangePassword(ctx('ventas'), { current_password: 'mal', new_password: 'nueva-clave-1' }),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => cmdChangePassword(ctx('ventas'), { current_password: DEMO_PASSWORD, new_password: 'abc' }),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => cmdChangePassword(ctx('ventas'), { current_password: DEMO_PASSWORD, new_password: DEMO_PASSWORD }),
+      'DATO_INVALIDO',
+    )
+  })
+
+  it('el docente restablece la contraseña de un integrante y lo fuerza a cambiarla en el próximo ingreso', () => {
+    const ventasId = db.profiles.find((p) => p.username === 'ventas')!.id
+    cmdResetPassword(ctx('docente'), companyId(), ventasId, 'temporal99')
+    const profile = db.profiles.find((p) => p.id === ventasId)!
+    expect(profile.password).toBe('temporal99')
+    expect(profile.must_change_password).toBe(true)
+  })
+
+  it('no se puede restablecer la contraseña de alguien que no participa en la empresa', () => {
+    const outsiderId = cmdCreateTeacher(ctx('admin'), {
+      first_name: 'Otro',
+      last_name: 'Docente',
+      username: 'otrodoc',
+      password: 'demo1234',
+    })
+    expectBusinessError(() => cmdResetPassword(ctx('docente'), companyId(), outsiderId, 'nueva1234'), 'DATO_INVALIDO')
+  })
+})
+
+describe('administración de la escuela', () => {
+  it('ADMIN da de alta un docente y un curso; asignarlo a una empresa queda pendiente', () => {
+    const teacherId = cmdCreateTeacher(ctx('admin'), {
+      first_name: 'Marina',
+      last_name: 'Testigo',
+      username: 'mtestigo',
+      password: 'inicial12',
+    })
+    const teacher = db.profiles.find((p) => p.id === teacherId)!
+    expect(teacher.app_role).toBe('DOCENTE')
+    expect(teacher.must_change_password).toBe(true)
+    expect(db.members.some((m) => m.user_id === teacherId)).toBe(false)
+
+    const courseId = cmdCreateCourse(ctx('admin'), {
+      academic_year: 2027,
+      name: '6.º B',
+      orientation: 'Gestión y Administración de las Organizaciones',
+    })
+    expect(db.courses.some((c) => c.id === courseId && c.name === '6.º B')).toBe(true)
+  })
+
+  it('un usuario que no es ADMIN ni SUPERADMIN no puede dar de alta docentes ni cursos', () => {
+    expectBusinessError(
+      () =>
+        cmdCreateTeacher(ctx('docente'), { first_name: 'X', last_name: 'Y', username: 'xy1', password: 'demo1234' }),
+      'SIN_PERMISO',
+    )
+    expectBusinessError(
+      () => cmdCreateCourse(ctx('gerencia'), { academic_year: 2027, name: '5.º C', orientation: '' }),
+      'SIN_PERMISO',
+    )
+  })
+
+  it('no admite dos cursos con el mismo nombre en el mismo año', () => {
+    cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º A', orientation: 'Test' })
+    expectBusinessError(
+      () => cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º A', orientation: 'Otra' }),
+      'DATO_INVALIDO',
+    )
   })
 })
