@@ -6,6 +6,7 @@ import { BrandMark } from '@/components/common/brand'
 import { Loading } from '@/components/common/blocks'
 import { api } from '@/lib/api'
 import { CompanyProvider } from '@/app/company'
+import { IdleLogout } from '@/app/idle-logout'
 import { useMe, useSession } from '@/app/session'
 
 /** Rutas que no dependen de una empresa: hay que poder llegar a ellas sin quedar atrapado en el redireccionamiento. */
@@ -20,7 +21,12 @@ export function RequireAuth() {
   if (me.user.must_change_password && !ACCOUNT_ROUTES.includes(location.pathname)) {
     return <Navigate to="/cambiar-contrasena" replace />
   }
-  return <Outlet />
+  return (
+    <>
+      <IdleLogout minutes={me.school.session_timeout_minutes} />
+      <Outlet />
+    </>
+  )
 }
 
 /** Redirige a la empresa del usuario, al panel de administración escolar, o al selector si participa en varias. */

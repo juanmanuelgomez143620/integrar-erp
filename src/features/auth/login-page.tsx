@@ -1,13 +1,14 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Info } from 'lucide-react'
+import { ArrowRight, Clock, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { BrandMark } from '@/components/common/brand'
 import { Field } from '@/components/common/blocks'
 import { auth } from '@/lib/api'
 import { showError } from '@/hooks/use-command'
+import { useIdleLogoutNotice } from '@/app/idle-logout'
 import { useSession } from '@/app/session'
 import { ROLES } from '@/lib/domain/catalog'
 
@@ -25,6 +26,7 @@ const ISLANDS: Record<number, string> = {
 export function LoginPage() {
   const { userId, login, loginAs } = useSession()
   const navigate = useNavigate()
+  const idleMinutes = useIdleLogoutNotice()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -89,6 +91,16 @@ export function LoginPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             Ingresá con el usuario y la contraseña que te dio tu docente.
           </p>
+          {idleMinutes !== null && (
+            <p
+              role="status"
+              className="mt-4 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
+            >
+              <Clock className="mt-0.5 size-4 shrink-0" />
+              Cerramos tu sesión después de {idleMinutes} minutos sin actividad, para que nadie pueda usar tu usuario en
+              una computadora compartida. Volvé a ingresar para seguir.
+            </p>
+          )}
           <form onSubmit={onSubmit} className="mt-6 grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <Field label="Usuario">
               <Input
