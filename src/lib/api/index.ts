@@ -124,7 +124,8 @@ export const api = {
   receivableOrders: (companyId: string) => query((db, u) => Q.receivableOrders(db, u, companyId)),
   tasks: (companyId: string, scope: 'mine' | 'all', includeClosed = false) =>
     query((db, u) => Q.listTasks(db, u, companyId, scope, includeClosed)),
-  notifications: (companyId: string) => query((db, u) => Q.listNotifications(db, u, companyId)),
+  notifications: (companyId: string, limit: number | null = 60) =>
+    query((db, u) => Q.listNotifications(db, u, companyId, limit)),
   audit: (companyId: string) => query((db, u) => Q.listAudit(db, u, companyId)),
   dashboard: (companyId: string) => query((db, u) => Q.dashboard(db, u, companyId)),
   members: (companyId: string) => query((db, u) => Q.listMembers(db, u, companyId)),

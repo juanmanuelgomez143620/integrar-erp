@@ -137,6 +137,11 @@ function NotificationsBell() {
   const unread = data.filter((n) => !n.read_at)
   const markRead = useCommand(commands.markNotificationsRead)
   const seen = useRef<Set<string> | null>(null)
+  const [open, setOpen] = useState(false)
+  const go = (path: string) => {
+    setOpen(false)
+    navigate(path)
+  }
 
   // Aviso emergente sólo para notificaciones que llegan mientras se usa la app
   // (por ejemplo, desde otra pestaña); las ya existentes al ingresar no se repiten.
@@ -150,9 +155,14 @@ function NotificationsBell() {
   }, [data, isFetched])
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative" aria-label="Notificaciones">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative"
+          aria-label={unread.length ? `Notificaciones: ${unread.length} sin leer` : 'Notificaciones'}
+        >
           <Bell />
           {unread.length > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
@@ -178,7 +188,7 @@ function NotificationsBell() {
               type="button"
               onClick={() => {
                 if (!n.read_at) markRead.mutate([company.companyId, [n.id]])
-                navigate(n.link_path)
+                go(n.link_path)
               }}
               className={cn(
                 'flex w-full flex-col gap-0.5 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/60',
@@ -193,6 +203,11 @@ function NotificationsBell() {
               <span className="text-[11px] text-muted-foreground">{relative(n.created_at)}</span>
             </button>
           ))}
+        </div>
+        <div className="border-t p-1">
+          <Button variant="ghost" size="sm" className="w-full" onClick={() => go(company.to('notificaciones'))}>
+            Ver todas las notificaciones
+          </Button>
         </div>
       </PopoverContent>
     </Popover>

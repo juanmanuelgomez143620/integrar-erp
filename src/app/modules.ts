@@ -3,6 +3,7 @@
 
 import type { ComponentType } from 'react'
 import {
+  Bell,
   Boxes,
   Building2,
   ClipboardList,
@@ -38,6 +39,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Inicio', path: '', icon: LayoutDashboard },
       { label: 'Mi trabajo', path: 'mi-trabajo', icon: Inbox, badge: 'tasks' },
+      { label: 'Notificaciones', path: 'notificaciones', icon: Bell },
     ],
   },
   {

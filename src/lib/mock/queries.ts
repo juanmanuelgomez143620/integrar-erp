@@ -793,11 +793,12 @@ export function listTasks(
     })
 }
 
-export function listNotifications(db: DB, userId: string, companyId: string) {
-  return db.notifications
+/** Avisos del usuario en la empresa, del más nuevo al más viejo. Con `limit: null`, el historial completo. */
+export function listNotifications(db: DB, userId: string, companyId: string, limit: number | null = 60) {
+  const rows = db.notifications
     .filter((n) => n.company_id === companyId && n.recipient_user_id === userId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .slice(0, 60)
+  return limit === null ? rows : rows.slice(0, limit)
 }
 
 // ============================================================ Auditoría

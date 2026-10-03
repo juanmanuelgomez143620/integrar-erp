@@ -353,6 +353,17 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CONSIGNA: 'Consigna del docente',
 }
 
+// ---------------------------------------------------------------- Notificaciones
+
+export const NOTIFICATION_TYPES: Record<string, string> = {
+  NUEVA_TAREA: 'Tarea nueva',
+  STOCK_MINIMO: 'Stock mínimo',
+  SC_RECHAZADA: 'Solicitud rechazada',
+  OC_APROBADA: 'Orden aprobada',
+  OC_RECIBIDA: 'Orden recibida',
+  MATERIAL_DISPONIBLE: 'Material disponible',
+}
+
 // ---------------------------------------------------------------- Etiquetas
 
 export const VAT_CONDITIONS: Record<VatCondition, string> = {

@@ -7,6 +7,7 @@ import { CompanyRoute, CompanySelectPage, HomeRedirect, RequireAuth } from '@/fe
 import { AdminPage } from '@/features/admin/admin-page'
 import { DashboardPage } from '@/features/dashboard/dashboard-page'
 import { MyWorkPage } from '@/features/my-work/my-work-page'
+import { NotificationsPage } from '@/features/notifications/notifications-page'
 import { DocumentListPage } from '@/features/documents/document-list-page'
 import { DocumentPage } from '@/features/documents/document-page'
 import { PrintPage } from '@/features/documents/print-page'
@@ -54,6 +55,7 @@ export const router = createBrowserRouter([
             children: [
               { index: true, element: <DashboardPage /> },
               { path: 'mi-trabajo', element: <MyWorkPage /> },
+              { path: 'notificaciones', element: <NotificationsPage /> },
               { path: 'compras/solicitudes', element: <DocumentListPage key="pr" docType="PURCHASE_REQUISITION" /> },
               { path: 'compras/solicitudes/nueva', element: <RequisitionFormPage /> },
               {
