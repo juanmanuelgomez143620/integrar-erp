@@ -16,6 +16,7 @@ import {
   getProfile,
   isInstanceAdmin,
   isSchoolAdmin,
+  requirePermission,
 } from './engine'
 
 export type PublicProfile = Omit<T.Profile, 'password'>
@@ -815,6 +816,44 @@ export function listAudit(db: DB, userId: string, companyId: string): T.AuditEve
       return !!doc && readable.has(doc.doc_type)
     })
     .sort((a, b) => b.id - a.id)
+}
+
+// ============================================================ Exportaciones
+
+/**
+ * Exportar tiene permiso propio (`*.export`, docs/ROLES_Y_PERMISOS.md): un
+ * rol puede consultar un listado sin poder descargarlo completo (por
+ * ejemplo, Producción ve el stock pero no lo exporta). Se valida acá, no
+ * sólo ocultando el botón. Con Supabase serán funciones RPC que validan el
+ * permiso antes de devolver las filas; la interfaz sólo arma el archivo.
+ */
+function requireExport(db: DB, userId: string, companyId: string, permission: string) {
+  requirePermission({ db, userId, now: new Date().toISOString() }, companyId, permission)
+}
+
+export function exportCustomers(db: DB, userId: string, companyId: string) {
+  requireExport(db, userId, companyId, 'customer.export')
+  return listCustomers(db, userId, companyId)
+}
+
+export function exportSuppliers(db: DB, userId: string, companyId: string) {
+  requireExport(db, userId, companyId, 'supplier.export')
+  return listSuppliers(db, userId, companyId)
+}
+
+export function exportProducts(db: DB, userId: string, companyId: string) {
+  requireExport(db, userId, companyId, 'product.export')
+  return listProducts(db, userId, companyId)
+}
+
+export function exportStock(db: DB, userId: string, companyId: string) {
+  requireExport(db, userId, companyId, 'stock.export')
+  return listStock(db, userId, companyId)
+}
+
+export function exportAudit(db: DB, userId: string, companyId: string) {
+  requireExport(db, userId, companyId, 'audit.export')
+  return listAudit(db, userId, companyId)
 }
 
 // ============================================================ Tablero

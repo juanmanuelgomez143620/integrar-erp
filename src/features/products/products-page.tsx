@@ -5,15 +5,42 @@ import { Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/common/data-table'
 import { Mono } from '@/components/common/blocks'
+import { ExportCsvButton } from '@/components/common/export-button'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api, type ProductRow } from '@/lib/api'
+import { round2, type CsvColumn } from '@/lib/csv'
 import { PRODUCT_TYPES } from '@/lib/domain/catalog'
 import type { ProductType } from '@/lib/domain/types'
 import { money, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
 import { ProductSheet } from './product-form'
+
+function csvColumns(withStock: boolean): CsvColumn<ProductRow>[] {
+  return [
+    { header: 'Código', value: (p) => p.code },
+    { header: 'Descripción', value: (p) => p.name },
+    { header: 'Tipo', value: (p) => PRODUCT_TYPES[p.product_type] },
+    { header: 'Categoría', value: (p) => p.category },
+    { header: 'Unidad', value: (p) => p.uom_code },
+    ...(withStock
+      ? [
+          { header: 'Stock', value: (p: ProductRow) => (p.is_stockable ? p.stock : null) },
+          { header: 'Stock mínimo', value: (p: ProductRow) => (p.is_stockable ? p.min_stock : null) },
+          { header: 'Cantidad de reposición', value: (p: ProductRow) => p.reorder_qty },
+          { header: 'Bajo mínimo', value: (p: ProductRow) => p.below_min },
+        ]
+      : []),
+    { header: 'Costo estándar', value: (p) => round2(p.standard_cost) },
+    { header: 'Costo promedio (PPP)', value: (p) => round2(p.avg_cost) },
+    { header: 'Precio de venta', value: (p) => round2(p.sale_price) },
+    { header: 'IVA (%)', value: (p) => p.vat_rate },
+    { header: 'Proveedor habitual', value: (p) => (p.default_supplier_id ? p.supplier_name : '') },
+    { header: 'Ubicación', value: (p) => p.location },
+    { header: 'Activo', value: (p) => p.is_active },
+  ]
+}
 
 export function ProductsPage() {
   const company = useCompany()
@@ -35,10 +62,22 @@ export function ProductsPage() {
         title="Productos e insumos"
         description="Materias primas, insumos, productos terminados, mercadería de reventa y servicios. El stock que se muestra surge de los movimientos registrados."
         actions={
-          company.can('product.create') ? (
-            <Button onClick={() => setOpen(true)}>
-              <Plus /> Nuevo producto
-            </Button>
+          company.can('product.create') || company.can('product.export') ? (
+            <>
+              {company.can('product.export') && (
+                <ExportCsvButton
+                  dataset="productos"
+                  companySlug={company.slug}
+                  load={() => api.exportProducts(company.companyId)}
+                  columns={csvColumns(canStock)}
+                />
+              )}
+              {company.can('product.create') && (
+                <Button onClick={() => setOpen(true)}>
+                  <Plus /> Nuevo producto
+                </Button>
+              )}
+            </>
           ) : undefined
         }
       />

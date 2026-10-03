@@ -6,13 +6,28 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { DataTable } from '@/components/common/data-table'
 import { KpiCard, Mono } from '@/components/common/blocks'
+import { ExportCsvButton } from '@/components/common/export-button'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api, type StockRow } from '@/lib/api'
+import { round2, type CsvColumn } from '@/lib/csv'
 import { PRODUCT_TYPES } from '@/lib/domain/catalog'
 import { money, moneyShort, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
+
+const CSV_COLUMNS: CsvColumn<StockRow>[] = [
+  { header: 'Código', value: (r) => r.product.code },
+  { header: 'Producto', value: (r) => r.product.name },
+  { header: 'Tipo', value: (r) => PRODUCT_TYPES[r.product.product_type] },
+  { header: 'Depósito', value: (r) => r.warehouse.name },
+  { header: 'Unidad', value: (r) => r.product.uom_code },
+  { header: 'Stock', value: (r) => r.qty },
+  { header: 'Stock mínimo', value: (r) => r.product.min_stock },
+  { header: 'Bajo mínimo (total del producto)', value: (r) => r.below_min },
+  { header: 'Costo promedio (PPP)', value: (r) => round2(r.avg_cost) },
+  { header: 'Valor', value: (r) => round2(r.value) },
+]
 
 export function StockPage() {
   const company = useCompany()
@@ -35,12 +50,24 @@ export function StockPage() {
         title="Existencias"
         description="Saldo de cada producto por depósito, valuado a costo promedio ponderado (PPP). El stock sólo cambia con documentos: recepciones y ajustes."
         actions={
-          company.can('stock_adjustment.create') ? (
-            <Button variant="outline" asChild>
-              <Link to={company.docPath('STOCK_ADJUSTMENT', 'nuevo')}>
-                <SlidersHorizontal /> Ajuste de stock
-              </Link>
-            </Button>
+          company.can('stock_adjustment.create') || company.can('stock.export') ? (
+            <>
+              {company.can('stock.export') && (
+                <ExportCsvButton
+                  dataset="stock"
+                  companySlug={company.slug}
+                  load={() => api.exportStock(company.companyId)}
+                  columns={CSV_COLUMNS}
+                />
+              )}
+              {company.can('stock_adjustment.create') && (
+                <Button variant="outline" asChild>
+                  <Link to={company.docPath('STOCK_ADJUSTMENT', 'nuevo')}>
+                    <SlidersHorizontal /> Ajuste de stock
+                  </Link>
+                </Button>
+              )}
+            </>
           ) : undefined
         }
       />

@@ -5,9 +5,11 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { DataTable } from '@/components/common/data-table'
 import { Mono } from '@/components/common/blocks'
+import { ExportCsvButton } from '@/components/common/export-button'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api, commands } from '@/lib/api'
+import type { CsvColumn } from '@/lib/csv'
 import { VAT_CONDITIONS } from '@/lib/domain/catalog'
 import type { Customer, Supplier } from '@/lib/domain/types'
 import { money } from '@/lib/format'
@@ -16,6 +18,30 @@ import { useCompany } from '@/app/company'
 import { PartnerSheet } from './partner-form'
 
 type Row = Customer & Supplier
+
+function csvColumns(isCustomer: boolean): CsvColumn<Row>[] {
+  return [
+    { header: 'Código', value: (r) => r.code },
+    { header: 'Razón social', value: (r) => r.legal_name },
+    { header: 'Nombre de fantasía', value: (r) => r.trade_name },
+    { header: 'CUIT', value: (r) => r.tax_id },
+    { header: 'Condición frente al IVA', value: (r) => VAT_CONDITIONS[r.vat_condition] },
+    ...(isCustomer
+      ? [{ header: 'Límite de crédito', value: (r: Row) => r.credit_limit }]
+      : [
+          { header: 'Rubro', value: (r: Row) => r.category },
+          { header: 'Demora de entrega (días)', value: (r: Row) => r.lead_time_days },
+        ]),
+    { header: 'Plazo de pago (días)', value: (r) => r.payment_terms_days },
+    { header: 'Domicilio', value: (r) => r.address_line },
+    { header: 'Localidad', value: (r) => r.city },
+    { header: 'Provincia', value: (r) => r.province },
+    { header: 'Teléfono', value: (r) => r.phone },
+    { header: 'Email', value: (r) => r.email },
+    { header: 'Contacto', value: (r) => r.contact_name },
+    { header: 'Activo', value: (r) => r.is_active },
+  ]
+}
 
 export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
   const company = useCompany()
@@ -28,6 +54,7 @@ export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
   const rows = data
   const canCreate = company.can(`${kind}.create`)
   const canUpdate = company.can(`${kind}.update`)
+  const canExport = company.can(`${kind}.export`)
   const [editing, setEditing] = useState<Row | null>(null)
   const [open, setOpen] = useState(false)
   const toggle = useCommand((id: string, active: boolean) =>
@@ -51,15 +78,31 @@ export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
             : 'Proveedores habilitados para recibir órdenes de compra. Compras mantiene sus datos; el resto de los sectores los consulta.'
         }
         actions={
-          canCreate ? (
-            <Button
-              onClick={() => {
-                setEditing(null)
-                setOpen(true)
-              }}
-            >
-              <Plus /> Nuevo {isCustomer ? 'cliente' : 'proveedor'}
-            </Button>
+          canCreate || canExport ? (
+            <>
+              {canExport && (
+                <ExportCsvButton<Row>
+                  dataset={isCustomer ? 'clientes' : 'proveedores'}
+                  companySlug={company.slug}
+                  load={async () =>
+                    (isCustomer
+                      ? await api.exportCustomers(company.companyId)
+                      : await api.exportSuppliers(company.companyId)) as Row[]
+                  }
+                  columns={csvColumns(isCustomer)}
+                />
+              )}
+              {canCreate && (
+                <Button
+                  onClick={() => {
+                    setEditing(null)
+                    setOpen(true)
+                  }}
+                >
+                  <Plus /> Nuevo {isCustomer ? 'cliente' : 'proveedor'}
+                </Button>
+              )}
+            </>
           ) : undefined
         }
       />

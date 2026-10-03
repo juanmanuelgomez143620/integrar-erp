@@ -5,8 +5,16 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildSeed } from './seed'
 import type { DB } from './db'
-import { cmdCreateRequisition, cmdMarkNotificationsRead, type Ctx } from './engine'
-import { listNotifications } from './queries'
+import { BusinessError, cmdCreateRequisition, cmdMarkNotificationsRead, cmdSetModule, type Ctx } from './engine'
+import {
+  exportAudit,
+  exportCustomers,
+  exportProducts,
+  exportStock,
+  exportSuppliers,
+  listNotifications,
+  listStock,
+} from './queries'
 
 let db: DB
 
@@ -26,6 +34,17 @@ function ctx(username: string): Ctx {
 
 function companyId() {
   return db.companies[0].id
+}
+
+function expectBusinessError(fn: () => void, code: string) {
+  try {
+    fn()
+  } catch (e) {
+    expect(e).toBeInstanceOf(BusinessError)
+    expect((e as BusinessError).code).toBe(code)
+    return
+  }
+  expect.unreachable(`se esperaba BusinessError con código ${code}`)
 }
 
 /** Producción envía una SC: cada integrante de Compras recibe un aviso de tarea nueva. */
@@ -79,5 +98,37 @@ describe('notificaciones', () => {
     cmdMarkNotificationsRead(ctx('compras1'), 'all', companyId())
     expect(listNotifications(db, userId('compras1'), companyId(), null).every((n) => n.read_at)).toBe(true)
     expect(listNotifications(db, userId('compras2'), companyId(), null).some((n) => !n.read_at)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------- Exportaciones
+
+describe('exportaciones a CSV', () => {
+  it('quien tiene el permiso *.export recibe el listado completo', () => {
+    const customers = db.customers.filter((c) => c.company_id === companyId())
+    expect(exportCustomers(db, userId('ventas'), companyId())).toHaveLength(customers.length)
+    expect(exportSuppliers(db, userId('compras1'), companyId()).length).toBeGreaterThan(0)
+    expect(exportStock(db, userId('deposito'), companyId()).length).toBeGreaterThan(0)
+    expect(exportProducts(db, userId('gerencia'), companyId()).length).toBeGreaterThan(0)
+    expect(exportAudit(db, userId('auditor'), companyId()).length).toBeGreaterThan(0)
+  })
+
+  it('poder consultar un listado no alcanza para exportarlo', () => {
+    // Producción ve el stock (stock.read) pero no tiene stock.export.
+    expect(listStock(db, userId('produccion'), companyId()).length).toBeGreaterThan(0)
+    expectBusinessError(() => exportStock(db, userId('produccion'), companyId()), 'SIN_PERMISO')
+    // Depósito da de alta productos, pero exportar el maestro es de Gerencia y Auditoría.
+    expectBusinessError(() => exportProducts(db, userId('deposito'), companyId()), 'SIN_PERMISO')
+    expectBusinessError(() => exportAudit(db, userId('compras1'), companyId()), 'SIN_PERMISO')
+  })
+
+  it('un módulo bloqueado por el docente bloquea también su exportación', () => {
+    cmdSetModule(ctx('docente'), companyId(), 'masters', false)
+    expectBusinessError(() => exportCustomers(db, userId('ventas'), companyId()), 'MODULO_BLOQUEADO')
+  })
+
+  it('el docente, como supervisor, puede exportar cualquier listado', () => {
+    expect(exportSuppliers(db, userId('docente'), companyId()).length).toBeGreaterThan(0)
+    expect(exportAudit(db, userId('docente'), companyId()).length).toBeGreaterThan(0)
   })
 })

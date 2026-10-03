@@ -132,6 +132,13 @@ export const api = {
   users: () => query((db) => db.profiles.map(({ password: _p, ...rest }) => rest)),
   courses: () => query((db, u) => Q.listCourses(db, u)),
   teachers: () => query((db, u) => Q.listTeachers(db, u)),
+
+  // Exportaciones: validan el permiso `*.export`, no sólo el de lectura.
+  exportCustomers: (companyId: string) => query((db, u) => Q.exportCustomers(db, u, companyId)),
+  exportSuppliers: (companyId: string) => query((db, u) => Q.exportSuppliers(db, u, companyId)),
+  exportProducts: (companyId: string) => query((db, u) => Q.exportProducts(db, u, companyId)),
+  exportStock: (companyId: string) => query((db, u) => Q.exportStock(db, u, companyId)),
+  exportAudit: (companyId: string) => query((db, u) => Q.exportAudit(db, u, companyId)),
 }
 
 // ------------------------------------------------------------ Comandos (futuras RPC)

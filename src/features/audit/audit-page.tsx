@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Download } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/common/data-table'
+import { ExportCsvButton } from '@/components/common/export-button'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api } from '@/lib/api'
+import type { CsvColumn } from '@/lib/csv'
 import { ACTION_VERBS, DOC_STATUSES, DOC_TYPES, ROLES } from '@/lib/domain/catalog'
 import type { AuditEvent, DocType } from '@/lib/domain/types'
 import { dateTime } from '@/lib/format'
@@ -17,12 +17,30 @@ const RESOURCE_TYPE = Object.fromEntries(Object.values(DOC_TYPES).map((d) => [d.
   DocType
 >
 
+function statusInfo(e: AuditEvent, status: string | null) {
+  const docType = RESOURCE_TYPE[e.entity_type]
+  return status && docType ? DOC_STATUSES[docType][status] : undefined
+}
+
 function statusBadge(e: AuditEvent, status: string | null) {
   if (!status) return <span className="text-muted-foreground">—</span>
-  const docType = RESOURCE_TYPE[e.entity_type]
-  const info = docType ? DOC_STATUSES[docType][status] : undefined
+  const info = statusInfo(e, status)
   return info ? <StatusBadge label={info.label} badge={info.badge} /> : <span className="text-xs">{status}</span>
 }
+
+const roleName = (code: string) => (code in ROLES ? ROLES[code as keyof typeof ROLES].name : code)
+
+const CSV_COLUMNS: CsvColumn<AuditEvent>[] = [
+  { header: 'Fecha y hora', value: (e) => dateTime(e.occurred_at) },
+  { header: 'Usuario', value: (e) => e.actor_name },
+  { header: 'Rol', value: (e) => roleName(e.actor_role_code) },
+  { header: 'Sector', value: (e) => e.actor_sector_name },
+  { header: 'Acción', value: (e) => ACTION_VERBS[e.action] ?? e.action },
+  { header: 'Registro', value: (e) => e.entity_label },
+  { header: 'Estado anterior', value: (e) => statusInfo(e, e.from_status)?.label ?? e.from_status },
+  { header: 'Estado nuevo', value: (e) => statusInfo(e, e.to_status)?.label ?? e.to_status },
+  { header: 'Detalle', value: (e) => e.summary },
+]
 
 export function AuditPage() {
   const company = useCompany()
@@ -34,45 +52,9 @@ export function AuditPage() {
   const [action, setAction] = useState('ALL')
   const sectors = useMemo(() => [...new Set(data.map((e) => e.actor_sector_name))].sort(), [data])
   const actions = useMemo(() => [...new Set(data.map((e) => e.action))], [data])
-  const rows = data.filter(
-    (e) => (sector === 'ALL' || e.actor_sector_name === sector) && (action === 'ALL' || e.action === action),
-  )
-
-  const exportCsv = () => {
-    const header = [
-      'fecha_hora',
-      'usuario',
-      'rol',
-      'sector',
-      'accion',
-      'registro',
-      'estado_anterior',
-      'estado_nuevo',
-      'detalle',
-    ]
-    const lines = rows.map((e) =>
-      [
-        dateTime(e.occurred_at),
-        e.actor_name,
-        e.actor_role_code,
-        e.actor_sector_name,
-        e.action,
-        e.entity_label,
-        e.from_status ?? '',
-        e.to_status ?? '',
-        e.summary,
-      ]
-        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
-        .join(';'),
-    )
-    const blob = new Blob([`\uFEFF${[header.join(';'), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `auditoria-${company.slug}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  const matches = (e: AuditEvent) =>
+    (sector === 'ALL' || e.actor_sector_name === sector) && (action === 'ALL' || e.action === action)
+  const rows = data.filter(matches)
 
   const docLink = (e: AuditEvent) => {
     const docType = RESOURCE_TYPE[e.entity_type]
@@ -87,9 +69,13 @@ export function AuditPage() {
         description="Registro inmutable de todas las acciones: nadie puede modificarlo ni borrarlo, ni siquiera el docente. Es la base del control interno."
         actions={
           company.can('audit.export') ? (
-            <Button variant="outline" onClick={exportCsv}>
-              <Download /> Exportar CSV
-            </Button>
+            // Exporta con los filtros de sector y acción elegidos.
+            <ExportCsvButton
+              dataset="auditoria"
+              companySlug={company.slug}
+              load={async () => (await api.exportAudit(company.companyId)).filter(matches)}
+              columns={CSV_COLUMNS}
+            />
           ) : undefined
         }
       />
@@ -143,8 +129,7 @@ export function AuditPage() {
               <div className="text-xs">
                 <div className="font-medium text-foreground">{e.actor_name}</div>
                 <div className="text-muted-foreground">
-                  {e.actor_role_code in ROLES ? ROLES[e.actor_role_code as keyof typeof ROLES].name : e.actor_role_code}{' '}
-                  · {e.actor_sector_name}
+                  {roleName(e.actor_role_code)} · {e.actor_sector_name}
                 </div>
               </div>
             ),
