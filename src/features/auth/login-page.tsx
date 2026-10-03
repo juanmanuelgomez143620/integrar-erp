@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router'
+import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,8 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const demo = useMemo(() => auth.demoUsers(), [])
+  // El nombre de la escuela sale de school_settings, nunca del código (CA-15).
+  const { data: school } = useQuery({ queryKey: ['school-info'], queryFn: auth.schoolInfo })
 
   if (userId) return <Navigate to="/" replace />
 
@@ -70,7 +73,7 @@ export function LoginPage() {
           </div>
         </div>
         <p className="relative z-10 text-xs text-slate-400">
-          Escuela Normal Superior N.º 9 · Aula empresarial
+          {school ? `${school.official_name} · ` : ''}Aula empresarial
           <br />
           Documentos de simulación educativa — sin validez fiscal.
         </p>

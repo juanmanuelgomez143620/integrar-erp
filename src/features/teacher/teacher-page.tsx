@@ -251,9 +251,10 @@ export function TeacherPage() {
         <TabsContent value="data" className="mt-3">
           <Section title="Reiniciar datos de demostración">
             <p className="text-sm text-muted-foreground">
-              Vuelve la empresa Forestal del Norte SRL a su estado inicial: stock de apertura, alertas de stock mínimo y
-              un circuito de compra completo de ejemplo. Los documentos, las tareas y la auditoría creados después se
-              archivan (no se pierden) y dejan de verse en la empresa. Los usuarios de demostración se mantienen.
+              Vuelve la empresa {company.company.legal_name} a su estado inicial: stock de apertura, alertas de stock
+              mínimo y un circuito de compra completo de ejemplo. Los documentos, las tareas y la auditoría creados
+              después se archivan (no se pierden) y dejan de verse en la empresa. Los usuarios de demostración se
+              mantienen.
             </p>
             <Button variant="destructive" className="mt-4" onClick={() => setResetOpen(true)}>
               <RotateCcw /> Reiniciar datos

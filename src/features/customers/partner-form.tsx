@@ -46,7 +46,7 @@ const empty: FormValues = {
   vat_condition: 'RESPONSABLE_INSCRIPTO',
   address_line: '',
   city: '',
-  province: 'Misiones',
+  province: '',
   phone: '',
   email: '',
   contact_name: '',
@@ -73,11 +73,13 @@ export function PartnerSheet({
   const company = useCompany()
   const label = kind === 'customer' ? 'cliente' : 'proveedor'
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: empty })
+  // Por defecto, la provincia de la empresa simulada: es un dato, no va escrita en el código.
+  const defaultProvince = company.company.province
 
   useEffect(() => {
     if (!open) return
     if (!partner) {
-      form.reset({ ...empty, code: nextCode })
+      form.reset({ ...empty, code: nextCode, province: defaultProvince })
       return
     }
     form.reset({
@@ -85,7 +87,7 @@ export function PartnerSheet({
       ...Object.fromEntries(Object.entries(partner).map(([k, v]) => [k, v == null ? '' : String(v)])),
       vat_condition: partner.vat_condition,
     })
-  }, [open, partner, nextCode, form])
+  }, [open, partner, nextCode, form, defaultProvince])
 
   const save = useCommand(
     (values: FormValues) =>
