@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react'
+import { cloneElement, isValidElement, useId, type ComponentType, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 
@@ -112,6 +112,14 @@ export function InfoRow({ label, children }: { label: string; children: ReactNod
   )
 }
 
+type FieldControlProps = { id?: string; 'aria-describedby'?: string; 'aria-invalid'?: boolean }
+
+/**
+ * Etiqueta + control + ayuda o error. Si el control es un único elemento,
+ * se le asigna un id para vincular la etiqueta (`htmlFor`) y se le asocian
+ * la ayuda o el error (`aria-describedby`): así un lector de pantalla anuncia
+ * "Nombre corto" y no "cuadro de texto", y tocar la etiqueta lleva al campo.
+ */
 export function Field({
   label,
   hint,
@@ -127,17 +135,33 @@ export function Field({
   className?: string
   required?: boolean
 }) {
+  const autoId = useId()
+  const control = isValidElement<FieldControlProps>(children) ? children : null
+  const controlId = control?.props.id ?? `${autoId}-control`
+  const noteId = `${autoId}-note`
+  const note = error || hint
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
-      <label className="text-xs font-medium text-slate-700">
+      <label htmlFor={control ? controlId : undefined} className="text-xs font-medium text-slate-700">
         {label}
         {required && <span className="text-red-600"> *</span>}
       </label>
-      {children}
+      {control
+        ? cloneElement(control, {
+            id: controlId,
+            'aria-describedby':
+              [control.props['aria-describedby'], note ? noteId : null].filter(Boolean).join(' ') || undefined,
+            'aria-invalid': error ? true : control.props['aria-invalid'],
+          })
+        : children}
       {error ? (
-        <p className="text-xs text-red-600">{error}</p>
+        <p id={noteId} className="text-xs text-red-600">
+          {error}
+        </p>
       ) : hint ? (
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        <p id={noteId} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
       ) : null}
     </div>
   )

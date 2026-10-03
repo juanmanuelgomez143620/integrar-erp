@@ -11,6 +11,9 @@ import { PRODUCT_TYPES } from '@/lib/domain/catalog'
 import type { Product, ProductType } from '@/lib/domain/types'
 import { cn } from '@/lib/utils'
 
+/** Atributos que `Field` asigna al control para vincular etiqueta, ayuda y error. */
+type ControlAria = { id?: string; 'aria-describedby'?: string; 'aria-invalid'?: boolean; 'aria-label'?: string }
+
 export function ProductSelect({
   products,
   value,
@@ -18,6 +21,7 @@ export function ProductSelect({
   placeholder = 'Elegí un producto',
   className,
   disabled,
+  ...aria
 }: {
   products: Product[]
   value: string
@@ -25,13 +29,13 @@ export function ProductSelect({
   placeholder?: string
   className?: string
   disabled?: boolean
-}) {
+} & ControlAria) {
   const groups = (Object.keys(PRODUCT_TYPES) as ProductType[])
     .map((type) => ({ type, items: products.filter((p) => p.product_type === type) }))
     .filter((g) => g.items.length)
   return (
     <Select value={value || undefined} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger className={cn('w-full min-w-0', className)}>
+      <SelectTrigger className={cn('w-full min-w-0', className)} {...aria}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent className="max-h-80">
@@ -57,6 +61,7 @@ export function SimpleSelect<V extends string>({
   placeholder,
   className,
   disabled,
+  ...aria
 }: {
   value: V | ''
   onChange: (value: V) => void
@@ -64,10 +69,10 @@ export function SimpleSelect<V extends string>({
   placeholder?: string
   className?: string
   disabled?: boolean
-}) {
+} & ControlAria) {
   return (
     <Select value={value || undefined} onValueChange={(v) => onChange(v as V)} disabled={disabled}>
-      <SelectTrigger className={cn('w-full', className)}>
+      <SelectTrigger className={cn('w-full', className)} {...aria}>
         <SelectValue placeholder={placeholder ?? 'Elegí una opción'} />
       </SelectTrigger>
       <SelectContent>
