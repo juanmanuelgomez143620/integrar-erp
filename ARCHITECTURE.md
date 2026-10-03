@@ -386,6 +386,11 @@ Por decisión del 26/09/2026, la base de datos se integra después. Mientras tan
 | Almacenamiento con escritura "todo o nada" | `src/lib/mock/db.ts` (localStorage + copia transaccional) | Transacciones de PostgreSQL |
 | Tiempo real entre pestañas | evento `storage` del navegador | Supabase Realtime |
 | Datos demo | `src/lib/mock/seed.ts` | `seed/` + función `seed_demo_company` |
+| Actualización de datos guardados (`DB_VERSION` + `UPGRADES`) | `src/lib/mock/db.ts` | Migraciones versionadas en `supabase/migrations/` |
+| Exportaciones (`export*`: validan `*.export`, no sólo la lectura) | `src/lib/mock/queries.ts` | RPC `export_*` que validan el permiso antes de devolver filas |
+| Datos públicos de la escuela antes de ingresar (`publicSchoolInfo`) | `src/lib/mock/queries.ts` | Función pública que devuelve sólo nombre oficial y corto |
+| Datos de la escuela (`cmdUpdateSchoolSettings`, sólo ADMIN/SUPERADMIN) | `src/lib/mock/engine.ts` | RPC `school_settings_update` |
+| Cierre de sesión por inactividad (`session_timeout_minutes`) | `src/app/idle-logout.tsx` | Igual en la interfaz; además vencimiento de la sesión de Auth |
 | **Contrato para la interfaz** | `src/lib/api/index.ts` (`api`, `commands`, `auth`, `realtime`) | Se mantiene: sólo cambia su implementación |
 
 Reglas para que la migración sea directa:

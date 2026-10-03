@@ -44,6 +44,10 @@ Se instala para la **Escuela Normal Superior N.º 9**, pero se construye como **
 | Trazabilidad | Pestaña "Flujo documental" (SC → OC → REC) | Panel "¿Qué sigue?" |
 | Tablero | Tablero por rol: pendientes, OC por estado, productos bajo mínimo, actividad reciente | Tiempo promedio SC → recepción; valor del inventario |
 
+**Avance al 03/10/2026** (interfaz con backend simulado; falta llevar todo a Supabase):
+- Hechos además de lo P0 del circuito: cambio de contraseña obligatorio y perfil; `/admin` con docentes, cursos y datos de la escuela (sin logo, que espera a Supabase Storage); página de historial de notificaciones; exportación a CSV de maestros, stock y auditoría; cierre de sesión por inactividad configurable; anulación de recepción, retirar de aprobación y cerrar saldo.
+- P0 pendientes: crear empresa desde la plantilla (H-20) y alta masiva de estudiantes (H-21, hoy es de a uno).
+
 ## 3. Fuera del MVP (y por qué)
 
 | Funcionalidad | Motivo | Fase |

@@ -46,6 +46,7 @@ Las fechas del receso invernal dependen del calendario escolar de la provincia.
 ### Fase 1 — MVP (19/10/2026 – 28/02/2027)
 - **Alcance**: ver [MVP.md](MVP.md). Núcleo completo + circuito SC → OC → aprobación → recepción → stock.
 - **Salida**: criterios de aceptación CA-01 a CA-15 cumplidos, incluida la instalación de la instancia demo con el procedimiento documentado.
+- **Avance al 03/10/2026**: la interfaz del MVP funciona completa con backend simulado (ver [MVP.md §2](MVP.md#2-alcance), "Avance"). El proyecto de desarrollo de Supabase ya existe; falta construir la base (migraciones, RLS, RPC y pruebas).
 
 ### Fase 1.5 — Piloto (marzo 2027, en paralelo con Fase 2)
 - Un curso, una empresa. Relevar dificultades, tiempos, errores frecuentes (base para el Tutor IA).

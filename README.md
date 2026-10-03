@@ -19,9 +19,12 @@ Simula una PYME industrial y comercial —la empresa de demostración es **Fores
 - ingreso por usuario y accesos de demostración por isla;
 - tablero por rol y bandeja "Mi trabajo";
 - solicitud de compra → orden de compra → aprobación por monto con separación de funciones → recepción total o parcial → stock con kardex y PPP;
-- notificaciones, flujo documental, auditoría, documentos imprimibles, maestros y panel docente.
+- notificaciones (campana e historial), flujo documental, auditoría, documentos imprimibles, maestros y panel docente;
+- exportación a CSV de clientes, proveedores, productos, stock y auditoría según el permiso de cada rol;
+- cambio de contraseña obligatorio, perfil, administración de la escuela (docentes, cursos y datos de la escuela) y cierre de sesión por inactividad;
+- carga diferida de pantallas: el paquete inicial bajó de 932 KB a unos 605 KB.
 
-La integración con Supabase (PostgreSQL, RLS, RPC) es el paso siguiente: ver [ARCHITECTURE.md §7.9](ARCHITECTURE.md#79-etapa-actual-backend-simulado).
+La integración con Supabase (PostgreSQL, RLS, RPC) es el paso siguiente: ver [ARCHITECTURE.md §7.9](ARCHITECTURE.md#79-etapa-actual-backend-simulado). Para trabajar con Claude Code, ver [CLAUDE.md](CLAUDE.md).
 
 ## Qué se aprende
 
