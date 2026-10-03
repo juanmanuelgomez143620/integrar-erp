@@ -140,6 +140,7 @@ try {
   for (const m of movementTypes) {
     if (!m.direction) throw new Error(`Falta la dirección del tipo de movimiento ${m.code}`)
   }
+  const auditActions = Object.entries(c.ACTION_VERBS).map(([code, verb]) => ({ code, verb }))
 
   const out = [
     '-- 3. Datos de los catálogos del sistema.',
@@ -156,6 +157,7 @@ try {
     replaceAll('document_transitions', transitions),
     replaceAll('task_rules', taskRules),
     upsert('stock_movement_types', ['code'], movementTypes),
+    upsert('audit_actions', ['code'], auditActions),
   ].join('\n')
 
   const file = join(root, 'supabase', 'migrations', target)

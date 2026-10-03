@@ -308,3 +308,27 @@ insert into public.stock_movement_types (code, name, direction) values
   ('AJUSTE_POSITIVO', 'Ajuste positivo', 1),
   ('AJUSTE_NEGATIVO', 'Ajuste negativo', -1)
 on conflict (code) do update set name = excluded.name, direction = excluded.direction;
+
+insert into public.audit_actions (code, verb) values
+  ('CREATE', 'Creó'),
+  ('UPDATE', 'Modificó'),
+  ('SUBMIT', 'Envió'),
+  ('APPROVE', 'Aprobó'),
+  ('REJECT', 'Rechazó'),
+  ('WITHDRAW', 'Retiró de aprobación'),
+  ('REOPEN', 'Reabrió'),
+  ('SEND', 'Envió al proveedor'),
+  ('CONFIRM', 'Confirmó'),
+  ('CANCEL', 'Anuló'),
+  ('CLOSE', 'Cerró el saldo de'),
+  ('SYSTEM', 'Actualizó'),
+  ('ACTIVATE', 'Activó'),
+  ('DEACTIVATE', 'Desactivó'),
+  ('ASSIGN_ROLE', 'Asignó rol'),
+  ('REMOVE_ROLE', 'Quitó rol'),
+  ('SETTINGS', 'Cambió configuración'),
+  ('CHANGE_PASSWORD', 'Cambió su contraseña'),
+  ('RESET_PASSWORD', 'Restableció contraseña'),
+  ('LOGIN', 'Ingresó'),
+  ('RESET', 'Reinició')
+on conflict (code) do update set verb = excluded.verb;

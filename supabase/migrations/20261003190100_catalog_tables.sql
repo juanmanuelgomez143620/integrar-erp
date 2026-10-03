@@ -98,6 +98,12 @@ create table public.stock_movement_types (
   direction smallint not null check (direction in (1, -1))
 );
 
+-- Verbo de cada acción para los resúmenes de auditoría ("Aprobó OC-00023…").
+create table public.audit_actions (
+  code text primary key,
+  verb text not null
+);
+
 -- Lectura para cualquier usuario con sesión (son metadatos del sistema); nadie
 -- los modifica desde la aplicación: cambian sólo por migración.
 do $$
@@ -106,7 +112,7 @@ declare
 begin
   foreach t in array array[
     'modules', 'roles', 'permissions', 'role_permissions', 'units_of_measure', 'document_types',
-    'document_statuses', 'document_transitions', 'task_rules', 'stock_movement_types'
+    'document_statuses', 'document_transitions', 'task_rules', 'stock_movement_types', 'audit_actions'
   ] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on table public.%I from anon, authenticated', t);
