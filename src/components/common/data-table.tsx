@@ -144,7 +144,10 @@ export function DataTable<T>({
             )}
             {!loading && visible.length === 0 && (
               <TableRow>
-                <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
+                <TableCell
+                  colSpan={columns.length}
+                  className="py-10 text-center text-sm whitespace-normal text-muted-foreground"
+                >
                   {empty ?? 'No hay registros.'}
                 </TableCell>
               </TableRow>
