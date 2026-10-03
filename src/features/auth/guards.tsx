@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { Link, Navigate, Outlet, useLocation, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Building2, LogOut } from 'lucide-react'
@@ -24,7 +25,10 @@ export function RequireAuth() {
   return (
     <>
       <IdleLogout minutes={me.school.session_timeout_minutes} />
-      <Outlet />
+      {/* Las pantallas se cargan bajo demanda (router.tsx): mientras llega su código, "Cargando…". */}
+      <Suspense fallback={<Loading />}>
+        <Outlet />
+      </Suspense>
     </>
   )
 }

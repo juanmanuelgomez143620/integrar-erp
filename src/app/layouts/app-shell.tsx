@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -16,6 +16,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { BrandMark } from '@/components/common/brand'
+import { Loading } from '@/components/common/blocks'
 import { api, commands } from '@/lib/api'
 import { DOC_TYPES, ROLES } from '@/lib/domain/catalog'
 import { initials, relative } from '@/lib/format'
@@ -320,7 +321,10 @@ export function AppShell() {
         </header>
         <main className="flex-1 px-3 py-5 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-7xl">
-            <Outlet />
+            {/* El menú y la barra superior quedan visibles mientras llega el código de la pantalla. */}
+            <Suspense fallback={<Loading />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>
