@@ -61,7 +61,7 @@ as $$
     'sector_id', mr.sector_id,
     'sector_name', coalesce(s.name, '—'),
     'island', i.number
-  ) order by r.sort), '[]'::jsonb)
+  ) order by r.sort, s.code collate "C" nulls first), '[]'::jsonb)
     from public.company_members m
     join public.member_roles mr on mr.company_id = m.company_id and mr.member_id = m.id
     join public.roles r on r.code = mr.role_code
@@ -108,7 +108,7 @@ stable
 security definer
 set search_path = ''
 as $$
-  select coalesce(array_agg(distinct rp.permission_code order by rp.permission_code), '{}')
+  select coalesce(array_agg(distinct rp.permission_code collate "C" order by rp.permission_code collate "C"), '{}')
     from private.my_role_codes(p_company) as rc (code)
     join public.role_permissions rp on rp.role_code = rc.code
     join public.permissions pe on pe.code = rp.permission_code
@@ -141,10 +141,20 @@ begin
   return jsonb_build_object(
     'company', to_jsonb(v_company),
     'course', (select to_jsonb(co) from public.courses co where co.id = v_company.course_id),
-    'sectors', coalesce((select jsonb_agg(to_jsonb(s) order by s.code) from public.sectors s where s.company_id = v_company.id), '[]'),
+    'sectors', coalesce((
+      select jsonb_agg(to_jsonb(s) order by i.number nulls last, s.code collate "C")
+        from public.sectors s left join public.islands i on i.id = s.island_id
+       where s.company_id = v_company.id
+    ), '[]'),
     'islands', coalesce((select jsonb_agg(to_jsonb(i) order by i.number) from public.islands i where i.company_id = v_company.id), '[]'),
-    'warehouses', coalesce((select jsonb_agg(to_jsonb(w) order by w.code) from public.warehouses w where w.company_id = v_company.id), '[]'),
-    'modules', coalesce((select jsonb_agg(to_jsonb(m) order by m.module_code) from public.company_modules m where m.company_id = v_company.id), '[]'),
+    'warehouses', coalesce((
+      select jsonb_agg(to_jsonb(w) order by w.code collate "C") from public.warehouses w where w.company_id = v_company.id
+    ), '[]'),
+    'modules', coalesce((
+      select jsonb_agg(to_jsonb(m) order by mo.sort)
+        from public.company_modules m join public.modules mo on mo.code = m.module_code
+       where m.company_id = v_company.id
+    ), '[]'),
     'approval_rules', coalesce((
       select jsonb_agg(to_jsonb(r) order by r.min_amount)
         from public.approval_rules r where r.company_id = v_company.id and r.is_active

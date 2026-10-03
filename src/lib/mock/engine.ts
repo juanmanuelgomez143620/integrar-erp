@@ -10,6 +10,7 @@ import {
   MODULES,
   PRODUCT_TYPES,
   ROLES,
+  ROLE_ORDER,
   ROLE_PERMISSIONS,
   TASK_RULES,
   TRANSITIONS,
@@ -78,8 +79,16 @@ export function getMember(db: DB, userId: string, companyId: string) {
   return db.members.find((m) => m.user_id === userId && m.company_id === companyId)
 }
 
+/** Roles de un integrante en el orden del catálogo (y por sector): el mismo que usa la base. */
 export function getMemberRoles(db: DB, memberId: string) {
-  return db.memberRoles.filter((r) => r.member_id === memberId)
+  const sectorCode = (r: T.MemberRole) => db.sectors.find((s) => s.id === r.sector_id)?.code ?? ''
+  return db.memberRoles
+    .filter((r) => r.member_id === memberId)
+    .sort(
+      (a, b) =>
+        ROLE_ORDER.indexOf(a.role_code) - ROLE_ORDER.indexOf(b.role_code) ||
+        (sectorCode(a) < sectorCode(b) ? -1 : sectorCode(a) > sectorCode(b) ? 1 : 0),
+    )
 }
 
 export function isModuleEnabled(db: DB, companyId: string, module: T.ModuleCode): boolean {

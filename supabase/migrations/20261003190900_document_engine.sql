@@ -4,13 +4,17 @@
 -- postMovement, raiseStockAlert, recomputeRequisition, recomputePurchaseOrder.
 
 -- ------------------------------------------------------------------ Formatos es-AR
--- Para los textos que leen los estudiantes: $ 1.234,56 · 1.234,5 UN
+-- Para los textos que leen los estudiantes: $ 1.234,56 · 1.234,5 UN. Igual que
+-- money() de src/lib/format.ts (Intl es-AR): espacio duro después del signo.
 create function private.format_money(p numeric)
 returns text
 language sql
 immutable
 set search_path = ''
-as $$ select '$ ' || translate(to_char(round(coalesce(p, 0), 2), 'FM999,999,999,990.00'), ',.', '.,') $$;
+as $$
+  select case when round(coalesce(p, 0), 2) < 0 then '-' else '' end || '$' || chr(160)
+         || translate(to_char(abs(round(coalesce(p, 0), 2)), 'FM999,999,999,990.00'), ',.', '.,')
+$$;
 
 create function private.format_qty(p numeric, p_uom text default null)
 returns text

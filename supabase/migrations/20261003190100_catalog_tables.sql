@@ -73,6 +73,7 @@ create table public.document_transitions (
   help_text text not null default '',
   requires_comment boolean not null default false,
   tone text not null default 'default' check (tone in ('default', 'outline', 'destructive')),
+  sort int not null default 0, -- orden de los botones de acción en el documento
   primary key (doc_type, from_status, action, to_status),
   foreign key (doc_type, from_status) references public.document_statuses (doc_type, code),
   foreign key (doc_type, to_status) references public.document_statuses (doc_type, code),

@@ -1,7 +1,7 @@
 // Modelos de lectura. Con Supabase serán consultas con RLS y vistas
 // `security_invoker`; la forma de los datos devueltos se mantiene.
 
-import { DOC_STATUSES, DOC_TYPES, ROLES, TRANSITIONS, type StatusInfo } from '../domain/catalog'
+import { DOC_STATUSES, DOC_TYPES, MODULES, ROLES, TRANSITIONS, type StatusInfo } from '../domain/catalog'
 import type * as T from '../domain/types'
 import { money } from '../format'
 import type { DB } from './db'
@@ -27,6 +27,26 @@ const publicProfile = (p: T.Profile): PublicProfile => {
 }
 
 const nameOf = (db: DB, userId: string | null) => fullName(getProfile(db, userId))
+
+// Los listados tienen órdenes explícitos (nunca el de carga) para que la base
+// devuelva exactamente lo mismo (supabase/tests/reads.test.ts).
+
+/** Códigos (MP-001, PRV-010…) en orden de bytes, igual que `order by code collate "C"` en la base. */
+const compareCodes = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/** Nombres sin distinguir mayúsculas ni acentos; en la base, private.sort_key(). */
+const textKey = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+const compareText = (a: string, b: string) => compareCodes(textKey(a), textKey(b))
+const compareNames = (a: PublicProfile, b: PublicProfile) =>
+  compareText(a.last_name, b.last_name) ||
+  compareText(a.first_name, b.first_name) ||
+  compareCodes(a.username, b.username)
+
+const byLineNo = <L extends { line_no: number }>(a: L, b: L) => a.line_no - b.line_no
 
 // ============================================================ Sesión y empresa
 
@@ -94,21 +114,31 @@ export function companyContext(db: DB, userId: string, slug: string): CompanyCon
   const member = getMember(db, userId, company.id)
   if (!eff.supervisor && !member?.is_active) return null
   const roles = member ? getMemberRoles(db, member.id) : []
+  const islands = db.islands.filter((i) => i.company_id === company.id).sort((a, b) => a.number - b.number)
+  const islandOf = (s: T.Sector) => islands.find((i) => i.id === s.island_id)?.number ?? Infinity
+  const moduleOrder = Object.keys(MODULES)
+  // Órdenes explícitos (no el de carga): la base devuelve exactamente los mismos.
   return {
     company,
     course: db.courses.find((c) => c.id === company.course_id) ?? null,
-    sectors: db.sectors.filter((s) => s.company_id === company.id),
-    islands: db.islands.filter((i) => i.company_id === company.id),
-    warehouses: db.warehouses.filter((w) => w.company_id === company.id),
-    modules: db.companyModules.filter((m) => m.company_id === company.id),
-    approval_rules: db.approvalRules.filter((r) => r.company_id === company.id && r.is_active),
+    sectors: db.sectors
+      .filter((s) => s.company_id === company.id)
+      .sort((a, b) => islandOf(a) - islandOf(b) || compareCodes(a.code, b.code)),
+    islands,
+    warehouses: db.warehouses.filter((w) => w.company_id === company.id).sort((a, b) => compareCodes(a.code, b.code)),
+    modules: db.companyModules
+      .filter((m) => m.company_id === company.id)
+      .sort((a, b) => moduleOrder.indexOf(a.module_code) - moduleOrder.indexOf(b.module_code)),
+    approval_rules: db.approvalRules
+      .filter((r) => r.company_id === company.id && r.is_active)
+      .sort((a, b) => a.min_amount - b.min_amount),
     roles: roles.map((r) => ({
       id: r.id,
       role_code: r.role_code,
       sector_id: r.sector_id,
       sector_name: db.sectors.find((s) => s.id === r.sector_id)?.name ?? '—',
     })),
-    permissions: [...eff.perms],
+    permissions: [...eff.perms].sort(compareCodes),
     all: eff.all,
     supervisor: eff.supervisor,
   }
@@ -122,12 +152,12 @@ function assertPerm(db: DB, userId: string, companyId: string, perm: string) {
 
 export function listCustomers(db: DB, userId: string, companyId: string) {
   assertPerm(db, userId, companyId, 'customer.read')
-  return db.customers.filter((c) => c.company_id === companyId).sort((a, b) => a.code.localeCompare(b.code))
+  return db.customers.filter((c) => c.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
 }
 
 export function listSuppliers(db: DB, userId: string, companyId: string) {
   assertPerm(db, userId, companyId, 'supplier.read')
-  return db.suppliers.filter((c) => c.company_id === companyId).sort((a, b) => a.code.localeCompare(b.code))
+  return db.suppliers.filter((c) => c.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
 }
 
 export interface ProductRow extends T.Product {
@@ -137,8 +167,14 @@ export interface ProductRow extends T.Product {
   supplier_name: string
 }
 
+/** Saldos de un producto por depósito, en orden de código de depósito. */
+function balancesOf(db: DB, productId: string) {
+  const code = (b: T.StockBalance) => db.warehouses.find((w) => w.id === b.warehouse_id)?.code ?? ''
+  return db.stockBalances.filter((b) => b.product_id === productId).sort((a, b) => compareCodes(code(a), code(b)))
+}
+
 function stockOf(db: DB, productId: string) {
-  const balances = db.stockBalances.filter((b) => b.product_id === productId)
+  const balances = balancesOf(db, productId)
   const qty = balances.reduce((s, b) => s + b.qty_on_hand, 0)
   const value = balances.reduce((s, b) => s + b.qty_on_hand * b.avg_unit_cost, 0)
   return { qty, avg: qty > 0 ? value / qty : (balances[0]?.avg_unit_cost ?? 0) }
@@ -159,7 +195,7 @@ export function listProducts(db: DB, userId: string, companyId: string): Product
   assertPerm(db, userId, companyId, 'product.read')
   return db.products
     .filter((p) => p.company_id === companyId)
-    .sort((a, b) => a.code.localeCompare(b.code))
+    .sort((a, b) => compareCodes(a.code, b.code))
     .map((p) => productRow(db, p))
 }
 
@@ -184,9 +220,10 @@ export function productDetail(db: DB, userId: string, companyId: string, code: s
   return {
     product: productRow(db, p),
     balances: canStock
-      ? db.stockBalances
-          .filter((b) => b.product_id === p.id)
-          .map((b) => ({ ...b, warehouse_name: db.warehouses.find((w) => w.id === b.warehouse_id)?.name ?? '' }))
+      ? balancesOf(db, p.id).map((b) => ({
+          ...b,
+          warehouse_name: db.warehouses.find((w) => w.id === b.warehouse_id)?.name ?? '',
+        }))
       : [],
     kardex: canStock
       ? db.stockMovements
@@ -221,9 +258,9 @@ export function listStock(db: DB, userId: string, companyId: string): StockRow[]
   const rows: StockRow[] = []
   for (const p of db.products
     .filter((x) => x.company_id === companyId && x.is_stockable)
-    .sort((a, b) => a.code.localeCompare(b.code))) {
+    .sort((a, b) => compareCodes(a.code, b.code))) {
     const total = stockOf(db, p.id).qty
-    const balances = db.stockBalances.filter((b) => b.product_id === p.id)
+    const balances = balancesOf(db, p.id)
     const list = balances.length
       ? balances
       : [{ warehouse_id: p.default_warehouse_id!, qty_on_hand: 0, avg_unit_cost: p.standard_cost } as T.StockBalance]
@@ -279,13 +316,13 @@ function lineCount(db: DB, doc: T.Document) {
 function docLines(db: DB, doc: T.Document): { product_id: string }[] {
   switch (doc.doc_type) {
     case 'PURCHASE_REQUISITION':
-      return db.prLines.filter((l) => l.document_id === doc.id)
+      return db.prLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'PURCHASE_ORDER':
-      return db.poLines.filter((l) => l.document_id === doc.id)
+      return db.poLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'GOODS_RECEIPT':
-      return db.grLines.filter((l) => l.document_id === doc.id)
+      return db.grLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'STOCK_ADJUSTMENT':
-      return db.saLines.filter((l) => l.document_id === doc.id)
+      return db.saLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
   }
 }
 
@@ -297,7 +334,8 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
   const origins = db.docLinks
     .filter((l) => l.to_document_id === doc.id)
     .map((l) => db.documents.find((d) => d.id === l.from_document_id)?.display_number)
-    .filter(Boolean)
+    .filter((n): n is string => !!n)
+    .sort(compareCodes)
   return {
     ...doc,
     status_info: DOC_STATUSES[doc.doc_type][doc.status],
@@ -580,6 +618,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
   if (doc.doc_type === 'PURCHASE_REQUISITION') {
     lines = db.prLines
       .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
       .map((l) => ({
         id: l.id,
         line_no: l.line_no,
@@ -592,6 +631,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
   if (doc.doc_type === 'PURCHASE_ORDER') {
     lines = db.poLines
       .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
       .map((l) => {
         const rl = db.prLines.find((x) => x.id === l.requisition_line_id)
         const req = rl ? db.documents.find((d) => d.id === rl.document_id) : null
@@ -616,6 +656,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
   if (doc.doc_type === 'GOODS_RECEIPT') {
     lines = db.grLines
       .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
       .map((l) => {
         const pl = db.poLines.find((x) => x.id === l.po_line_id)
         return {
@@ -634,6 +675,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
   if (doc.doc_type === 'STOCK_ADJUSTMENT') {
     lines = db.saLines
       .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
       .map((l) => ({
         id: l.id,
         line_no: l.line_no,
@@ -673,6 +715,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
     approvals: db.approvalRequests
       .filter((a) => a.document_id === doc.id)
+      .sort((a, b) => compareCodes(a.requested_at, b.requested_at))
       .map((a) => ({
         ...a,
         approver_role_name: ROLES[a.approver_role].name,
@@ -708,7 +751,7 @@ export function pendingRequisitionLines(db: DB, userId: string, companyId: strin
     )
     .sort((a, b) => a.number - b.number)) {
     const item = listItem(db, doc)
-    for (const line of db.prLines.filter((l) => l.document_id === doc.id)) {
+    for (const line of db.prLines.filter((l) => l.document_id === doc.id).sort(byLineNo)) {
       const pending = line.quantity - line.qty_ordered
       if (pending > 1e-9)
         result.push({ line, pending, requisition: item, product: db.products.find((p) => p.id === line.product_id)! })
@@ -736,6 +779,7 @@ export function receivableOrders(db: DB, userId: string, companyId: string): Rec
       order: listItem(db, d),
       lines: db.poLines
         .filter((l) => l.document_id === d.id)
+        .sort(byLineNo)
         .map((l) => ({
           line: l,
           product: db.products.find((p) => p.id === l.product_id)!,
@@ -767,34 +811,39 @@ export function listTasks(
   const eff = effectivePermissions(db, userId, companyId)
   const canAll = eff.all || eff.perms.has('task.read')
   const company = db.companies.find((c) => c.id === companyId)!
-  return db.tasks
-    .filter((t) => t.company_id === companyId)
-    .filter((t) => includeClosed || t.status === 'PENDIENTE' || t.status === 'EN_CURSO')
-    .map((t) => {
-      const mine = t.assigned_user_id === userId || (!!t.assigned_role && eff.roles.includes(t.assigned_role))
-      return { t, mine }
-    })
-    .filter(({ mine }) => mine || (scope === 'all' && canAll))
-    .sort((a, b) =>
-      a.t.status === b.t.status ? b.t.created_at.localeCompare(a.t.created_at) : a.t.status === 'EN_CURSO' ? -1 : 1,
-    )
-    .map(({ t, mine }) => {
-      const doc = db.documents.find((d) => d.id === t.document_id)
-      return {
-        ...t,
-        mine,
-        document_label: doc?.display_number ?? null,
-        document_type: doc?.doc_type ?? null,
-        path: doc ? docPath(db, doc) : t.task_type === 'REPONER_STOCK' ? `/e/${company.slug}/stock` : null,
-        assignee_label: t.assigned_user_id
-          ? nameOf(db, t.assigned_user_id)
-          : t.assigned_role
-            ? ROLES[t.assigned_role].name
-            : '—',
-        claimed_by_name: t.claimed_by ? nameOf(db, t.claimed_by) : null,
-        completed_by_name: t.completed_by ? nameOf(db, t.completed_by) : null,
-      }
-    })
+  return (
+    db.tasks
+      .filter((t) => t.company_id === companyId)
+      .filter((t) => includeClosed || t.status === 'PENDIENTE' || t.status === 'EN_CURSO')
+      .map((t) => {
+        const mine = t.assigned_user_id === userId || (!!t.assigned_role && eff.roles.includes(t.assigned_role))
+        return { t, mine }
+      })
+      .filter(({ mine }) => mine || (scope === 'all' && canAll))
+      // Primero las que alguien está haciendo; después, de la más nueva a la más vieja.
+      .sort(
+        (a, b) =>
+          Number(b.t.status === 'EN_CURSO') - Number(a.t.status === 'EN_CURSO') ||
+          compareCodes(b.t.created_at, a.t.created_at),
+      )
+      .map(({ t, mine }) => {
+        const doc = db.documents.find((d) => d.id === t.document_id)
+        return {
+          ...t,
+          mine,
+          document_label: doc?.display_number ?? null,
+          document_type: doc?.doc_type ?? null,
+          path: doc ? docPath(db, doc) : t.task_type === 'REPONER_STOCK' ? `/e/${company.slug}/stock` : null,
+          assignee_label: t.assigned_user_id
+            ? nameOf(db, t.assigned_user_id)
+            : t.assigned_role
+              ? ROLES[t.assigned_role].name
+              : '—',
+          claimed_by_name: t.claimed_by ? nameOf(db, t.claimed_by) : null,
+          completed_by_name: t.completed_by ? nameOf(db, t.completed_by) : null,
+        }
+      })
+  )
 }
 
 /** Avisos del usuario en la empresa, del más nuevo al más viejo. Con `limit: null`, el historial completo. */
@@ -889,6 +938,7 @@ export function dashboard(db: DB, userId: string, companyId: string): Dashboard 
   const canStock = can(eff, 'stock.read')
   const lowStock = db.products
     .filter((p) => p.company_id === companyId && p.is_stockable && p.min_stock > 0)
+    .sort((a, b) => compareCodes(a.code, b.code))
     .map((p) => ({ p, qty: stockOf(db, p.id).qty }))
     .filter(({ p, qty }) => qty < p.min_stock)
     .map(({ p, qty }) => ({ code: p.code, name: p.name, qty, min: p.min_stock, uom: p.uom_code }))
@@ -984,10 +1034,7 @@ export function listMembers(db: DB, userId: string, companyId: string): MemberVi
         actions_count: events.length,
       }
     })
-    .sort(
-      (a, b) =>
-        (a.roles[0]?.island ?? 99) - (b.roles[0]?.island ?? 99) || a.user.last_name.localeCompare(b.user.last_name),
-    )
+    .sort((a, b) => (a.roles[0]?.island ?? 99) - (b.roles[0]?.island ?? 99) || compareNames(a.user, b.user))
 }
 
 export function demoUsers(db: DB) {
@@ -1032,7 +1079,7 @@ function requireSchoolAdminRead(db: DB, userId: string) {
 /** Cursos del año lectivo: los administra la escuela; el docente los consulta para crear la empresa de su curso. */
 export function listCourses(db: DB, userId: string): T.Course[] {
   if (getProfile(db, userId)?.app_role !== 'DOCENTE') requireSchoolAdminRead(db, userId)
-  return [...db.courses].sort((a, b) => b.academic_year - a.academic_year || a.name.localeCompare(b.name))
+  return [...db.courses].sort((a, b) => b.academic_year - a.academic_year || compareText(a.name, b.name))
 }
 
 export function listTeachers(db: DB, userId: string): PublicProfile[] {
@@ -1040,5 +1087,5 @@ export function listTeachers(db: DB, userId: string): PublicProfile[] {
   return db.profiles
     .filter((p) => p.app_role === 'DOCENTE')
     .map(publicProfile)
-    .sort((a, b) => a.last_name.localeCompare(b.last_name))
+    .sort(compareNames)
 }

@@ -348,7 +348,7 @@ begin
     join public.roles r on r.code = mr.role_code
     left join public.sectors s on s.company_id = mr.company_id and s.id = mr.sector_id
    where m.company_id = p_company and m.user_id = v_uid and m.is_active
-   order by 4 desc, 5 desc, r.is_supervisor desc, r.sort
+   order by 4 desc, 5 desc, r.is_supervisor desc, r.sort, s.code collate "C" nulls first
    limit 1;
   if found and (v_role.preferred or v_role.grants or v_role.is_supervisor or v_app_role <> 'SUPERADMIN') then
     return row(v_uid, private.full_name(v_uid), v_role.role_code, v_role.sector_id, v_role.sector_name)::private.actor;

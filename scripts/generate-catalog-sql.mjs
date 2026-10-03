@@ -113,7 +113,7 @@ try {
       sort,
     })),
   )
-  const transitions = c.TRANSITIONS.map((t) => ({
+  const transitions = c.TRANSITIONS.map((t, i) => ({
     doc_type: t.docType,
     from_status: t.from,
     action: t.action,
@@ -123,6 +123,7 @@ try {
     help_text: t.help,
     requires_comment: t.requiresComment,
     tone: t.tone,
+    sort: i + 1,
   }))
   const taskRules = c.TASK_RULES.map((r) => ({
     doc_type: r.docType,
