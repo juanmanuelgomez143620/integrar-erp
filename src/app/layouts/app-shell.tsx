@@ -2,7 +2,7 @@ import { Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Bell, CheckCheck, Inbox, LogOut, Menu, Search, UserRound } from 'lucide-react'
+import { Bell, Building2, CheckCheck, Inbox, LogOut, Menu, Search, UserRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
@@ -258,9 +258,9 @@ function UserMenu() {
         <DropdownMenuItem onClick={() => navigate('/perfil')}>
           <UserRound /> Mi perfil
         </DropdownMenuItem>
-        {me.memberships.length > 1 && (
+        {(me.memberships.length > 1 || me.user.app_role === 'DOCENTE') && (
           <DropdownMenuItem onClick={() => navigate('/empresas')}>
-            <UserRound /> Cambiar de empresa
+            <Building2 /> {me.user.app_role === 'DOCENTE' ? 'Mis empresas' : 'Cambiar de empresa'}
           </DropdownMenuItem>
         )}
         <DropdownMenuItem

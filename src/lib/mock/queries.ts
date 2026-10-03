@@ -32,6 +32,8 @@ const nameOf = (db: DB, userId: string | null) => fullName(getProfile(db, userId
 
 export interface MembershipSummary {
   company: T.Company
+  /** Para distinguir las empresas de cada curso (todas nacen de la misma plantilla). */
+  course: T.Course | null
   roles: { role_code: T.RoleCode; role_name: string; sector_name: string; island: number | null }[]
 }
 
@@ -55,6 +57,7 @@ export function meContext(db: DB, userId: string): MeContext {
       const roles = member ? getMemberRoles(db, member.id) : []
       return {
         company,
+        course: db.courses.find((c) => c.id === company.course_id) ?? null,
         roles: roles.map((r) => {
           const sector = db.sectors.find((s) => s.id === r.sector_id)
           const island = db.islands.find((i) => i.id === sector?.island_id)
@@ -1026,8 +1029,9 @@ function requireSchoolAdminRead(db: DB, userId: string) {
     fail('SIN_PERMISO', 'Sólo la administración de la escuela puede ver esto.')
 }
 
+/** Cursos del año lectivo: los administra la escuela; el docente los consulta para crear la empresa de su curso. */
 export function listCourses(db: DB, userId: string): T.Course[] {
-  requireSchoolAdminRead(db, userId)
+  if (getProfile(db, userId)?.app_role !== 'DOCENTE') requireSchoolAdminRead(db, userId)
   return [...db.courses].sort((a, b) => b.academic_year - a.academic_year || a.name.localeCompare(b.name))
 }
 

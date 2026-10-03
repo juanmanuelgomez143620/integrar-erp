@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildSeed, DEMO_PASSWORD } from './seed'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
+import { companyContext } from './queries'
 import type { RoleCode } from '../domain/types'
 import {
   BusinessError,
@@ -16,6 +17,7 @@ import {
   cmdCancelGoodsReceipt,
   cmdCancelPurchaseOrder,
   cmdChangePassword,
+  cmdCreateCompanyFromTemplate,
   cmdCreateCourse,
   cmdCreateGoodsReceipt,
   cmdCreatePurchaseOrder,
@@ -751,6 +753,68 @@ describe('alta masiva de estudiantes (H-21)', () => {
       () => cmdCreateStudentsBulk(ctx('compras1'), companyId(), [{ first_name: 'Juan', last_name: 'Pérez' }]),
       'SIN_PERMISO',
     )
+  })
+})
+
+describe('empresa desde la plantilla (H-20)', () => {
+  const countOf = (rows: { company_id: string }[], id: string) => rows.filter((r) => r.company_id === id).length
+  const initialStock = (id: string) =>
+    db.stockMovements
+      .filter((m) => m.company_id === id && m.movement_type === 'STOCK_INICIAL')
+      .reduce((s, m) => s + m.quantity, 0)
+
+  function newCourse(name = '6.º B') {
+    return cmdCreateCourse(ctx('admin'), { academic_year: 2027, name, orientation: 'Gestión' })
+  }
+
+  it('copia estructura y maestros, recarga el inventario inicial y empieza la numeración en 1', () => {
+    const template = db.companies[0]
+    const templateDocs = countOf(db.documents, template.id)
+    const { id, slug } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: newCourse() })
+    expect(slug).toBe('forestal-del-norte-6-b-2027')
+    for (const rows of [
+      db.islands,
+      db.sectors,
+      db.warehouses,
+      db.approvalRules,
+      db.suppliers,
+      db.customers,
+      db.products,
+    ])
+      expect(countOf(rows, id)).toBe(countOf(rows, template.id))
+    // Sólo los documentos del inventario inicial, numerados desde 1 y confirmados.
+    const docs = db.documents.filter((d) => d.company_id === id)
+    expect(docs.map((d) => `${d.display_number} ${d.status}`)).toEqual(['AJS-00001 CONFIRMADO', 'AJS-00002 CONFIRMADO'])
+    expect(initialStock(id)).toBe(initialStock(template.id))
+    // Los productos apuntan a los proveedores y depósitos de la empresa nueva, no a los de la plantilla.
+    const product = db.products.find((p) => p.company_id === id && p.default_supplier_id)!
+    expect(db.suppliers.find((s) => s.id === product.default_supplier_id)!.company_id).toBe(id)
+    expect(db.warehouses.find((w) => w.id === product.default_warehouse_id)!.company_id).toBe(id)
+    // Las alertas de stock mínimo de arranque también se generan.
+    expect(db.tasks.some((t) => t.company_id === id && t.task_type === 'REPONER_STOCK')).toBe(true)
+    // La plantilla no cambia.
+    expect(countOf(db.documents, template.id)).toBe(templateDocs)
+  })
+
+  it('el docente queda como supervisor y nadie de la plantilla accede a la empresa nueva', () => {
+    const { id, slug } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: newCourse() })
+    const members = db.members.filter((m) => m.company_id === id)
+    expect(members.map((m) => m.user_id)).toEqual([ctx('docente').userId])
+    expect(effectivePermissions(db, ctx('docente').userId!, id).supervisor).toBe(true)
+    expect(companyContext(db, ctx('compras1').userId!, slug)).toBeNull()
+  })
+
+  it('dos empresas para el mismo curso tienen direcciones distintas', () => {
+    const course = newCourse()
+    const first = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
+    const second = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
+    expect(second.slug).toBe(`${first.slug}-2`)
+  })
+
+  it('sólo un docente puede crearla (ni estudiantes ni la administración escolar)', () => {
+    const course = newCourse()
+    expectBusinessError(() => cmdCreateCompanyFromTemplate(ctx('compras1'), { course_id: course }), 'SIN_PERMISO')
+    expectBusinessError(() => cmdCreateCompanyFromTemplate(ctx('admin'), { course_id: course }), 'SIN_PERMISO')
   })
 })
 

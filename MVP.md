@@ -47,7 +47,8 @@ Se instala para la **Escuela Normal Superior N.º 9**, pero se construye como **
 **Avance al 03/10/2026** (interfaz con backend simulado; falta llevar todo a Supabase):
 - Hechos además de lo P0 del circuito: cambio de contraseña obligatorio y perfil; `/admin` con docentes, cursos y datos de la escuela (sin logo, que espera a Supabase Storage); página de historial de notificaciones; exportación a CSV de maestros, stock y auditoría; cierre de sesión por inactividad configurable; anulación de recepción, retirar de aprobación y cerrar saldo.
 - Alta masiva de estudiantes (H-21): pegar la lista del curso, usuarios únicos y contraseñas iniciales imprimibles.
-- P0 pendiente: crear empresa desde la plantilla (H-20).
+- Crear empresa desde la plantilla (H-20): el docente elige el curso y obtiene una empresa con la estructura, los maestros y el inventario inicial de la plantilla, sin operaciones previas.
+- Con esto, todo lo P0 de la interfaz está hecho; falta llevarlo a Supabase.
 
 ## 3. Fuera del MVP (y por qué)
 

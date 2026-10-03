@@ -2,7 +2,7 @@ import { lazy, type ComponentType } from 'react'
 import { createBrowserRouter, Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { LoginPage } from '@/features/auth/login-page'
-import { CompanyRoute, CompanySelectPage, HomeRedirect, RequireAuth } from '@/features/auth/guards'
+import { CompanyRoute, HomeRedirect, RequireAuth } from '@/features/auth/guards'
 import { AppShell } from './layouts/app-shell'
 
 /**
@@ -16,6 +16,9 @@ function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>) {
 }
 
 const AdminPage = lazyPage(() => import('@/features/admin/admin-page').then((m) => m.AdminPage))
+const CompanySelectPage = lazyPage(() =>
+  import('@/features/company/company-select-page').then((m) => m.CompanySelectPage),
+)
 const ChangePasswordPage = lazyPage(() =>
   import('@/features/auth/change-password-page').then((m) => m.ChangePasswordPage),
 )

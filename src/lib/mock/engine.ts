@@ -2019,3 +2019,125 @@ export function cmdUpdateSchoolSettings(ctx: Ctx, input: SchoolSettingsInput) {
     changes,
   })
 }
+
+// ============================================================ Empresas
+
+const slugify = (text: string) =>
+  text
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+function uniqueSlug(db: DB, base: string) {
+  const taken = new Set(db.companies.map((c) => c.slug))
+  if (!taken.has(base)) return base
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`
+}
+
+/**
+ * Crea la empresa de un curso a partir de la plantilla (H-20, DATABASE.md §12).
+ * Copia la estructura (islas, sectores, depósitos, reglas de aprobación,
+ * módulos y control interno) y los maestros (proveedores, clientes,
+ * productos); no copia personas ni operaciones, así que la numeración de
+ * documentos empieza en 1. Vuelve a cargar el inventario inicial con su
+ * documento (y sus alertas de stock mínimo) y deja como supervisor al docente
+ * que la crea.
+ */
+export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: string }): { id: string; slug: string } {
+  const { db } = ctx
+  const profile = getProfile(db, ctx.userId)
+  if (!profile || (profile.app_role !== 'DOCENTE' && profile.app_role !== 'SUPERADMIN'))
+    fail('SIN_PERMISO', 'Sólo un docente puede crear la empresa simulada de su curso.')
+  const template = db.companies.find((c) => c.is_template && c.status === 'ACTIVA')
+  if (!template) fail('DATO_INVALIDO', 'No hay una empresa plantilla disponible.')
+  const course = db.courses.find((c) => c.id === input.course_id)
+  if (!course) fail('DATO_INVALIDO', 'Elegí el curso para el que se crea la empresa.')
+
+  const companyId = uid()
+  const slug = uniqueSlug(db, slugify(`${template.trade_name} ${course.name} ${course.academic_year}`))
+  db.companies.push({
+    ...template,
+    id: companyId,
+    course_id: course.id,
+    slug,
+    is_template: false,
+    status: 'ACTIVA',
+    settings: { ...template.settings },
+    created_at: ctx.now,
+  })
+  const audited = { created_at: ctx.now, created_by: ctx.userId, updated_at: ctx.now, updated_by: ctx.userId }
+  const of = <R extends { company_id: string }>(rows: R[]) => rows.filter((r) => r.company_id === template.id)
+  /** Copia filas de la plantilla con id nuevo y devuelve la correspondencia id viejo → id nuevo. */
+  const copy = <R extends { id: string; company_id: string }>(
+    rows: R[],
+    patch: (row: R) => Partial<R> = () => ({}),
+  ) => {
+    const ids = new Map<string, string>()
+    for (const row of of(rows)) {
+      const id = uid()
+      ids.set(row.id, id)
+      rows.push({ ...row, ...patch(row), id, company_id: companyId })
+    }
+    return ids
+  }
+
+  const islandIds = copy(db.islands)
+  copy(db.sectors, (s) => ({ island_id: s.island_id ? (islandIds.get(s.island_id) ?? null) : null }))
+  const warehouseIds = copy(db.warehouses)
+  copy(db.approvalRules)
+  for (const m of of(db.companyModules)) db.companyModules.push({ ...m, company_id: companyId })
+  const supplierIds = copy(db.suppliers, () => audited)
+  copy(db.customers, () => audited)
+  const productIds = copy(db.products, (p) => ({
+    ...audited,
+    default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,
+    default_warehouse_id: p.default_warehouse_id ? (warehouseIds.get(p.default_warehouse_id) ?? null) : null,
+  }))
+
+  const member: T.Member = {
+    id: uid(),
+    company_id: companyId,
+    user_id: profile.id,
+    job_title: 'Docente a cargo',
+    is_active: true,
+  }
+  db.members.push(member)
+  db.memberRoles.push({ id: uid(), company_id: companyId, member_id: member.id, role_code: 'DOCENTE', sector_id: null })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor: actorFor(ctx, companyId),
+    action: 'CREATE',
+    entity_type: 'company',
+    entity_id: companyId,
+    entity_label: template.legal_name,
+    summary: `Creó la empresa para ${course.name} ${course.academic_year} a partir de la plantilla ${template.legal_name}`,
+  })
+
+  // Inventario inicial: los mismos ajustes de "Inventario inicial" que tuvo la plantilla.
+  const system: Ctx = { ...ctx, userId: null }
+  for (const adj of of(db.documents).filter(
+    (d) => d.doc_type === 'STOCK_ADJUSTMENT' && d.status === 'CONFIRMADO' && d.sa?.reason_code === 'INVENTARIO_INICIAL',
+  )) {
+    const lines = db.saLines.filter((l) => l.document_id === adj.id && l.quantity_delta > 0)
+    if (!lines.length) continue
+    cmdCreateStockAdjustment(
+      system,
+      companyId,
+      {
+        warehouse_id: warehouseIds.get(adj.sa!.warehouse_id)!,
+        reason_code: 'INVENTARIO_INICIAL',
+        notes: 'Carga del inventario inicial de la empresa.',
+        lines: lines.map((l) => ({
+          product_id: productIds.get(l.product_id)!,
+          quantity_delta: l.quantity_delta,
+          unit_cost: l.unit_cost,
+        })),
+      },
+      true,
+    )
+  }
+  scanStockAlerts(system, companyId)
+  return { id: companyId, slug }
+}

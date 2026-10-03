@@ -211,6 +211,8 @@ export const commands = {
   createTeacher: (input: E.TeacherInput) => command((c) => E.cmdCreateTeacher(c, input)),
   createCourse: (input: E.CourseInput) => command((c) => E.cmdCreateCourse(c, input)),
   updateSchoolSettings: (input: E.SchoolSettingsInput) => command((c) => E.cmdUpdateSchoolSettings(c, input)),
+  createCompanyFromTemplate: (courseId: string) =>
+    command((c) => E.cmdCreateCompanyFromTemplate(c, { course_id: courseId })),
 
   async resetDemoData() {
     await wait(300)
