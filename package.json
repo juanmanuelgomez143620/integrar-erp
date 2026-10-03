@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "tsc --noEmit && eslint . && prettier --check . --log-level warn && vitest run --reporter=dot",
-    "db:catalog": "node scripts/generate-catalog-sql.mjs"
+    "db:catalog": "node scripts/generate-catalog-sql.mjs",
+    "db:demo": "node scripts/generate-demo-sql.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

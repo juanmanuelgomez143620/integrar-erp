@@ -844,7 +844,8 @@ $$;
 
 -- ------------------------------------------------------------------ Ajuste de stock
 
-create function private.confirm_adjustment(p_doc public.documents)
+-- p_actor: sólo para cargas del sistema (inventario inicial); si no, se exige el permiso.
+create function private.confirm_adjustment(p_doc public.documents, p_actor private.actor default null)
 returns void
 language plpgsql
 security definer
@@ -854,7 +855,7 @@ declare
   v_sa public.stock_adjustments;
   v_line public.stock_adjustment_lines;
 begin
-  perform private.transition_document(p_doc.id, 'CONFIRM');
+  perform private.transition_document(p_doc.id, 'CONFIRM', p_actor => p_actor);
   select * into v_sa from public.stock_adjustments s where s.document_id = p_doc.id;
   for v_line in select * from public.stock_adjustment_lines l where l.document_id = p_doc.id order by l.line_no loop
     perform private.post_stock_movement(
@@ -956,6 +957,39 @@ as $$
 begin
   perform private.require_active_user();
   perform private.transition_document((private.get_document(p_document_id, 'STOCK_ADJUSTMENT')).id, 'CANCEL', p_reason);
+end;
+$$;
+
+-- Inventario inicial cargado por el sistema (empresas nuevas y plantilla):
+-- un ajuste "Inventario inicial" confirmado, igual que en el seed simulado.
+-- p_lines: [{product_id, quantity_delta, unit_cost}]
+create function private.post_initial_stock(p_company uuid, p_warehouse uuid, p_lines jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_system private.actor := row(null, 'Sistema', 'SISTEMA', null, '—')::private.actor;
+  v_doc public.documents;
+begin
+  if coalesce(jsonb_array_length(p_lines), 0) = 0 then
+    return;
+  end if;
+  v_doc := private.new_document(p_company, 'STOCK_ADJUSTMENT', v_system, null, 'Carga del inventario inicial de la empresa.');
+  insert into public.stock_adjustments (document_id, company_id, warehouse_id, reason_code)
+  values (v_doc.id, p_company, p_warehouse, 'INVENTARIO_INICIAL');
+  insert into public.stock_adjustment_lines (company_id, document_id, line_no, product_id, quantity_delta, unit_cost)
+  select p_company, v_doc.id, ord::int, (l ->> 'product_id')::uuid, (l ->> 'quantity_delta')::numeric, (l ->> 'unit_cost')::numeric
+    from jsonb_array_elements(p_lines) with ordinality as x (l, ord);
+  update public.documents d
+     set subtotal = t.total, total = t.total
+    from (select round(coalesce(sum(quantity_delta * unit_cost), 0), 2) as total
+            from public.stock_adjustment_lines where document_id = v_doc.id) as t
+   where d.id = v_doc.id;
+  perform private.log_audit(p_company, v_system, 'CREATE', 'stock_adjustment', v_doc.id, v_doc.display_number,
+    format('Creó %s (%s)', v_doc.display_number, private.items_label(jsonb_array_length(p_lines))), v_doc.id, null, 'BORRADOR');
+  perform private.confirm_adjustment(v_doc, v_system);
 end;
 $$;
 

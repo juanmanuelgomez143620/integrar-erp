@@ -21,6 +21,7 @@ const server = await createServer({
   logLevel: 'error',
   appType: 'custom',
   server: { middlewareMode: true, hmr: false },
+  optimizeDeps: { noDiscovery: true },
 })
 
 /** Dirección de cada tipo de movimiento de stock (+ entra, − sale). */
