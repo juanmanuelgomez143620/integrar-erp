@@ -22,6 +22,7 @@ import {
   cmdCreateRequisition,
   cmdCreateStockAdjustment,
   cmdCreateStudent,
+  cmdCreateStudentsBulk,
   cmdCreateTeacher,
   cmdResetPassword,
   cmdSendPurchaseOrder,
@@ -709,6 +710,46 @@ describe('administración de la escuela', () => {
     expectBusinessError(
       () => cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º A', orientation: 'Otra' }),
       'DATO_INVALIDO',
+    )
+  })
+})
+
+describe('alta masiva de estudiantes (H-21)', () => {
+  it('crea a todos con usuario único, contraseña inicial legible y cambio obligatorio', () => {
+    const events = db.audit.length
+    const credentials = cmdCreateStudentsBulk(ctx('docente'), companyId(), [
+      { first_name: 'Juan', last_name: 'Pérez' },
+      { first_name: 'Julia', last_name: 'Pérez' },
+      { first_name: 'Ana', last_name: 'Sosa' },
+    ])
+    expect(credentials.map((c) => c.username)).toEqual(['jperez', 'jperez2', 'asosa'])
+    expect(new Set(credentials.map((c) => c.password)).size).toBe(3)
+    for (const c of credentials) {
+      expect(c.password).toMatch(/^[a-hjkmnp-z2-9]{8}$/) // sin 0/O ni 1/l/I
+      const profile = db.profiles.find((p) => p.id === c.user_id)!
+      expect(profile).toMatchObject({ app_role: 'ESTUDIANTE', must_change_password: true, password: c.password })
+      expect(db.members.some((m) => m.user_id === c.user_id && m.company_id === companyId())).toBe(true)
+    }
+    expect(db.audit.length - events).toBe(3)
+  })
+
+  it('valida toda la lista antes de crear a nadie', () => {
+    const profiles = db.profiles.length
+    expectBusinessError(
+      () =>
+        cmdCreateStudentsBulk(ctx('docente'), companyId(), [
+          { first_name: 'Juan', last_name: 'Pérez' },
+          { first_name: 'X', last_name: 'Y' },
+        ]),
+      'DATO_INVALIDO',
+    )
+    expect(db.profiles).toHaveLength(profiles)
+  })
+
+  it('sólo el docente de la empresa puede hacerlo', () => {
+    expectBusinessError(
+      () => cmdCreateStudentsBulk(ctx('compras1'), companyId(), [{ first_name: 'Juan', last_name: 'Pérez' }]),
+      'SIN_PERMISO',
     )
   })
 })

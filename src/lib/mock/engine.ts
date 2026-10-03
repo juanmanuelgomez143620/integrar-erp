@@ -16,6 +16,7 @@ import {
   permissionModule,
   type TransitionInfo,
 } from '../domain/catalog'
+import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
 import { money, qty as fmtQty, todayAR } from '../format'
 import type { DB } from './db'
@@ -1688,6 +1689,63 @@ export function cmdCreateStudent(ctx: Ctx, companyId: string, input: StudentInpu
   if (input.first_name.trim().length < 2 || input.last_name.trim().length < 2)
     fail('DATO_INVALIDO', 'Ingresá nombre y apellido.')
   if (input.password.length < 6) fail('DATO_INVALIDO', 'La contraseña inicial debe tener al menos 6 caracteres.')
+  return insertStudent(ctx, companyId, actor, { ...input, username }).id
+}
+
+/** Sin 0/O ni 1/l/I: la contraseña inicial se lee de un papel impreso. */
+const PASSWORD_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
+
+/** Contraseña inicial aleatoria de 8 caracteres (el estudiante la cambia al ingresar). */
+export function initialPassword(): string {
+  const chars: string[] = []
+  const limit = 256 - (256 % PASSWORD_ALPHABET.length) // descarta bytes que sesgarían el reparto
+  while (chars.length < 8) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(16))) {
+      if (byte < limit && chars.length < 8) chars.push(PASSWORD_ALPHABET[byte % PASSWORD_ALPHABET.length])
+    }
+  }
+  return chars.join('')
+}
+
+export interface StudentCredential {
+  user_id: string
+  first_name: string
+  last_name: string
+  username: string
+  password: string
+}
+
+/**
+ * Alta masiva (H-21): el docente pega la lista del curso y el sistema genera
+ * usuarios únicos y contraseñas iniciales para imprimir. Se valida todo
+ * antes de crear a nadie, así un error no deja la mitad de la lista cargada.
+ */
+export function cmdCreateStudentsBulk(
+  ctx: Ctx,
+  companyId: string,
+  rows: { first_name: string; last_name: string }[],
+): StudentCredential[] {
+  const actor = requireSupervisor(ctx, companyId)
+  if (!rows.length) fail('DATO_INVALIDO', 'Pegá al menos un estudiante.')
+  if (rows.length > MAX_BULK_STUDENTS)
+    fail('DATO_INVALIDO', `Se pueden dar de alta hasta ${MAX_BULK_STUDENTS} estudiantes por vez.`)
+  rows.forEach((r, i) => {
+    if (r.first_name.trim().length < 2 || r.last_name.trim().length < 2)
+      fail('DATO_INVALIDO', `Fila ${i + 1}: el apellido y el nombre deben tener al menos 2 letras.`)
+  })
+  const taken = new Set(ctx.db.profiles.map((p) => p.username))
+  return rows.map((r) => {
+    const username = uniqueUsername(baseUsername(r.first_name, r.last_name), taken)
+    taken.add(username)
+    const password = initialPassword()
+    const profile = insertStudent(ctx, companyId, actor, { ...r, username, password })
+    return { user_id: profile.id, first_name: profile.first_name, last_name: profile.last_name, username, password }
+  })
+}
+
+function insertStudent(ctx: Ctx, companyId: string, actor: Actor, input: StudentInput): T.Profile {
+  const { db } = ctx
+  const username = input.username
   const profile: T.Profile = {
     id: uid(),
     username,
@@ -1713,7 +1771,7 @@ export function cmdCreateStudent(ctx: Ctx, companyId: string, input: StudentInpu
     entity_label: fullName(profile),
     summary: `Dio de alta al estudiante ${fullName(profile)} (${username})`,
   })
-  return profile.id
+  return profile
 }
 
 /** Restablece la contraseña de un integrante de la empresa (H-25): la persona vuelve a elegir la suya al ingresar. */

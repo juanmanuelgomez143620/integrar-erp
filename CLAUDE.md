@@ -50,6 +50,6 @@ ERP educativo de la familia GEST-AR para 4.º–6.º año de la ENS N.º 9 (orie
 ## Estado (actualizar al cerrar cada sesión)
 
 - `main`: calidad base (ESLint, Prettier, Vitest, CI) + contraseñas, perfil y `/admin` (Tareas 1 y 2-P0 de `docs/PROMPT_CONTINUACION.md`).
-- Rama `mejoras/pendientes-mvp` (03/10/2026, sin mergear ni subir): página de notificaciones, exportación CSV con permiso `*.export`, datos de la escuela en `/admin/escuela`, cierre de sesión por inactividad y carga diferida de pantallas. 48 pruebas.
+- Rama `mejoras/pendientes-mvp` (03/10/2026, sin mergear ni subir): página de notificaciones, exportación CSV con permiso `*.export`, datos de la escuela en `/admin/escuela`, cierre de sesión por inactividad, carga diferida de pantallas y alta masiva de estudiantes (H-21). 59 pruebas.
 - Supabase: proyecto de desarrollo `sapsimulado` (ref `iullbntntmfvsodrqjze`, organización "juanmanuelgomez143620's Org"). Claves públicas en `.env.local`. MCP limitado a ese proyecto en `.mcp.json` (`supabase-integrar`); necesita iniciar sesión con `/mcp`. Pendiente: desactivar el registro público en Auth.
-- Siguiente: Tarea 5 (migraciones, RLS, una RPC por `cmd*`, pgTAP y adaptador). Pendientes P0 del MVP: alta masiva de estudiantes (H-21) y crear empresa desde plantilla (H-20). Tarea 4: `Field` no asocia la etiqueta con su control (accesibilidad) y revisar 1366/768/375 px.
+- Siguiente: Tarea 5 (migraciones, RLS, una RPC por `cmd*`, pgTAP y adaptador). Pendiente P0 del MVP: crear empresa desde plantilla (H-20). Tarea 4: `Field` no asocia la etiqueta con su control (accesibilidad) y revisar 1366/768/375 px.

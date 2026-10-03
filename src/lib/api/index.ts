@@ -37,6 +37,7 @@ export type {
   RequisitionInput,
   SchoolSettingsInput,
   StockAdjustmentInput,
+  StudentCredential,
   StudentInput,
   TeacherInput,
   MasterKind,
@@ -197,6 +198,8 @@ export const commands = {
     command((c) => E.cmdAssignRole(c, companyId, userId, role, sectorId)),
   removeRole: (companyId: string, memberRoleId: string) => command((c) => E.cmdRemoveRole(c, companyId, memberRoleId)),
   createStudent: (companyId: string, input: E.StudentInput) => command((c) => E.cmdCreateStudent(c, companyId, input)),
+  createStudentsBulk: (companyId: string, rows: { first_name: string; last_name: string }[]) =>
+    command((c) => E.cmdCreateStudentsBulk(c, companyId, rows)),
   resetPassword: (companyId: string, userId: string, newPassword: string) =>
     command((c) => E.cmdResetPassword(c, companyId, userId, newPassword)),
   setModule: (companyId: string, module: T.ModuleCode, enabled: boolean) =>

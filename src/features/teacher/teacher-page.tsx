@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { KeyRound, Plus, RotateCcw, UserPlus, X } from 'lucide-react'
+import { KeyRound, ListPlus, Plus, RotateCcw, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +27,7 @@ import type { ModuleCode, RoleCode } from '@/lib/domain/types'
 import { relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { BulkStudentsDialog } from './bulk-students-dialog'
 
 export function TeacherPage() {
   const company = useCompany()
@@ -44,6 +45,7 @@ export function TeacherPage() {
   const [assignFor, setAssignFor] = useState<MemberView | null>(null)
   const [resetPasswordFor, setResetPasswordFor] = useState<MemberView | null>(null)
   const [newStudent, setNewStudent] = useState(false)
+  const [bulkStudents, setBulkStudents] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const removeRole = useCommand((id: string) => commands.removeRole(company.companyId, id), { success: 'Rol quitado.' })
   const setModule = useCommand((m: ModuleCode, v: boolean) => commands.setModule(company.companyId, m, v), {
@@ -94,9 +96,14 @@ export function TeacherPage() {
               `${m.user.first_name} ${m.user.last_name} ${m.user.username} ${m.roles.map((r) => r.role_name).join(' ')}`
             }
             toolbar={
-              <Button size="sm" onClick={() => setNewStudent(true)}>
-                <UserPlus /> Agregar estudiante
-              </Button>
+              <>
+                <Button size="sm" onClick={() => setBulkStudents(true)}>
+                  <ListPlus /> Alta masiva
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setNewStudent(true)}>
+                  <UserPlus /> Agregar estudiante
+                </Button>
+              </>
             }
             columns={[
               {
@@ -266,6 +273,7 @@ export function TeacherPage() {
       {assignFor && <AssignRoleDialog member={assignFor} onClose={() => setAssignFor(null)} />}
       {resetPasswordFor && <ResetPasswordDialog member={resetPasswordFor} onClose={() => setResetPasswordFor(null)} />}
       <NewStudentDialog open={newStudent} onOpenChange={setNewStudent} />
+      <BulkStudentsDialog open={bulkStudents} onOpenChange={setBulkStudents} />
       <ActionDialog
         open={resetOpen}
         onOpenChange={setResetOpen}
