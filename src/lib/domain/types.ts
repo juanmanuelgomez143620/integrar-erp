@@ -44,6 +44,9 @@ export interface SchoolSettings {
   short_name: string
   city: string
   province: string
+  contact_email: string
+  /** Minutos sin actividad antes de cerrar la sesión (computadoras compartidas). 0 = no se cierra. */
+  session_timeout_minutes: number
   features: Record<string, boolean>
 }
 

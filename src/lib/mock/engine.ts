@@ -1904,3 +1904,60 @@ export function cmdCreateCourse(ctx: Ctx, input: CourseInput) {
   })
   return course.id
 }
+
+export interface SchoolSettingsInput {
+  official_name: string
+  short_name: string
+  city: string
+  province: string
+  contact_email: string
+  session_timeout_minutes: number
+}
+
+/**
+ * Datos de la escuela dueña de la instancia (school_settings, una sola fila):
+ * los edita la administración escolar, nunca se escriben en el código
+ * (CA-15). Incluye la política de cierre de sesión por inactividad.
+ */
+export function cmdUpdateSchoolSettings(ctx: Ctx, input: SchoolSettingsInput) {
+  const actor = requireSchoolAdmin(ctx)
+  const official = input.official_name.trim()
+  const short = input.short_name.trim()
+  const email = input.contact_email.trim()
+  const minutes = input.session_timeout_minutes
+  if (official.length < 3) fail('DATO_INVALIDO', 'Ingresá el nombre oficial de la escuela.')
+  if (short.length < 2 || short.length > 30)
+    fail('DATO_INVALIDO', 'El nombre corto debe tener entre 2 y 30 caracteres (por ejemplo, "ENS N.º 9").')
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail('DATO_INVALIDO', 'El email de contacto no es válido.')
+  if (!Number.isInteger(minutes) || (minutes !== 0 && (minutes < 5 || minutes > 240)))
+    fail('DATO_INVALIDO', 'El cierre por inactividad va de 5 a 240 minutos (o 0 para no cerrar la sesión).')
+  const before = { ...ctx.db.school }
+  ctx.db.school = {
+    ...ctx.db.school,
+    official_name: official,
+    short_name: short,
+    city: input.city.trim(),
+    province: input.province.trim(),
+    contact_email: email,
+    session_timeout_minutes: minutes,
+  }
+  const changes = diff(before, ctx.db.school, [
+    'official_name',
+    'short_name',
+    'city',
+    'province',
+    'contact_email',
+    'session_timeout_minutes',
+  ])
+  if (!Object.keys(changes).length) return
+  logAudit(ctx, {
+    company_id: null,
+    actor,
+    action: 'SETTINGS',
+    entity_type: 'school_settings',
+    entity_id: null,
+    entity_label: official,
+    summary: 'Cambió los datos de la escuela',
+    changes,
+  })
+}

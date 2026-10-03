@@ -46,21 +46,73 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 1
+export const DB_VERSION = 2
 const STORAGE_KEY = 'integrar-erp.mockdb'
+
+/** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
+export const DEFAULT_SESSION_TIMEOUT_MINUTES = 15
 
 let cache: DB | null = null
 const listeners = new Set<() => void>()
 
+/**
+ * Pasos para llevar una base guardada con una versión anterior a la actual
+ * sin perder lo que cargaron docentes y estudiantes. Cada paso lleva de la
+ * versión N a la N + 1.
+ */
+const UPGRADES: Record<number, (db: DB) => void> = {
+  // v1 → v2: contacto de la escuela y cierre de sesión por inactividad.
+  1: (db) => {
+    const v1 = db.school as Partial<T.SchoolSettings>
+    db.school = {
+      ...db.school,
+      contact_email: v1.contact_email ?? '',
+      session_timeout_minutes: v1.session_timeout_minutes ?? DEFAULT_SESSION_TIMEOUT_MINUTES,
+    }
+  },
+}
+
+/** Actualiza una base guardada a DB_VERSION; null si no hay forma de hacerlo. */
+export function upgradeDatabase(db: DB): DB | null {
+  while (db.version < DB_VERSION) {
+    const step = UPGRADES[db.version]
+    if (!step) return null
+    step(db)
+    db.version += 1
+  }
+  return db.version === DB_VERSION ? db : null
+}
+
 function readStorage(): DB | null {
+  let raw: string | null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as DB
-    return parsed.version === DB_VERSION ? parsed : null
+    raw = localStorage.getItem(STORAGE_KEY)
   } catch {
+    return null // Sin almacenamiento disponible (modo privado).
+  }
+  if (!raw) return null
+  let stored: DB
+  try {
+    stored = JSON.parse(raw) as DB
+  } catch {
+    archive(raw)
     return null
   }
+  if (stored.version > DB_VERSION) {
+    // Otra pestaña ya usa una versión más nueva de la aplicación: recargar trae
+    // el código nuevo. Nunca se pisan esos datos con una base de demostración vieja.
+    window.location.reload()
+    return stored
+  }
+  const storedVersion = stored.version
+  const upgraded = upgradeDatabase(stored)
+  if (upgraded) {
+    if (storedVersion !== DB_VERSION) writeStorage(upgraded)
+    return upgraded
+  }
+  // No se puede actualizar: se archiva antes de reemplazarla, igual que al reiniciar.
+  archive(raw)
+  return null
 }
 
 function writeStorage(db: DB) {
@@ -107,9 +159,9 @@ export function transact<R>(fn: (db: DB) => R): R {
  * consultar el archivo; por ahora es una red de contención recuperable a
  * mano desde localStorage, no una papelera de reciclaje con vencimiento.
  */
-function archiveBeforeReset(db: DB) {
+function archive(serialized: string) {
   try {
-    localStorage.setItem(`integrar-erp.archive.${new Date().toISOString()}`, JSON.stringify(db))
+    localStorage.setItem(`integrar-erp.archive.${new Date().toISOString()}`, serialized)
   } catch {
     // Sin espacio disponible: no se bloquea el reinicio por esto.
   }
@@ -117,7 +169,7 @@ function archiveBeforeReset(db: DB) {
 
 export function resetDatabase() {
   const previous = readStorage()
-  if (previous) archiveBeforeReset(previous)
+  if (previous) archive(JSON.stringify(previous))
   const seeded = buildSeed()
   writeStorage(seeded)
   cache = seeded

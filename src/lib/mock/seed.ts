@@ -6,7 +6,7 @@
 
 import type * as T from '../domain/types'
 import type { DB } from './db'
-import { DB_VERSION } from './db'
+import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
 import {
   cmdApprovePurchaseOrder,
   cmdCreateGoodsReceipt,
@@ -47,6 +47,8 @@ export function buildSeed(): DB {
       short_name: 'ENS N.º 9',
       city: '',
       province: '',
+      contact_email: '',
+      session_timeout_minutes: DEFAULT_SESSION_TIMEOUT_MINUTES,
       features: {},
     },
     profiles: [],

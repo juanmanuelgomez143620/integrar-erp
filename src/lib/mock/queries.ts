@@ -1012,6 +1012,15 @@ export function demoUsers(db: DB) {
 
 // ============================================================ Administración de la escuela
 
+/**
+ * Lo único de la escuela que se muestra antes de ingresar (pantalla de
+ * ingreso). Con Supabase: función pública que devuelve sólo estos campos,
+ * nunca la fila completa de school_settings.
+ */
+export function publicSchoolInfo(db: DB): Pick<T.SchoolSettings, 'official_name' | 'short_name'> {
+  return { official_name: db.school.official_name, short_name: db.school.short_name }
+}
+
 function requireSchoolAdminRead(db: DB, userId: string) {
   if (!isSchoolAdmin(getProfile(db, userId)))
     fail('SIN_PERMISO', 'Sólo la administración de la escuela puede ver esto.')

@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildSeed, DEMO_PASSWORD } from './seed'
-import type { DB } from './db'
+import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import type { RoleCode } from '../domain/types'
 import {
   BusinessError,
@@ -26,10 +26,12 @@ import {
   cmdResetPassword,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
+  cmdUpdateSchoolSettings,
   cmdWithdrawPurchaseOrder,
   effectivePermissions,
   type Ctx,
   type PurchaseOrderInput,
+  type SchoolSettingsInput,
 } from './engine'
 
 let db: DB
@@ -708,5 +710,71 @@ describe('administración de la escuela', () => {
       () => cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º A', orientation: 'Otra' }),
       'DATO_INVALIDO',
     )
+  })
+})
+
+describe('datos de la escuela', () => {
+  const schoolInput = (patch: Partial<SchoolSettingsInput> = {}): SchoolSettingsInput => ({
+    official_name: 'Escuela de Prueba N.º 1',
+    short_name: 'EP N.º 1',
+    city: 'Posadas',
+    province: 'Misiones',
+    contact_email: 'secretaria@escuela.test',
+    session_timeout_minutes: 20,
+    ...patch,
+  })
+
+  it('ADMIN los actualiza y queda en la auditoría qué cambió', () => {
+    cmdUpdateSchoolSettings(ctx('admin'), schoolInput())
+    expect(db.school).toMatchObject({ official_name: 'Escuela de Prueba N.º 1', session_timeout_minutes: 20 })
+    const event = db.audit.at(-1)!
+    expect(event).toMatchObject({ action: 'SETTINGS', entity_type: 'school_settings', company_id: null })
+    expect(event.changes?.official_name).toEqual({
+      from: 'Escuela Normal Superior N.º 9',
+      to: 'Escuela de Prueba N.º 1',
+    })
+  })
+
+  it('guardar sin cambios no agrega ruido a la auditoría', () => {
+    cmdUpdateSchoolSettings(ctx('admin'), schoolInput())
+    const events = db.audit.length
+    cmdUpdateSchoolSettings(ctx('admin'), schoolInput())
+    expect(db.audit).toHaveLength(events)
+  })
+
+  it('sólo la administración escolar puede cambiarlos, ni siquiera el docente', () => {
+    expectBusinessError(() => cmdUpdateSchoolSettings(ctx('docente'), schoolInput()), 'SIN_PERMISO')
+  })
+
+  it('valida nombre corto, email y minutos de inactividad (0 = sin cierre automático)', () => {
+    expectBusinessError(() => cmdUpdateSchoolSettings(ctx('admin'), schoolInput({ short_name: 'X' })), 'DATO_INVALIDO')
+    expectBusinessError(
+      () => cmdUpdateSchoolSettings(ctx('admin'), schoolInput({ contact_email: 'sin-arroba' })),
+      'DATO_INVALIDO',
+    )
+    for (const minutes of [3, 241, 7.5])
+      expectBusinessError(
+        () => cmdUpdateSchoolSettings(ctx('admin'), schoolInput({ session_timeout_minutes: minutes })),
+        'DATO_INVALIDO',
+      )
+    cmdUpdateSchoolSettings(ctx('admin'), schoolInput({ session_timeout_minutes: 0 }))
+    expect(db.school.session_timeout_minutes).toBe(0)
+  })
+})
+
+describe('base guardada con una versión anterior', () => {
+  it('se actualiza sin perder datos: v1 → v2 agrega contacto e inactividad con valores por defecto', () => {
+    const { contact_email: _email, session_timeout_minutes: _minutes, ...schoolV1 } = db.school
+    const stored = { ...db, version: 1, school: schoolV1 } as unknown as DB
+    const documents = stored.documents.length
+    const upgraded = upgradeDatabase(stored)!
+    expect(upgraded.version).toBe(DB_VERSION)
+    expect(upgraded.school).toMatchObject({ contact_email: '', session_timeout_minutes: 15, short_name: 'ENS N.º 9' })
+    expect(upgraded.documents).toHaveLength(documents)
+  })
+
+  it('una versión desconocida no se puede actualizar (se archiva y se vuelve a sembrar)', () => {
+    expect(upgradeDatabase({ ...db, version: 0 })).toBeNull()
+    expect(upgradeDatabase({ ...db, version: DB_VERSION + 1 })).toBeNull()
   })
 })

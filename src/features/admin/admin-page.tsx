@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { GraduationCap, LogOut, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,11 @@ import { BrandMark } from '@/components/common/brand'
 import { api, commands } from '@/lib/api'
 import { useCommand } from '@/hooks/use-command'
 import { useMe, useSession } from '@/app/session'
+import { SchoolSettingsForm } from './school-settings-form'
+
+/** Cada pestaña tiene su dirección, para poder enlazarla (por ejemplo, /admin/escuela). */
+const TAB_PATHS = { teachers: '/admin', courses: '/admin/cursos', school: '/admin/escuela' } as const
+type AdminTab = keyof typeof TAB_PATHS
 
 /** Sugiere un nombre de usuario a partir del nombre y apellido (igual que en el alta de estudiantes). */
 const suggestUsername = (first: string, last: string) =>
@@ -32,6 +37,9 @@ const suggestUsername = (first: string, last: string) =>
 export function AdminPage() {
   const { data: me, isLoading } = useMe()
   const { logout } = useSession()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const tab = (Object.keys(TAB_PATHS) as AdminTab[]).find((t) => TAB_PATHS[t] === pathname) ?? 'teachers'
   const [newTeacher, setNewTeacher] = useState(false)
   const [newCourse, setNewCourse] = useState(false)
   const allowed = me?.user.app_role === 'ADMIN' || me?.user.app_role === 'SUPERADMIN'
@@ -62,13 +70,14 @@ export function AdminPage() {
       <div className="mt-6">
         <PageHeader
           title="Administración de la escuela"
-          description={`${me.school.official_name}. Alta de docentes y cursos del año lectivo, sin depender del proveedor.`}
+          description={`${me.school.official_name}. Docentes, cursos del año lectivo y datos de la escuela, sin depender del proveedor.`}
         />
       </div>
-      <Tabs defaultValue="teachers">
+      <Tabs value={tab} onValueChange={(v) => navigate(TAB_PATHS[v as AdminTab])}>
         <TabsList>
           <TabsTrigger value="teachers">Docentes</TabsTrigger>
           <TabsTrigger value="courses">Cursos</TabsTrigger>
+          <TabsTrigger value="school">Datos de la escuela</TabsTrigger>
         </TabsList>
 
         <TabsContent value="teachers" className="mt-3">
@@ -147,6 +156,10 @@ export function AdminPage() {
               { key: 'orientation', header: 'Orientación', cell: (c) => c.orientation || '—' },
             ]}
           />
+        </TabsContent>
+
+        <TabsContent value="school" className="mt-3">
+          <SchoolSettingsForm school={me.school} />
         </TabsContent>
       </Tabs>
 

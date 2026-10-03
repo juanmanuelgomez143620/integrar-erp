@@ -45,6 +45,8 @@ export const router = createBrowserRouter([
       { path: '/cambiar-contrasena', element: <ChangePasswordPage /> },
       { path: '/perfil', element: <ProfilePage /> },
       { path: '/admin', element: <AdminPage /> },
+      { path: '/admin/cursos', element: <AdminPage /> },
+      { path: '/admin/escuela', element: <AdminPage /> },
       {
         path: '/e/:slug',
         element: <CompanyRoute />,

@@ -35,6 +35,7 @@ export type {
   GoodsReceiptInput,
   PurchaseOrderInput,
   RequisitionInput,
+  SchoolSettingsInput,
   StockAdjustmentInput,
   StudentInput,
   TeacherInput,
@@ -103,6 +104,11 @@ export const auth = {
   },
   demoUsers() {
     return read(Q.demoUsers)
+  },
+  /** Nombre de la escuela para la pantalla de ingreso (no requiere sesión). */
+  async schoolInfo() {
+    await wait(40)
+    return read(Q.publicSchoolInfo)
   },
 }
 
@@ -201,6 +207,7 @@ export const commands = {
   changePassword: (input: E.ChangePasswordInput) => command((c) => E.cmdChangePassword(c, input)),
   createTeacher: (input: E.TeacherInput) => command((c) => E.cmdCreateTeacher(c, input)),
   createCourse: (input: E.CourseInput) => command((c) => E.cmdCreateCourse(c, input)),
+  updateSchoolSettings: (input: E.SchoolSettingsInput) => command((c) => E.cmdUpdateSchoolSettings(c, input)),
 
   async resetDemoData() {
     await wait(300)
