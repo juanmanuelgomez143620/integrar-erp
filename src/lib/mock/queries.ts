@@ -3,7 +3,7 @@
 
 import { DOC_STATUSES, DOC_TYPES, MODULES, ROLES, TRANSITIONS, type StatusInfo } from '../domain/catalog'
 import type * as T from '../domain/types'
-import { money } from '../format'
+import { money, todayAR } from '../format'
 import type { DB } from './db'
 import {
   can,
@@ -808,6 +808,8 @@ export function listTasks(
   scope: 'mine' | 'all',
   includeClosed = false,
 ): TaskItem[] {
+  const profile = getProfile(db, userId)
+  if (!profile?.is_active || (!isInstanceAdmin(profile) && !getMember(db, userId, companyId)?.is_active)) return []
   const eff = effectivePermissions(db, userId, companyId)
   const canAll = eff.all || eff.perms.has('task.read')
   const company = db.companies.find((c) => c.id === companyId)!
@@ -848,6 +850,8 @@ export function listTasks(
 
 /** Avisos del usuario en la empresa, del más nuevo al más viejo. Con `limit: null`, el historial completo. */
 export function listNotifications(db: DB, userId: string, companyId: string, limit: number | null = 60) {
+  const profile = getProfile(db, userId)
+  if (!profile?.is_active || (!isInstanceAdmin(profile) && !getMember(db, userId, companyId)?.is_active)) return []
   const rows = db.notifications
     .filter((n) => n.company_id === companyId && n.recipient_user_id === userId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -931,13 +935,16 @@ export interface Dashboard {
 
 export function dashboard(db: DB, userId: string, companyId: string): Dashboard {
   const eff = effectivePermissions(db, userId, companyId)
-  const docs = db.documents.filter((d) => d.company_id === companyId)
+  // Sólo cuenta lo que el usuario puede leer: los indicadores no revelan documentos ajenos a su rol (ni a su empresa).
+  const docs = db.documents.filter(
+    (d) => d.company_id === companyId && can(eff, `${DOC_TYPES[d.doc_type].resource}.read`),
+  )
   const pos = docs.filter((d) => d.doc_type === 'PURCHASE_ORDER')
-  const month = new Date().toISOString().slice(0, 7)
+  const month = todayAR().slice(0, 7)
   const canPurchasing = can(eff, 'purchase_order.read')
   const canStock = can(eff, 'stock.read')
   const lowStock = db.products
-    .filter((p) => p.company_id === companyId && p.is_stockable && p.min_stock > 0)
+    .filter((p) => canStock && p.company_id === companyId && p.is_active && p.is_stockable && p.min_stock > 0)
     .sort((a, b) => compareCodes(a.code, b.code))
     .map((p) => ({ p, qty: stockOf(db, p.id).qty }))
     .filter(({ p, qty }) => qty < p.min_stock)
@@ -984,7 +991,7 @@ export function dashboard(db: DB, userId: string, companyId: string): Dashboard 
     low_stock: canStock ? lowStock : [],
     activity: listAudit(db, userId, companyId).slice(0, 8),
     tasks: tasks.slice(0, 6),
-    lead_time_hours: leadTimes.length ? leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length : null,
+    lead_time_hours: canPurchasing && leadTimes.length ? leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length : null,
     can: { purchasing: canPurchasing, stock: canStock, audit: can(eff, 'audit.read') },
   }
 }

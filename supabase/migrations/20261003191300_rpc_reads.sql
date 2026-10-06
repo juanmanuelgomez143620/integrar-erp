@@ -663,6 +663,7 @@ as $$
     join public.companies c on c.id = t.company_id
     left join public.documents d on d.id = t.document_id
    where t.company_id = p_company
+     and p_company in (select private.my_companies()) -- sólo quien participa en la empresa (o soporte)
      and (p_include_closed or t.status in ('PENDIENTE', 'EN_CURSO'))
      and (x.mine or p_all)
 $$;
@@ -697,6 +698,7 @@ begin
       from (
         select * from public.notifications x
          where x.company_id = p_company_id and x.recipient_user_id = v_uid
+           and p_company_id in (select private.my_companies())
          order by x.created_at desc
          limit p_limit
       ) n
@@ -782,17 +784,28 @@ set search_path = ''
 as $$
 declare
   v_stock boolean;
+  v_purchasing boolean;
+  -- Sólo cuenta lo que el usuario puede leer: los indicadores no revelan
+  -- documentos ajenos a su rol ni a su empresa.
+  v_types text[];
+  -- "Este mes" en la zona horaria de la escuela (todayAR en el simulador).
+  v_month text;
   v_low jsonb;
   v_tasks jsonb;
 begin
   perform private.require_active_user();
   v_stock := private.has_permission(p_company_id, 'stock.read');
+  v_purchasing := private.has_permission(p_company_id, 'purchase_order.read');
+  v_types := private.readable_doc_types(p_company_id);
+  v_month := to_char(now() at time zone coalesce(
+    (select s.timezone from public.school_settings s where s.id = 1), 'America/Argentina/Buenos_Aires'), 'YYYY-MM');
   select coalesce(jsonb_agg(jsonb_build_object('code', p.code, 'name', p.name, 'qty', s.qty, 'min', p.min_stock, 'uom', p.uom_code)
                   order by p.code collate "C"), '[]')
     into v_low
     from public.products p
     cross join lateral (select coalesce(sum(b.qty_on_hand), 0) as qty from public.stock_balances b where b.product_id = p.id) s
-   where p.company_id = p_company_id and p.is_stockable and p.min_stock > 0 and s.qty < p.min_stock;
+   where v_stock and p.company_id = p_company_id and p.is_active and p.is_stockable and p.min_stock > 0
+     and s.qty < p.min_stock;
   v_tasks := private.task_items(p_company_id, false, false);
   return jsonb_build_object(
     'kpis', (
@@ -804,13 +817,14 @@ begin
         'below_min', jsonb_array_length(v_low),
         'inventory_value', case when v_stock then (
           select coalesce(sum(b.qty_on_hand * b.avg_unit_cost), 0) from public.stock_balances b where b.company_id = p_company_id) end,
+        -- Igual que el simulador: la fecha de aprobación (UTC) contra el mes de la escuela.
         'purchases_month', coalesce(sum(d.total) filter (
           where d.doc_type = 'PURCHASE_ORDER' and d.status <> 'ANULADO'
-            and to_char(po.approved_at at time zone 'UTC', 'YYYY-MM') = to_char(now() at time zone 'UTC', 'YYYY-MM')), 0),
+            and to_char(po.approved_at at time zone 'UTC', 'YYYY-MM') = v_month), 0),
         'my_tasks', jsonb_array_length(v_tasks))
         from public.documents d
         left join public.purchase_orders po on po.document_id = d.id
-       where d.company_id = p_company_id
+       where d.company_id = p_company_id and d.doc_type = any (v_types)
     ),
     'po_by_status', coalesce((
       select jsonb_agg(jsonb_build_object('status', s.code, 'label', s.label, 'badge', s.badge, 'count', x.n) order by s.sort)
@@ -818,24 +832,23 @@ begin
         cross join lateral (
           select count(*) as n from public.documents d
            where d.company_id = p_company_id and d.doc_type = 'PURCHASE_ORDER' and d.status = s.code
+             and 'PURCHASE_ORDER' = any (v_types)
         ) x
        where s.doc_type = 'PURCHASE_ORDER' and x.n > 0
     ), '[]'),
-    'low_stock', case when v_stock then v_low else '[]' end,
+    'low_stock', v_low,
     'activity', private.audit_items(p_company_id, 8),
     'tasks', coalesce((select jsonb_agg(t.x order by t.i) from jsonb_array_elements(v_tasks) with ordinality as t (x, i) where t.i <= 6), '[]'),
-    'lead_time_hours', (
+    'lead_time_hours', case when v_purchasing then (
       select avg(extract(epoch from gr.received_at - pr.created_at) / 3600)
         from public.documents g
         join public.goods_receipts gr on gr.document_id = g.id
         join public.document_links l on l.to_document_id = gr.purchase_order_id
         join public.documents pr on pr.id = l.from_document_id and pr.company_id = g.company_id
        where g.company_id = p_company_id and g.doc_type = 'GOODS_RECEIPT' and g.status = 'CONFIRMADO' and gr.received_at is not null
-    ),
-    'can', jsonb_build_object(
-      'purchasing', private.has_permission(p_company_id, 'purchase_order.read'),
-      'stock', v_stock,
-      'audit', private.has_permission(p_company_id, 'audit.read'))
+         and g.doc_type = any (v_types) and pr.doc_type = any (v_types)
+    ) end,
+    'can', jsonb_build_object('purchasing', v_purchasing, 'stock', v_stock, 'audit', private.has_permission(p_company_id, 'audit.read'))
   );
 end;
 $$;

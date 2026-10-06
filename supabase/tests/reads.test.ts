@@ -239,6 +239,31 @@ describe('tablero', () => {
       })
   })
 
+  it('quien no participa en la empresa no ve nada de ella (ni montos ni tareas)', async () => {
+    const board = await fromSql('admin', 'dashboard', [companyPg])
+    expect(board.ok).toBe(true)
+    if (board.ok)
+      expect(board.value).toMatchObject({
+        kpis: {
+          pr_pending: 0,
+          po_pending_approval: 0,
+          po_pending_amount: 0,
+          po_in_transit: 0,
+          below_min: 0,
+          inventory_value: null,
+          purchases_month: 0,
+          my_tasks: 0,
+        },
+        po_by_status: [],
+        low_stock: [],
+        activity: [],
+        tasks: [],
+        lead_time_hours: null,
+      })
+    const notifications = await fromSql('admin', 'notifications_list', [companyPg, null])
+    expect(notifications.ok && notifications.value).toEqual([])
+  })
+
   it('las tareas del tablero son las primeras seis de la bandeja propia', async () => {
     for (const u of USERS) {
       const board = await fromSql(u, 'dashboard', [companyPg])
