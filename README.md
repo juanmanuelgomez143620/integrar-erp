@@ -24,7 +24,7 @@ Simula una PYME industrial y comercial —la empresa de demostración es **Fores
 - cambio de contraseña obligatorio, perfil, administración de la escuela (docentes, cursos y datos de la escuela) y cierre de sesión por inactividad;
 - carga diferida de pantallas: el paquete inicial bajó de 932 KB a unos 605 KB.
 
-La integración con Supabase (PostgreSQL, RLS, RPC) es el paso siguiente: ver [ARCHITECTURE.md §7.9](ARCHITECTURE.md#79-etapa-actual-backend-simulado). Para trabajar con Claude Code, ver [CLAUDE.md](CLAUDE.md).
+**Supabase (octubre 2026):** el backend real está escrito y probado sin conexión — migraciones con RLS, una función RPC por cada comando y por cada consulta del simulador (con paridad comprobada, textos y errores incluidos), plantilla de empresa, Edge Function de cuentas y el adaptador de la interfaz. Falta aplicarlo a un proyecto y hacer la prueba de humo: ver [supabase/README.md](supabase/README.md) y [ARCHITECTURE.md §7.9](ARCHITECTURE.md#79-etapa-actual-backend-simulado). Para trabajar con Claude Code, ver [CLAUDE.md](CLAUDE.md).
 
 ## Qué se aprende
 
@@ -57,13 +57,13 @@ Los diagramas están escritos en Mermaid: se ven directamente en GitHub y en VS 
 | Frontend | React · Vite · TypeScript · Tailwind CSS · shadcn/ui · Lucide · TanStack Query/Table · React Hook Form · Zod |
 | Backend | Supabase: PostgreSQL (RLS + funciones), Auth, Realtime, Storage, Edge Functions |
 | Hosting | Netlify o Cloudflare Pages (sitio estático) |
-| Pruebas | Vitest · pgTAP · Playwright |
+| Pruebas | Vitest · PGlite (base de datos sin Docker) · Playwright |
 
 ## Estructura
 
 ```
 docs/        documentación funcional y de diseño
-supabase/    migraciones, funciones, pruebas de base de datos (próxima etapa)
+supabase/    migraciones, Edge Functions y pruebas de base de datos
 src/         aplicación React organizada por funcionalidades
 src/lib/     dominio (catálogos y tipos), API, backend simulado (mock/) y formatos
 e2e/         pruebas extremo a extremo
@@ -88,8 +88,10 @@ Los datos se guardan en el navegador (`localStorage`). El docente puede volver a
 | Comando | Uso |
 |---|---|
 | `npm run dev` | Servidor de desarrollo |
-| `npm run typecheck` | Verificación de tipos |
+| `npm run -s check` | Tipos, lint, formato y todas las pruebas (incluidas las de base de datos) |
 | `npm run build` | Compilación de producción en `dist/` |
+
+Con `VITE_BACKEND=supabase` (y las variables de `.env.example`) la misma interfaz usa Supabase en lugar del backend simulado.
 
 ## Relación con GEST-AR
 
