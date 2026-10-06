@@ -168,9 +168,11 @@ export function TeacherPage() {
                 align: 'right',
                 cell: (m) => (
                   <div className="flex justify-end gap-1.5">
-                    <Button size="xs" variant="outline" onClick={() => setResetPasswordFor(m)}>
-                      <KeyRound /> Contraseña
-                    </Button>
+                    {m.user.app_role === 'ESTUDIANTE' && (
+                      <Button size="xs" variant="outline" onClick={() => setResetPasswordFor(m)}>
+                        <KeyRound /> Contraseña
+                      </Button>
+                    )}
                     <Button size="xs" variant="outline" onClick={() => setAssignFor(m)}>
                       <Plus /> Rol
                     </Button>

@@ -672,6 +672,18 @@ describe('contraseñas', () => {
     })
     expectBusinessError(() => cmdResetPassword(ctx('docente'), companyId(), outsiderId, 'nueva1234'), 'DATO_INVALIDO')
   })
+
+  it('sólo se restablece la contraseña de estudiantes: un docente no toma la cuenta de otro', () => {
+    const colleagueId = cmdCreateTeacher(ctx('admin'), {
+      first_name: 'Otra',
+      last_name: 'Colega',
+      username: 'ocolega',
+      password: 'demo1234',
+    })
+    cmdAssignRole(ctx('docente'), companyId(), colleagueId, 'DOCENTE', null)
+    expectBusinessError(() => cmdResetPassword(ctx('docente'), companyId(), colleagueId, 'tomada123'), 'SIN_PERMISO')
+    expect(db.profiles.find((p) => p.id === colleagueId)!.password).toBe('demo1234')
+  })
 })
 
 describe('administración de la escuela', () => {

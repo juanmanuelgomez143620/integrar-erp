@@ -1790,6 +1790,9 @@ export function cmdResetPassword(ctx: Ctx, companyId: string, userId: string, ne
   if (!getMember(db, userId, companyId)) fail('DATO_INVALIDO', 'El usuario no participa en esta empresa.')
   const profile = db.profiles.find((p) => p.id === userId)
   if (!profile) fail('DATO_INVALIDO', 'El usuario no existe.')
+  // Un docente no puede tomar la cuenta de otro docente (ni de soporte) por compartir una empresa.
+  if (profile.app_role !== 'ESTUDIANTE')
+    fail('SIN_PERMISO', 'Sólo se puede restablecer la contraseña de un estudiante.')
   if (newPassword.length < 6) fail('DATO_INVALIDO', 'La contraseña debe tener al menos 6 caracteres.')
   profile.password = newPassword
   profile.must_change_password = true
