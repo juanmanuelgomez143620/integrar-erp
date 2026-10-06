@@ -83,7 +83,7 @@ export function LoginPage() {
       </aside>
 
       <main className="flex items-center justify-center px-4 py-10 sm:px-8">
-        <div className="w-full max-w-xl">
+        <div className="w-full min-w-0 max-w-xl">
           <div className="mb-8 lg:hidden">
             <BrandMark />
           </div>
@@ -132,7 +132,7 @@ export function LoginPage() {
                 Tocá un usuario para entrar con su rol. Para ver la integración en vivo, abrí otra pestaña y entrá con
                 otro sector: los cambios aparecen al instante. Los datos se guardan sólo en este navegador.
               </p>
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {demo.map((u) => (
                   <button
                     key={u.username}

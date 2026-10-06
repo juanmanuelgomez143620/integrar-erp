@@ -17,7 +17,9 @@ function Tabs({ className, orientation = 'horizontal', ...props }: React.Compone
 }
 
 const tabsListVariants = cva(
-  'group/tabs-list inline-flex w-fit items-center justify-center rounded-lg p-[3px] text-muted-foreground group-data-horizontal/tabs:h-8 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none',
+  // max-w-full + overflow-x-auto: en un teléfono, si las pestañas no entran, se desplazan
+  // en vez de ensanchar la página; justify-start para poder llegar a la primera.
+  'group/tabs-list inline-flex w-fit max-w-full items-center justify-start overflow-x-auto rounded-lg p-[3px] text-muted-foreground group-data-horizontal/tabs:h-8 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none',
   {
     variants: {
       variant: {
