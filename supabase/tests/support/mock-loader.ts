@@ -12,6 +12,8 @@ const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2
 export interface LoadedMock {
   /** Id del simulador → uuid de la base. */
   pg(id: string): string
+  /** Registra que un registro creado después de la carga es el mismo en ambos lados. */
+  link(mockId: string, pgId: string): void
   /** Respuesta de la base con los ids del simulador, fechas en ISO (UTC) y números redondeados. */
   fromPg<T>(value: T): T
 }
@@ -138,6 +140,10 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
       const mapped = toPg.get(id)
       if (!mapped) throw new Error(`Id desconocido: ${id}`)
       return mapped
+    },
+    link: (mockId, pgId) => {
+      toPg.set(mockId, pgId)
+      fromPg.set(pgId, mockId)
     },
     fromPg: (value) => normalize(value, (s) => fromPg.get(s) ?? s),
   }
