@@ -3,13 +3,16 @@
 // PGlite y cada función de lectura tiene que devolver lo mismo que su
 // equivalente, para cada usuario. Así la interfaz no cambia al pasar a Supabase.
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { DB } from '../../src/lib/mock/db'
 import * as Q from '../../src/lib/mock/queries'
 import type { DocType } from '../../src/lib/domain/types'
 import { createTestDb, type TestDb } from './support/db'
 import { loadMockDb, normalize, type LoadedMock } from './support/mock-loader'
 import { buildScenario } from './support/scenario'
+
+// Cientos de llamadas por prueba: con los demás archivos de base en paralelo, 5 s no alcanzan.
+vi.setConfig({ testTimeout: 120_000 })
 
 let db: TestDb
 let mock: DB
