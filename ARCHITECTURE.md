@@ -381,22 +381,23 @@ Por decisión del 26/09/2026, la base de datos se integra después. Mientras tan
 |---|---|---|
 | Catálogos (roles, permisos, tipos y estados de documento, transiciones, reglas de tareas) | `src/lib/domain/catalog.ts` | Tablas de catálogo cargadas por migración |
 | Tipos de dominio | `src/lib/domain/types.ts` | Tablas de DATABASE.md (y tipos generados) |
-| Motor de negocio (`cmd*`) | `src/lib/mock/engine.ts` | Funciones RPC `security definer` en PL/pgSQL |
-| Consultas de lectura | `src/lib/mock/queries.ts` | Consultas con RLS y vistas `security_invoker` |
+| Motor de negocio (`cmd*`) | `src/lib/mock/engine.ts` | Funciones RPC `security definer` en PL/pgSQL (hechas) |
+| Consultas de lectura | `src/lib/mock/queries.ts` | Funciones de lectura con la misma forma, orden y permiso (hechas; paridad comprobada en `supabase/tests/reads.test.ts`) |
 | Almacenamiento con escritura "todo o nada" | `src/lib/mock/db.ts` (localStorage + copia transaccional) | Transacciones de PostgreSQL |
-| Tiempo real entre pestañas | evento `storage` del navegador | Supabase Realtime |
-| Datos demo | `src/lib/mock/seed.ts` | `seed/` + función `seed_demo_company` |
+| Tiempo real entre pestañas | evento `storage` del navegador | Sondeo cada 20 s e invalidación al operar; Realtime opcional |
+| Datos demo | `src/lib/mock/seed.ts` | Función `private.seed_demo_company` generada desde el seed (`npm run db:demo`) |
 | Actualización de datos guardados (`DB_VERSION` + `UPGRADES`) | `src/lib/mock/db.ts` | Migraciones versionadas en `supabase/migrations/` |
-| Exportaciones (`export*`: validan `*.export`, no sólo la lectura) | `src/lib/mock/queries.ts` | RPC `export_*` que validan el permiso antes de devolver filas |
+| Exportaciones (`export*`: validan `*.export`, no sólo la lectura) | `src/lib/mock/queries.ts` | RPC `export_rows` que valida el permiso antes de devolver filas |
 | Datos públicos de la escuela antes de ingresar (`publicSchoolInfo`) | `src/lib/mock/queries.ts` | Función pública que devuelve sólo nombre oficial y corto |
 | Datos de la escuela (`cmdUpdateSchoolSettings`, sólo ADMIN/SUPERADMIN) | `src/lib/mock/engine.ts` | RPC `school_settings_update` |
+| Altas de cuentas y contraseñas de otros (`cmdCreateStudent*`, `cmdCreateTeacher`, `cmdResetPassword`) | `src/lib/mock/engine.ts` | Edge Function `admin-users` (API de administración de Auth) + RPC de validación y registro |
 | Cierre de sesión por inactividad (`session_timeout_minutes`) | `src/app/idle-logout.tsx` | Igual en la interfaz; además vencimiento de la sesión de Auth |
-| **Contrato para la interfaz** | `src/lib/api/index.ts` (`api`, `commands`, `auth`, `realtime`) | Se mantiene: sólo cambia su implementación |
+| **Contrato para la interfaz** | `src/lib/api/index.ts` (`api`, `commands`, `auth`, `realtime`) | Se mantiene; con `VITE_BACKEND=supabase` lo implementa `src/lib/api/supabase.ts` |
 
 Reglas para que la migración sea directa:
 1. La interfaz **sólo** usa `src/lib/api`; nunca importa `mock/` directamente.
 2. Cada `cmd*` del motor se traduce 1:1 a una RPC con el mismo nombre (`cmdApprovePurchaseOrder` → `po_approve`) y los mismos códigos de error de negocio.
-3. El motor ya valida permisos, estados y separación de funciones como lo hará la base: sirve de **especificación ejecutable** para escribir las RPC y sus pruebas pgTAP.
+3. El motor ya valida permisos, estados y separación de funciones como lo hará la base: sirve de **especificación ejecutable** para escribir las RPC y sus pruebas (en PGlite, no pgTAP: la PC de desarrollo no tiene Docker; ver `supabase/README.md`).
 4. El backend simulado **no es seguro** (todo corre en el navegador): es sólo para desarrollo y demostración, nunca para uso real con estudiantes.
 
 ---

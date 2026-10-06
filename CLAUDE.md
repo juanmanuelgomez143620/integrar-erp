@@ -17,7 +17,8 @@ ERP educativo de la familia GEST-AR para 4.º–6.º año de la ENS N.º 9 (orie
 
 ## Mapa del código
 
-- `src/lib/api/index.ts`: único contrato de la interfaz (`api`, `commands`, `auth`, `realtime`). Con Supabase, cada `command` será una RPC con el mismo nombre y forma.
+- `src/lib/api/index.ts`: único contrato de la interfaz (`api`, `commands`, `auth`, `realtime`). Implementa la demostración (simulador) y, con `VITE_BACKEND=supabase`, usa `supabase.ts` (RPC, Auth y Edge Function por `fetch`, misma forma de datos).
+- `supabase/`: migraciones (escrituras y lecturas como RPC), Edge Function `admin-users` y pruebas en PGlite. Ver `supabase/README.md`. Si cambia una consulta o un comando del simulador, cambia su función SQL (las pruebas de paridad fallan si no).
 - `src/lib/mock/engine.ts`: motor de negocio. Cada `cmd*` equivale a una RPC: valida permiso, estado y separación de funciones; mueve stock con PPP; registra tareas, notificaciones y auditoría.
 - `src/lib/mock/queries.ts`: modelos de lectura (futuras consultas con RLS). Los `export*` exigen el permiso `*.export`.
 - `src/lib/mock/db.ts`: almacenamiento local con `DB_VERSION` y `upgradeDatabase` (pasos `UPGRADES`). `seed.ts`: datos demo (`buildSeed()`).
@@ -52,4 +53,6 @@ ERP educativo de la familia GEST-AR para 4.º–6.º año de la ENS N.º 9 (orie
 - `main`: calidad base (ESLint, Prettier, Vitest, CI) + contraseñas, perfil y `/admin` (Tareas 1 y 2-P0 de `docs/PROMPT_CONTINUACION.md`).
 - Rama `mejoras/pendientes-mvp` (03/10/2026, sin mergear ni subir): página de notificaciones, exportación CSV con permiso `*.export`, datos de la escuela en `/admin/escuela`, cierre de sesión por inactividad, carga diferida de pantallas, alta masiva de estudiantes (H-21), crear empresa desde la plantilla (H-20) y etiquetas accesibles en formularios. 63 pruebas.
 - Supabase: proyecto de desarrollo `sapsimulado` (ref `iullbntntmfvsodrqjze`, organización "juanmanuelgomez143620's Org"). Claves públicas en `.env.local`. MCP limitado a ese proyecto en `.mcp.json` (`supabase-integrar`); necesita iniciar sesión con `/mcp`. Pendiente: desactivar el registro público en Auth.
-- Siguiente: Tarea 5 (migraciones, RLS, una RPC por `cmd*`, pgTAP y adaptador). Todo lo P0 de la interfaz está hecho. Tarea 4: revisar 1366/768/375 px y contraste.
+- Rama `mejoras/supabase-base` (sobre `pendientes-mvp`, sin mergear ni subir; worktree en `C:\Proyectos\GESTAR-ERP-supabase`): Tarea 5 completa sin conexión: migraciones con RLS, una RPC por `cmd*`, una función de lectura por consulta (paridad comprobada contra el simulador), plantilla y empresas por curso, Edge Function de cuentas y adaptador de la interfaz. 176 pruebas (PGlite en vez de pgTAP: no hay Docker).
+- Rama `mejoras/revision-modulos` (en `C:\Proyectos\GESTAR-ERP`, cambios SIN commitear de otra sesión: validaciones del simulador y la interfaz). Al integrarla, ajustar las lecturas SQL a su nueva semántica (stock sin `stock.read`, tablero filtrado por permiso, saldo disponible de una SC) hasta que `reads.test.ts` pase.
+- Siguiente: aplicar las migraciones al proyecto y desplegar la función (pasos en `supabase/README.md`), prueba de humo con `VITE_BACKEND=supabase`. Tarea 4: revisar 1366/768/375 px y contraste.

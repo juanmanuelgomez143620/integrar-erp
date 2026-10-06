@@ -1,15 +1,17 @@
-// Capa de acceso a datos de la interfaz.
+// Capa de acceso a datos de la interfaz: el único contrato que usan las pantallas.
 //
-// HOY: usa el backend simulado del navegador (src/lib/mock).
-// CON SUPABASE: cada `query` pasará a ser una consulta con RLS y cada
-// `command` una llamada `supabase.rpc(...)` con el mismo nombre y forma de
-// datos. La interfaz no cambia.
+// Dos implementaciones con la misma forma de datos (ver el final del archivo):
+// - la demostración: backend simulado del navegador (src/lib/mock), definido acá;
+// - Supabase (supabase.ts), con VITE_BACKEND=supabase: funciones SQL que
+//   devuelven lo mismo que queries.ts (supabase/tests/reads.test.ts).
 
+import { DEFAULT_AUTH_EMAIL_DOMAIN } from '../domain/accounts'
 import type * as T from '../domain/types'
 import { onDatabaseChange, read, resetDatabase, transact, type DB } from '../mock/db'
 import * as E from '../mock/engine'
 import * as Q from '../mock/queries'
 import { DEMO_PASSWORD } from '../mock/seed'
+import { createSupabaseBackend, type SupabaseConfig } from './supabase'
 
 export { BusinessError } from '../mock/engine'
 export type {
@@ -45,7 +47,7 @@ export type {
 
 const SESSION_KEY = 'integrar-erp.session'
 
-export function currentUserId(): string | null {
+function mockSessionUserId(): string | null {
   try {
     return sessionStorage.getItem(SESSION_KEY)
   } catch {
@@ -60,7 +62,7 @@ export function currentUserId(): string | null {
  * pedido, no recién cuando vuelva a ingresar.
  */
 function requireActiveUser(db: DB): string {
-  const id = currentUserId()
+  const id = mockSessionUserId()
   if (!id) throw new E.BusinessError('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
   const profile = db.profiles.find((p) => p.id === id)
   if (!profile || !profile.is_active) {
@@ -84,7 +86,7 @@ async function command<R>(fn: (ctx: E.Ctx) => R): Promise<R> {
 
 // ------------------------------------------------------------ Autenticación
 
-export const auth = {
+const mockAuth = {
   async login(username: string, password: string) {
     await wait(250)
     const name = username.trim().toLowerCase()
@@ -98,7 +100,7 @@ export const auth = {
   },
   /** Acceso rápido de demostración (sólo backend simulado). */
   loginAs(username: string) {
-    return auth.login(username, DEMO_PASSWORD)
+    return mockAuth.login(username, DEMO_PASSWORD)
   },
   logout() {
     sessionStorage.removeItem(SESSION_KEY)
@@ -115,7 +117,7 @@ export const auth = {
 
 // ------------------------------------------------------------ Consultas
 
-export const api = {
+const mockApi = {
   me: () => query(Q.meContext),
   companyContext: (slug: string) => query((db, u) => Q.companyContext(db, u, slug)),
   customers: (companyId: string) => query((db, u) => Q.listCustomers(db, u, companyId)),
@@ -150,7 +152,7 @@ export const api = {
 
 // ------------------------------------------------------------ Comandos (futuras RPC)
 
-export const commands = {
+const mockCommands = {
   createRequisition: (companyId: string, input: E.RequisitionInput, submit: boolean) =>
     command((c) => E.cmdCreateRequisition(c, companyId, input, submit)),
   updateRequisition: (docId: string, input: E.RequisitionInput) =>
@@ -220,5 +222,32 @@ export const commands = {
   },
 }
 
-/** Suscripción a cambios (hoy: otras pestañas; con Supabase: Realtime). */
-export const realtime = { subscribe: onDatabaseChange }
+/** Suscripción a cambios: en la demostración, los de otras pestañas del navegador. */
+const mockRealtime = { subscribe: onDatabaseChange }
+
+// ------------------------------------------------------------ Backend elegido
+
+export type Auth = typeof mockAuth
+export type Api = typeof mockApi
+export type Commands = typeof mockCommands
+export type Realtime = typeof mockRealtime
+
+/**
+ * Con VITE_BACKEND=supabase la aplicación usa Supabase (supabase.ts); si no,
+ * el backend simulado del navegador, que es la demostración pública.
+ */
+function supabaseConfig(): SupabaseConfig {
+  const { VITE_SUPABASE_URL: url, VITE_SUPABASE_PUBLISHABLE_KEY: key, VITE_AUTH_EMAIL_DOMAIN: domain } = import.meta.env
+  if (!url || !key) throw new Error('Para usar Supabase faltan VITE_SUPABASE_URL y VITE_SUPABASE_PUBLISHABLE_KEY.')
+  return { url, publishableKey: key, emailDomain: domain || DEFAULT_AUTH_EMAIL_DOMAIN }
+}
+
+const real = import.meta.env.VITE_BACKEND === 'supabase' ? createSupabaseBackend(supabaseConfig()) : null
+
+/** true en la demostración (datos en el navegador, accesos rápidos y reinicio de datos). */
+export const isDemo = !real
+export const currentUserId: () => string | null = real?.currentUserId ?? mockSessionUserId
+export const auth: Auth = real?.auth ?? mockAuth
+export const api: Api = real?.api ?? mockApi
+export const commands: Commands = real?.commands ?? mockCommands
+export const realtime: Realtime = real?.realtime ?? mockRealtime

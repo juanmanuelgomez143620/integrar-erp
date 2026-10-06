@@ -1,0 +1,379 @@
+// Backend real: Supabase, con el mismo contrato que el simulado (index.ts).
+//
+// Cada consulta es una función de lectura SQL que devuelve exactamente lo
+// mismo que su equivalente de queries.ts (supabase/tests/reads.test.ts lo
+// compara) y cada comando, la RPC equivalente del motor. Las cuentas (altas y
+// contraseñas de otros) pasan por la Edge Function "admin-users". Sin
+// dependencias: fetch a PostgREST, a Auth y a la función.
+//
+// La actualización entre sectores es por sondeo: "invalidación al operar +
+// sondeo; Realtime opcional" (ARCHITECTURE.md §2).
+
+import { accountEmail } from '../domain/accounts'
+import { BusinessError } from '../mock/engine'
+import type { Api, Auth, Commands, Realtime } from './index'
+
+export interface SupabaseConfig {
+  url: string
+  publishableKey: string
+  emailDomain: string
+  /** Para pruebas: fetch y almacenamiento propios. */
+  fetch?: typeof fetch
+  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+  /** Cada cuánto se vuelven a leer los datos de la pantalla (ms). */
+  pollMs?: number
+}
+
+interface Session {
+  access_token: string
+  refresh_token: string
+  /** Vencimiento del token de acceso (segundos desde 1970). */
+  expires_at: number
+  user_id: string
+  email: string
+}
+
+interface TokenResponse {
+  access_token: string
+  refresh_token: string
+  expires_in: number
+  expires_at?: number
+  user: { id: string; email: string }
+}
+
+// Una sesión por pestaña, igual que el simulado: cerrar el navegador de una
+// computadora compartida termina la sesión.
+const SESSION_KEY = 'integrar-erp.supabase.session'
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
+
+/** Fechas con hora en el mismo formato que el simulador (toISOString, en UTC). */
+export function normalizeTimestamps<V>(value: V): V {
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return TIMESTAMP.test(v) ? new Date(v).toISOString() : v
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))
+    return v
+  }
+  return walk(value) as V
+}
+
+const sessionEnded = () => new BusinessError('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
+
+export function createSupabaseBackend(config: SupabaseConfig) {
+  const http: typeof fetch = config.fetch ?? ((input, init) => fetch(input, init))
+  const storage = config.storage ?? sessionStorage
+  const base = config.url.replace(/\/+$/, '')
+  const json = { apikey: config.publishableKey, 'Content-Type': 'application/json' }
+
+  function readSession(): Session | null {
+    try {
+      const raw = storage.getItem(SESSION_KEY)
+      return raw ? (JSON.parse(raw) as Session) : null
+    } catch {
+      return null
+    }
+  }
+
+  function writeSession(session: Session | null) {
+    try {
+      if (session) storage.setItem(SESSION_KEY, JSON.stringify(session))
+      else storage.removeItem(SESSION_KEY)
+    } catch {
+      // Sin almacenamiento: la sesión dura lo que la página.
+    }
+  }
+
+  const toSession = (t: TokenResponse): Session => ({
+    access_token: t.access_token,
+    refresh_token: t.refresh_token,
+    expires_at: t.expires_at ?? Math.floor(Date.now() / 1000) + t.expires_in,
+    user_id: t.user.id,
+    email: t.user.email,
+  })
+
+  async function send(path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await http(`${base}${path}`, init)
+    } catch {
+      throw new BusinessError('SIN_CONEXION', 'No hay conexión con el servidor. Revisá la red y volvé a intentar.')
+    }
+  }
+
+  async function body(res: Response) {
+    const text = await res.text()
+    if (!text) return null
+    try {
+      return JSON.parse(text)
+    } catch {
+      return text
+    }
+  }
+
+  async function passwordGrant(email: string, password: string) {
+    return send('/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ email, password }),
+    })
+  }
+
+  // Varias consultas pueden encontrar el token vencido a la vez: se renueva una sola vez.
+  let refreshing: Promise<Session | null> | null = null
+  function refresh(session: Session): Promise<Session | null> {
+    refreshing ??= (async () => {
+      try {
+        const res = await send('/auth/v1/token?grant_type=refresh_token', {
+          method: 'POST',
+          headers: json,
+          body: JSON.stringify({ refresh_token: session.refresh_token }),
+        })
+        const next = res.ok ? toSession(await res.json()) : null
+        writeSession(next)
+        return next
+      } finally {
+        refreshing = null
+      }
+    })()
+    return refreshing
+  }
+
+  async function activeSession(): Promise<Session> {
+    let session = readSession()
+    if (session && session.expires_at - Date.now() / 1000 < 60) session = await refresh(session)
+    if (!session) throw sessionEnded()
+    return session
+  }
+
+  /** Pedido con la sesión del usuario; si el token venció en el camino, se renueva y se reintenta una vez. */
+  async function authorized(path: string, init: RequestInit): Promise<Response> {
+    let session = await activeSession()
+    const go = (s: Session) =>
+      send(path, { ...init, headers: { ...json, ...init.headers, Authorization: `Bearer ${s.access_token}` } })
+    let res = await go(session)
+    if (res.status === 401) {
+      const renewed = await refresh(session)
+      if (!renewed) throw sessionEnded()
+      session = renewed
+      res = await go(session)
+    }
+    return res
+  }
+
+  function failure(status: number, data: { code?: string; details?: string; message?: string; hint?: string } | null) {
+    // Errores de negocio de las RPC: código en "details" (ARCHITECTURE.md §7.4).
+    if (data?.code === 'P0001')
+      return new BusinessError(data.details || 'ERROR', data.message ?? '', data.hint || undefined)
+    if (status === 401) return sessionEnded()
+    return new Error(data?.message ?? `El servidor respondió con el error ${status}.`)
+  }
+
+  async function rpc<R>(fn: string, args: Record<string, unknown> = {}): Promise<R> {
+    const res = await authorized(`/rest/v1/rpc/${fn}`, { method: 'POST', body: JSON.stringify(args) })
+    const data = await body(res)
+    if (!res.ok) {
+      const error = failure(res.status, data)
+      if (error instanceof BusinessError && (error.code === 'SIN_SESION' || error.code === 'USUARIO_INACTIVO'))
+        writeSession(null)
+      throw error
+    }
+    return normalizeTimestamps(data) as R
+  }
+
+  /** Edge Function "admin-users": cuentas de Auth (sólo con la clave de servicio, en el servidor). */
+  async function accounts<R>(action: string, payload: Record<string, unknown>): Promise<R> {
+    const res = await authorized('/functions/v1/admin-users', {
+      method: 'POST',
+      body: JSON.stringify({ action, ...payload }),
+    })
+    const data = await body(res)
+    if (res.ok) return data as R
+    if (data?.code && data?.message) throw new BusinessError(data.code, data.message, data.hint || undefined)
+    throw failure(res.status, data)
+  }
+
+  const notAvailable = (what: string) => new BusinessError('NO_DISPONIBLE', `${what} sólo existe en la demostración.`)
+
+  // ------------------------------------------------------------ Autenticación
+
+  const auth: Auth = {
+    async login(username: string, password: string) {
+      const res = await passwordGrant(accountEmail(username, config.emailDomain), password)
+      if (!res.ok) {
+        if (res.status === 429)
+          throw new BusinessError('DEMASIADOS_INTENTOS', 'Demasiados intentos. Esperá un momento y volvé a probar.')
+        throw new BusinessError('CREDENCIALES', 'Usuario o contraseña incorrectos.')
+      }
+      const session = toSession(await res.json())
+      writeSession(session)
+      // Igual que el simulador: un usuario desactivado no entra (USUARIO_INACTIVO cierra la sesión).
+      await rpc('my_context')
+      return session.user_id
+    },
+    async loginAs(_username: string) {
+      throw notAvailable('El acceso rápido')
+    },
+    logout() {
+      const session = readSession()
+      writeSession(null)
+      if (session)
+        void send('/auth/v1/logout', {
+          method: 'POST',
+          headers: { ...json, Authorization: `Bearer ${session.access_token}` },
+        }).catch(() => {})
+    },
+    demoUsers: () => [],
+    async schoolInfo() {
+      const res = await send('/rest/v1/rpc/public_school_info', { method: 'POST', headers: json, body: '{}' })
+      const data = await body(res)
+      if (!res.ok) throw failure(res.status, data)
+      return data
+    },
+  }
+
+  // ------------------------------------------------------------ Consultas
+
+  const company = (companyId: string) => ({ p_company_id: companyId })
+
+  const api: Api = {
+    me: () => rpc('my_context'),
+    companyContext: (slug) => rpc('company_context', { p_slug: slug }),
+    customers: (companyId) => rpc('customers_list', company(companyId)),
+    suppliers: (companyId) => rpc('suppliers_list', company(companyId)),
+    products: (companyId) => rpc('products_list', company(companyId)),
+    product: (companyId, code) => rpc('product_detail', { ...company(companyId), p_code: code }),
+    stock: (companyId) => rpc('stock_list', company(companyId)),
+    documents: (companyId, docType) => rpc('documents_list', { ...company(companyId), p_doc_type: docType }),
+    document: (companyId, docType, number) =>
+      rpc('document_detail', { ...company(companyId), p_doc_type: docType, p_display_number: number }),
+    documentById: (docId) => rpc('document_detail_by_id', { p_document_id: docId }),
+    pendingRequisitionLines: (companyId) => rpc('requisition_lines_pending', company(companyId)),
+    receivableOrders: (companyId) => rpc('orders_receivable', company(companyId)),
+    tasks: (companyId, scope, includeClosed = false) =>
+      rpc('tasks_list', { ...company(companyId), p_scope: scope, p_include_closed: includeClosed }),
+    notifications: (companyId, limit = 60) => rpc('notifications_list', { ...company(companyId), p_limit: limit }),
+    audit: (companyId) => rpc('audit_list', company(companyId)),
+    dashboard: (companyId) => rpc('dashboard', company(companyId)),
+    members: (companyId) => rpc('members_list', company(companyId)),
+    users: () => rpc('users_list'),
+    courses: () => rpc('courses_list'),
+    teachers: () => rpc('teachers_list'),
+
+    exportCustomers: (companyId) => rpc('export_rows', { ...company(companyId), p_kind: 'customers' }),
+    exportSuppliers: (companyId) => rpc('export_rows', { ...company(companyId), p_kind: 'suppliers' }),
+    exportProducts: (companyId) => rpc('export_rows', { ...company(companyId), p_kind: 'products' }),
+    exportStock: (companyId) => rpc('export_rows', { ...company(companyId), p_kind: 'stock' }),
+    exportAudit: (companyId) => rpc('export_rows', { ...company(companyId), p_kind: 'audit' }),
+  }
+
+  // ------------------------------------------------------------ Comandos
+
+  const doc = (docId: string) => ({ p_document_id: docId })
+
+  const commands: Commands = {
+    createRequisition: (companyId, input, submit) =>
+      rpc('pr_create', { ...company(companyId), p_input: input, p_submit: submit }),
+    updateRequisition: (docId, input) => rpc('pr_update', { ...doc(docId), p_input: input }),
+    submitRequisition: (docId) => rpc('pr_submit', doc(docId)),
+    rejectRequisition: (docId, reason) => rpc('pr_reject', { ...doc(docId), p_reason: reason }),
+    cancelRequisition: (docId, reason) => rpc('pr_cancel', { ...doc(docId), p_reason: reason }),
+    closeRequisition: (docId, reason) => rpc('pr_close', { ...doc(docId), p_reason: reason }),
+
+    createPurchaseOrder: (companyId, input) => rpc('po_create', { ...company(companyId), p_input: input }),
+    updatePurchaseOrder: (docId, input) => rpc('po_update', { ...doc(docId), p_input: input }),
+    submitPurchaseOrder: (docId) => rpc('po_submit', doc(docId)),
+    approvePurchaseOrder: (docId, comment) => rpc('po_approve', { ...doc(docId), p_comment: comment }),
+    rejectPurchaseOrder: (docId, reason) => rpc('po_reject', { ...doc(docId), p_reason: reason }),
+    withdrawPurchaseOrder: (docId) => rpc('po_withdraw', doc(docId)),
+    reopenPurchaseOrder: (docId) => rpc('po_reopen', doc(docId)),
+    sendPurchaseOrder: (docId) => rpc('po_send', doc(docId)),
+    cancelPurchaseOrder: (docId, reason) => rpc('po_cancel', { ...doc(docId), p_reason: reason }),
+    closePurchaseOrder: (docId, reason) => rpc('po_close', { ...doc(docId), p_reason: reason }),
+
+    createGoodsReceipt: (companyId, input, confirm) =>
+      rpc('gr_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    confirmGoodsReceipt: (docId) => rpc('gr_confirm', doc(docId)),
+    cancelGoodsReceipt: (docId, reason) => rpc('gr_cancel', { ...doc(docId), p_reason: reason }),
+
+    createStockAdjustment: (companyId, input, confirm) =>
+      rpc('sa_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    confirmStockAdjustment: (docId) => rpc('sa_confirm', doc(docId)),
+    cancelStockAdjustment: (docId, reason) => rpc('sa_cancel', { ...doc(docId), p_reason: reason }),
+
+    saveMaster: (kind, companyId, input) => rpc('master_save', { p_kind: kind, ...company(companyId), p_data: input }),
+    setMasterActive: (kind, companyId, id, active) =>
+      rpc('master_set_active', { p_kind: kind, ...company(companyId), p_id: id, p_active: active }),
+
+    claimTask: (taskId, claim) => rpc('task_claim', { p_task_id: taskId, p_claim: claim }),
+    markNotificationsRead: (companyId, ids) =>
+      rpc('notifications_mark_read', { ...company(companyId), p_ids: ids === 'all' ? null : ids }),
+
+    assignRole: (companyId, userId, role, sectorId) =>
+      rpc('member_assign_role', { ...company(companyId), p_user_id: userId, p_role: role, p_sector_id: sectorId }),
+    removeRole: (companyId, memberRoleId) =>
+      rpc('member_remove_role', { ...company(companyId), p_member_role_id: memberRoleId }),
+    createStudent: async (companyId, input) =>
+      (await accounts<{ id: string }>('create_student', { company_id: companyId, ...input })).id,
+    createStudentsBulk: (companyId, rows) => accounts('create_students_bulk', { company_id: companyId, rows }),
+    resetPassword: async (companyId, userId, newPassword) => {
+      await accounts('reset_password', { company_id: companyId, user_id: userId, password: newPassword })
+    },
+    setModule: (companyId, module, enabled) =>
+      rpc('company_set_module', { ...company(companyId), p_module: module, p_enabled: enabled }),
+    updateCompanySettings: (companyId, settings) =>
+      rpc('company_update_settings', { ...company(companyId), p_settings: settings }),
+
+    // Cambio de la propia contraseña (cmdChangePassword): lo hace Auth con la sesión del usuario.
+    async changePassword(input) {
+      const session = await activeSession()
+      const check = await passwordGrant(session.email, input.current_password)
+      if (!check.ok) throw new BusinessError('DATO_INVALIDO', 'La contraseña actual no coincide.')
+      // La verificación abre una sesión nueva (recién autenticada): se usa para el cambio.
+      writeSession(toSession(await check.json()))
+      if (input.new_password.length < 6)
+        throw new BusinessError('DATO_INVALIDO', 'La contraseña nueva debe tener al menos 6 caracteres.')
+      if (input.new_password === input.current_password)
+        throw new BusinessError('DATO_INVALIDO', 'Elegí una contraseña distinta de la actual.')
+      const res = await authorized('/auth/v1/user', {
+        method: 'PUT',
+        body: JSON.stringify({ password: input.new_password }),
+      })
+      if (!res.ok) {
+        const data = await body(res)
+        throw new BusinessError('DATO_INVALIDO', data?.msg ?? data?.message ?? 'No se pudo cambiar la contraseña.')
+      }
+      await rpc('profile_password_changed')
+    },
+    createTeacher: async (input) => (await accounts<{ id: string }>('create_teacher', { ...input })).id,
+    createCourse: (input) =>
+      rpc('course_create', {
+        p_academic_year: input.academic_year,
+        p_name: input.name,
+        p_orientation: input.orientation,
+      }),
+    updateSchoolSettings: (input) => rpc('school_settings_update', { p_settings: input }),
+    createCompanyFromTemplate: (courseId) => rpc('company_create_from_template', { p_course_id: courseId }),
+
+    async resetDemoData() {
+      throw notAvailable('El reinicio de los datos')
+    },
+  }
+
+  // ------------------------------------------------------------ Actualización
+
+  const realtime: Realtime = {
+    subscribe(fn) {
+      if (typeof window === 'undefined' || typeof document === 'undefined') return () => {}
+      const tick = () => {
+        if (document.visibilityState === 'visible') fn()
+      }
+      const timer = window.setInterval(tick, config.pollMs ?? 20_000)
+      document.addEventListener('visibilitychange', tick)
+      return () => {
+        window.clearInterval(timer)
+        document.removeEventListener('visibilitychange', tick)
+      }
+    },
+  }
+
+  return { auth, api, commands, realtime, currentUserId: () => readSession()?.user_id ?? null }
+}

@@ -124,39 +124,41 @@ export function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-10">
-            <div className="flex items-center gap-2 text-sm font-semibold text-navy">Accesos de demostración</div>
-            <p className="mt-1 flex gap-1.5 text-xs text-muted-foreground">
-              <Info className="mt-0.5 size-3.5 shrink-0" />
-              Tocá un usuario para entrar con su rol. Para ver la integración en vivo, abrí otra pestaña y entrá con
-              otro sector: los cambios aparecen al instante. Los datos se guardan sólo en este navegador.
-            </p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {demo.map((u) => (
-                <button
-                  key={u.username}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => run(() => loginAs(u.username))}
-                  className="group flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:border-brand-blue/50 hover:bg-brand-blue-soft/50 disabled:opacity-60"
-                >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-blue-soft text-xs font-bold text-brand-blue">
-                    {u.island ?? (u.app_role === 'DOCENTE' ? 'D' : 'A')}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{u.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {u.role_label in ROLES ? ROLES[u.role_label as keyof typeof ROLES].name : u.role_label}
-                      {u.island ? ` · Isla ${u.island} ${ISLANDS[u.island]}` : ''}
+          {demo.length > 0 && (
+            <div className="mt-10">
+              <div className="flex items-center gap-2 text-sm font-semibold text-navy">Accesos de demostración</div>
+              <p className="mt-1 flex gap-1.5 text-xs text-muted-foreground">
+                <Info className="mt-0.5 size-3.5 shrink-0" />
+                Tocá un usuario para entrar con su rol. Para ver la integración en vivo, abrí otra pestaña y entrá con
+                otro sector: los cambios aparecen al instante. Los datos se guardan sólo en este navegador.
+              </p>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {demo.map((u) => (
+                  <button
+                    key={u.username}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => run(() => loginAs(u.username))}
+                    className="group flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:border-brand-blue/50 hover:bg-brand-blue-soft/50 disabled:opacity-60"
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-blue-soft text-xs font-bold text-brand-blue">
+                      {u.island ?? (u.app_role === 'DOCENTE' ? 'D' : 'A')}
                     </span>
-                  </span>
-                  <span className="font-mono text-[11px] text-muted-foreground group-hover:text-brand-blue">
-                    {u.username}
-                  </span>
-                </button>
-              ))}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{u.name}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {u.role_label in ROLES ? ROLES[u.role_label as keyof typeof ROLES].name : u.role_label}
+                        {u.island ? ` · Isla ${u.island} ${ISLANDS[u.island]}` : ''}
+                      </span>
+                    </span>
+                    <span className="font-mono text-[11px] text-muted-foreground group-hover:text-brand-blue">
+                      {u.username}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </main>
     </div>
