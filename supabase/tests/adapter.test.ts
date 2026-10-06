@@ -3,6 +3,8 @@
 // (con el mismo resultado que el simulador), cada comando contra su RPC o la
 // Edge Function, y los errores tal como los muestra la interfaz.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createSupabaseBackend, normalizeTimestamps } from '../../src/lib/api/supabase'
 import type { DB } from '../../src/lib/mock/db'
@@ -473,6 +475,40 @@ describe('comandos: maestros, tareas, avisos, panel docente y escuela', () => {
     const created = await docente.commands.createCompanyFromTemplate(course)
     expect(created.slug).toBe('forestal-del-norte-5-b-2027')
     expect(await businessCode(docente.commands.resetDemoData())).toBe('NO_DISPONIBLE')
+  })
+})
+
+describe('contrato', () => {
+  it('cada RPC que usa el adaptador existe en la base, con esos parámetros', async () => {
+    const source = readFileSync(join(import.meta.dirname, '../../src/lib/api/supabase.ts'), 'utf8')
+    // rpc('nombre', { p_a: …, ...company(x), p_b: … }) → nombre y claves p_*; company() y doc() aportan p_company_id y p_document_id.
+    const calls = [...source.matchAll(/rpc(?:<[^>]*>)?\('(\w+)'(?:,\s*([^)]*\)?[^)]*))?\)/g)].map((m) => {
+      const args = m[2] ?? ''
+      const keys = new Set([...args.matchAll(/\b(p_\w+)\s*:/g)].map((k) => k[1]))
+      if (/company\(/.test(args)) keys.add('p_company_id')
+      if (/doc\(/.test(args)) keys.add('p_document_id')
+      return { fn: m[1], keys: [...keys] }
+    })
+    expect(calls.length).toBeGreaterThan(50)
+    for (const { fn, keys } of calls) {
+      const params = await db.admin<{ name: string }>(
+        `select p.parameter_name as name
+           from information_schema.routines r
+           join information_schema.parameters p on p.specific_schema = r.specific_schema and p.specific_name = r.specific_name
+          where r.routine_schema = 'public' and r.routine_name = $1 and p.parameter_mode = 'IN'`,
+        [fn],
+      )
+      const routine = await db.admin(
+        `select 1 from information_schema.routines where routine_schema = 'public' and routine_name = $1`,
+        [fn],
+      )
+      expect(routine.length, `public.${fn} no existe`).toBe(1)
+      for (const key of keys)
+        expect(
+          params.map((p) => p.name),
+          `public.${fn}(${key})`,
+        ).toContain(key)
+    }
   })
 })
 
