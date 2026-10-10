@@ -5,6 +5,7 @@ Sos el agente de desarrollo de **INTEGR-AR**, un ERP educativo de la familia GES
 ## 0. Dónde trabajar (importante)
 
 - Abrí OpenCode en **`C:\Proyectos\GESTAR-ERP-supabase`**. Es un *git worktree* con la rama `mejoras/supabase-base`, que tiene el trabajo más avanzado. Su `node_modules` es un enlace a la carpeta principal: no lo borres ni corras `npm ci` ni `npm install` ahí.
+- Trabajá desde Windows (PowerShell), no desde WSL: `node_modules` tiene binarios de Windows y en Linux las pruebas no arrancan. Si estás en WSL, no instales nada para "arreglarlo" (pisarías la instalación de la carpeta principal): avisale al usuario.
 - **No toques `C:\Proyectos\GESTAR-ERP`** (la carpeta principal). Está en la rama `mejoras/revision-modulos` con cambios SIN commitear de otra sesión: no los descartes, no los commitees y no hagas `checkout` ni `stash` ahí. Qué hacer con ellos lo decide el usuario (tarea 2).
 - OpenCode carga `CLAUDE.md` como instrucciones del proyecto (no hay `AGENTS.md`). Donde `CLAUDE.md` nombra *skills* o herramientas de Claude Code (`retomar`, `verificar`, `/mcp`, `.mcp.json`), aplicá su contenido a mano: está resumido en este documento.
 
@@ -14,7 +15,7 @@ Si tenés el agente de planificación (Tab en OpenCode), usalo hasta terminar es
 
 1. En PowerShell: `git branch --show-current; git status --short; git log --oneline -15`.
 2. Leé `CLAUDE.md` completo y `supabase/README.md`. No leas completos ARCHITECTURE.md, DATABASE.md, MVP.md ni ROADMAP.md: buscá los títulos (`^#{2,3} `) y leé sólo la sección que necesites.
-3. Corré `npm run -s check` (tipos, ESLint, Prettier y todas las pruebas). Tarda entre 1 y 3 minutos: no lo cortes. Tiene que dar **180 pruebas en verde**. Si falla, eso es lo primero.
+3. Corré `npm run -s check` (tipos, ESLint, Prettier y todas las pruebas). Tarda entre 1 y 3 minutos: no lo cortes. Tiene que dar **180 pruebas en verde**. Si falla, eso es lo primero. Si tu herramienta de terminal corta los comandos a los 2 minutos, pedile más tiempo (10 minutos) o corré por partes: `npx tsc --noEmit`, `npx eslint .`, `npx prettier --check .`, `npx vitest run src` y `npx vitest run supabase/tests`.
 4. Contale al usuario, en 3 a 6 líneas, dónde quedó el trabajo, qué vas a hacer y qué decisiones le tocan.
 
 ## 2. El proyecto en una página
