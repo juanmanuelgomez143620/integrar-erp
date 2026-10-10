@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { GraduationCap, LogOut, Plus } from 'lucide-react'
+import { Building2, GraduationCap, LogOut, Plus, RotateCcw, UserRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -14,7 +14,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { DataTable } from '@/components/common/data-table'
-import { EmptyState, Field, Loading } from '@/components/common/blocks'
+import { EmptyState, Field, Loading, Section } from '@/components/common/blocks'
+import { ActionDialog } from '@/components/common/dialogs'
 import { PageHeader } from '@/components/common/page-header'
 import { BrandMark } from '@/components/common/brand'
 import { api, commands } from '@/lib/api'
@@ -42,6 +43,14 @@ export function AdminPage() {
   const tab = (Object.keys(TAB_PATHS) as AdminTab[]).find((t) => TAB_PATHS[t] === pathname) ?? 'teachers'
   const [newTeacher, setNewTeacher] = useState(false)
   const [newCourse, setNewCourse] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const reset = useCommand(commands.resetDemoData, {
+    success: 'Instancia local reiniciada. Ingresá con un usuario de demostración.',
+    onSuccess: () => {
+      logout()
+      navigate('/login', { replace: true })
+    },
+  })
   const allowed = me?.user.app_role === 'ADMIN' || me?.user.app_role === 'SUPERADMIN'
   const teachers = useQuery({ queryKey: ['teachers'], queryFn: api.teachers, enabled: allowed })
   const courses = useQuery({ queryKey: ['courses'], queryFn: api.courses, enabled: allowed })
@@ -61,11 +70,25 @@ export function AdminPage() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <BrandMark />
-        <Button variant="ghost" size="sm" onClick={logout}>
-          <LogOut /> Salir
-        </Button>
+        <div className="flex flex-wrap gap-1">
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/perfil">
+              <UserRound /> Mi perfil
+            </Link>
+          </Button>
+          {(me.user.app_role === 'SUPERADMIN' || me.memberships.length > 0) && (
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/empresas">
+                <Building2 /> Empresas
+              </Link>
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={logout}>
+            <LogOut /> Salir
+          </Button>
+        </div>
       </div>
       <div className="mt-6">
         <PageHeader
@@ -123,8 +146,8 @@ export function AdminPage() {
             ]}
           />
           <p className="mt-2 text-xs text-muted-foreground">
-            Asignar a un docente a una empresa y un curso se hace al crear la empresa simulada (todavía no
-            implementado).
+            Cada docente crea la empresa de su curso desde Mis empresas y queda asignado como supervisor. Primero cargá
+            el curso en la pestaña Cursos.
           </p>
         </TabsContent>
 
@@ -160,11 +183,31 @@ export function AdminPage() {
 
         <TabsContent value="school" className="mt-3">
           <SchoolSettingsForm school={me.school} />
+          <Section title="Reiniciar toda la demostración local" className="mt-6">
+            <p className="text-sm text-muted-foreground">
+              Reconstruye toda la instancia de este navegador: empresas, cursos, usuarios, contraseñas, datos de la
+              escuela y operaciones vuelven a los datos de demostración. Antes se guarda una copia local recuperable por
+              soporte. El reinicio cierra tu sesión; las demás pestañas también deben volver a ingresar.
+            </p>
+            <Button variant="destructive" className="mt-4" onClick={() => setResetOpen(true)}>
+              <RotateCcw /> Reiniciar toda la demostración
+            </Button>
+          </Section>
         </TabsContent>
       </Tabs>
 
       <NewTeacherDialog open={newTeacher} onOpenChange={setNewTeacher} />
       <NewCourseDialog open={newCourse} onOpenChange={setNewCourse} />
+      <ActionDialog
+        open={resetOpen}
+        onOpenChange={setResetOpen}
+        title="¿Reiniciar toda la instancia local?"
+        description="Afecta a todas las empresas y usuarios de este navegador. Los datos actuales quedan en una copia local para soporte y la aplicación vuelve a la demostración inicial. Vas a tener que ingresar otra vez."
+        confirmLabel="Reiniciar toda la demostración"
+        tone="destructive"
+        busy={reset.isPending}
+        onConfirm={() => reset.mutate([])}
+      />
     </div>
   )
 }

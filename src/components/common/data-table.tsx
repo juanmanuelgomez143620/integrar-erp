@@ -21,15 +21,20 @@ interface DataTableProps<T> {
   search?: (row: T) => string
   searchPlaceholder?: string
   initialSearch?: string
+  searchValue?: string
+  onSearchChange?: (value: string) => void
   toolbar?: ReactNode
   onRowClick?: (row: T) => void
   rowClassName?: (row: T) => string | undefined
   empty?: ReactNode
   pageSize?: number
   loading?: boolean
+  error?: Error | null
+  onRetry?: () => void
 }
 
 const normalize = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+export const matchesSearch = (text: string, term: string) => normalize(text).includes(normalize(term.trim()))
 
 export function DataTable<T>({
   rows,
@@ -38,22 +43,26 @@ export function DataTable<T>({
   search,
   searchPlaceholder = 'Buscar…',
   initialSearch = '',
+  searchValue,
+  onSearchChange,
   toolbar,
   onRowClick,
   rowClassName,
   empty,
   pageSize = 25,
   loading,
+  error,
+  onRetry,
 }: DataTableProps<T>) {
-  const [term, setTerm] = useState(initialSearch)
+  const [localTerm, setTerm] = useState(initialSearch)
+  const term = searchValue ?? localTerm
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null)
   const [page, setPage] = useState(0)
 
   const filtered = useMemo(() => {
     let result = rows
     if (search && term.trim()) {
-      const needle = normalize(term.trim())
-      result = result.filter((r) => normalize(search(r)).includes(needle))
+      result = result.filter((r) => matchesSearch(search(r), term))
     }
     if (sort) {
       const col = columns.find((c) => c.key === sort.key)
@@ -88,9 +97,11 @@ export function DataTable<T>({
                 value={term}
                 onChange={(e) => {
                   setTerm(e.target.value)
+                  onSearchChange?.(e.target.value)
                   setPage(0)
                 }}
                 placeholder={searchPlaceholder}
+                aria-label={searchPlaceholder}
                 className="h-8 pl-8"
               />
             </div>
@@ -108,6 +119,7 @@ export function DataTable<T>({
               {columns.map((c) => (
                 <TableHead
                   key={c.key}
+                  aria-sort={sort?.key === c.key ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}
                   className={cn('h-9 text-xs font-semibold text-slate-600', alignClass(c.align), c.className)}
                 >
                   {c.sort ? (
@@ -117,11 +129,12 @@ export function DataTable<T>({
                         'inline-flex items-center gap-1 hover:text-foreground',
                         c.align === 'right' && 'flex-row-reverse',
                       )}
-                      onClick={() =>
+                      onClick={() => {
+                        setPage(0)
                         setSort((s) =>
                           s?.key === c.key ? (s.dir === 1 ? { key: c.key, dir: -1 } : null) : { key: c.key, dir: 1 },
                         )
-                      }
+                      }}
                     >
                       {c.header}
                       {sort?.key === c.key &&
@@ -135,6 +148,20 @@ export function DataTable<T>({
             </TableRow>
           </TableHeader>
           <TableBody>
+            {error && !loading && (
+              <TableRow>
+                <TableCell colSpan={columns.length} className="py-10 text-center whitespace-normal">
+                  <p role="alert" className="text-sm text-destructive">
+                    {error.message || 'No se pudieron cargar los registros.'}
+                  </p>
+                  {onRetry && (
+                    <Button className="mt-3" variant="outline" onClick={onRetry}>
+                      Reintentar
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            )}
             {loading && (
               <TableRow>
                 <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
@@ -142,22 +169,37 @@ export function DataTable<T>({
                 </TableCell>
               </TableRow>
             )}
-            {!loading && visible.length === 0 && (
+            {!loading && !error && visible.length === 0 && (
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
                   className="py-10 text-center text-sm whitespace-normal text-muted-foreground"
                 >
-                  {empty ?? 'No hay registros.'}
+                  {term.trim() ? 'No hay registros que coincidan con la búsqueda.' : (empty ?? 'No hay registros.')}
                 </TableCell>
               </TableRow>
             )}
             {!loading &&
+              !error &&
               visible.map((row) => (
                 <TableRow
                   key={rowKey(row)}
-                  className={cn(onRowClick && 'cursor-pointer', rowClassName?.(row))}
+                  className={cn(
+                    onRowClick && 'cursor-pointer focus-visible:outline-2 focus-visible:outline-brand-blue',
+                    rowClassName?.(row),
+                  )}
+                  tabIndex={onRowClick ? 0 : undefined}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  onKeyDown={
+                    onRowClick
+                      ? (event) => {
+                          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                            event.preventDefault()
+                            onRowClick(row)
+                          }
+                        }
+                      : undefined
+                  }
                 >
                   {columns.map((c) => (
                     <TableCell key={c.key} className={cn('py-2.5 text-sm', alignClass(c.align), c.className)}>

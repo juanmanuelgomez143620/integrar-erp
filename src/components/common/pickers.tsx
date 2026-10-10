@@ -61,6 +61,7 @@ export function SimpleSelect<V extends string>({
   placeholder,
   className,
   disabled,
+  emptyLabel,
   ...aria
 }: {
   value: V | ''
@@ -69,13 +70,19 @@ export function SimpleSelect<V extends string>({
   placeholder?: string
   className?: string
   disabled?: boolean
+  emptyLabel?: string
 } & ControlAria) {
   return (
-    <Select value={value || undefined} onValueChange={(v) => onChange(v as V)} disabled={disabled}>
+    <Select
+      value={value || (emptyLabel ? '__empty__' : '')}
+      onValueChange={(v) => onChange((v === '__empty__' ? '' : v) as V)}
+      disabled={disabled}
+    >
       <SelectTrigger className={cn('w-full', className)} {...aria}>
         <SelectValue placeholder={placeholder ?? 'Elegí una opción'} />
       </SelectTrigger>
       <SelectContent>
+        {emptyLabel && <SelectItem value="__empty__">{emptyLabel}</SelectItem>}
         {options.map((o) => (
           <SelectItem key={o.value} value={o.value}>
             {o.label}

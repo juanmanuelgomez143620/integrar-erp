@@ -73,7 +73,9 @@ function RequisitionForm({
   const [reason, setReason] = useState(
     existing?.doc.pr?.reason ??
       (preload
-        ? `Reposición: ${preload.code} ${preload.name} está por debajo del stock mínimo (hay ${qty(preload.stock, preload.uom_code)}, mínimo ${qty(preload.min_stock, preload.uom_code)}).`
+        ? preload.below_min
+          ? `Reposición: ${preload.code} ${preload.name} está por debajo del stock mínimo (hay ${qty(preload.stock, preload.uom_code)}, mínimo ${qty(preload.min_stock, preload.uom_code)}).`
+          : `Solicitud de ${preload.code} ${preload.name}.`
         : ''),
   )
   const [notes, setNotes] = useState(existing?.doc.notes ?? '')
@@ -86,7 +88,7 @@ function RequisitionForm({
           notes: l.notes,
         }))
       : preload
-        ? [newLine(preload.id, String(preload.reorder_qty ?? Math.max(preload.min_stock - preload.stock, 1)))]
+        ? [newLine(preload.id, String(preload.reorder_qty ?? Math.max(preload.min_stock - (preload.stock ?? 0), 1)))]
         : [newLine()],
   )
 
@@ -180,7 +182,7 @@ function RequisitionForm({
                         value={l.product_id}
                         onChange={(id) => update(l.key, { product_id: id })}
                       />
-                      {p && p.is_stockable && (
+                      {p && p.is_stockable && p.stock != null && (
                         <p className={p.below_min ? 'mt-1 text-xs text-red-700' : 'mt-1 text-xs text-muted-foreground'}>
                           Stock actual {qty(p.stock, p.uom_code)} · mínimo {qty(p.min_stock, p.uom_code)}
                         </p>

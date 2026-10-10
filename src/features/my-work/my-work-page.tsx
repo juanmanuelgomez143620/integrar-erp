@@ -118,14 +118,20 @@ export function MyWorkPage() {
                     <Button
                       size="xs"
                       variant="outline"
+                      disabled={claim.isPending}
                       onClick={() => claim.mutate([t.id, true])}
                       title="Avisá al resto de tu isla que te ocupás vos"
                     >
                       <Hand /> Tomar
                     </Button>
                   )}
-                  {t.status === 'EN_CURSO' && t.claimed_by === userId && (
-                    <Button size="xs" variant="ghost" onClick={() => claim.mutate([t.id, false])}>
+                  {t.status === 'EN_CURSO' && (t.claimed_by === userId || company.supervisor) && (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={claim.isPending}
+                      onClick={() => claim.mutate([t.id, false])}
+                    >
                       <Undo2 /> Liberar
                     </Button>
                   )}

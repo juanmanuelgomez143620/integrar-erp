@@ -12,10 +12,26 @@ import { useMe, useSession } from '@/app/session'
 const ACCOUNT_ROUTES = ['/cambiar-contrasena', '/perfil']
 
 export function RequireAuth() {
-  const { userId } = useSession()
-  const { data: me, isLoading } = useMe()
+  const { userId, logout } = useSession()
+  const { data: me, isLoading, error, refetch } = useMe()
   const location = useLocation()
   if (!userId) return <Navigate to="/login" replace />
+  if (error) {
+    return (
+      <div className="mx-auto max-w-md px-4 py-20 text-center">
+        <h1 className="text-lg font-semibold text-navy">No pudimos validar tu sesión</h1>
+        <p role="alert" className="mt-2 text-sm text-muted-foreground">
+          {error.message}
+        </p>
+        <div className="mt-6 flex justify-center gap-2">
+          <Button variant="outline" onClick={() => refetch()}>
+            Reintentar
+          </Button>
+          <Button onClick={logout}>Volver a ingresar</Button>
+        </div>
+      </div>
+    )
+  }
   if (isLoading || !me) return <Loading />
   if (me.user.must_change_password && !ACCOUNT_ROUTES.includes(location.pathname)) {
     return <Navigate to="/cambiar-contrasena" replace />

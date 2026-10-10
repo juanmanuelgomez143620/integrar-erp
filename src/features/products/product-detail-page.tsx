@@ -78,16 +78,19 @@ export function ProductDetailPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard
           label="Stock total"
-          value={p.is_stockable ? qty(p.stock, p.uom_code) : 'No aplica'}
+          value={p.is_stockable && p.stock != null ? qty(p.stock, p.uom_code) : 'No aplica'}
           tone={p.below_min ? 'danger' : 'default'}
           hint={p.is_stockable ? `Mínimo ${qty(p.min_stock, p.uom_code)}` : 'Los servicios no llevan stock'}
         />
         <KpiCard
           label="Costo promedio (PPP)"
-          value={money(p.avg_cost)}
-          hint={`Costo de referencia ${money(p.standard_cost)}`}
+          value={p.avg_cost != null ? money(p.avg_cost) : '—'}
+          hint={p.avg_cost != null ? `Costo de referencia ${money(p.standard_cost)}` : 'Sin datos de stock'}
         />
-        <KpiCard label="Valor en stock" value={money(p.stock * p.avg_cost)} />
+        <KpiCard
+          label="Valor en stock"
+          value={p.stock != null && p.avg_cost != null ? money(p.stock * p.avg_cost) : '—'}
+        />
         <KpiCard
           label="Precio de venta"
           value={p.sale_price != null ? money(p.sale_price) : '—'}

@@ -32,7 +32,7 @@ export function ChangePasswordPage() {
 
   if (isLoading || !me) return <Loading />
   const mismatch = confirm.length > 0 && next !== confirm
-  const canSubmit = current.length > 0 && next.length >= 6 && !mismatch
+  const canSubmit = current.length > 0 && next.length >= 6 && next === confirm
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()

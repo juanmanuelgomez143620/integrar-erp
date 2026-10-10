@@ -1,8 +1,6 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { KeyRound, ListPlus, Plus, RotateCcw, UserPlus, X } from 'lucide-react'
-import { toast } from 'sonner'
+import { KeyRound, ListPlus, Plus, UserPlus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -19,7 +17,6 @@ import { DataTable } from '@/components/common/data-table'
 import { Field, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
-import { ActionDialog } from '@/components/common/dialogs'
 import { AuditTimeline } from '@/components/common/audit-timeline'
 import { api, commands, type MemberView } from '@/lib/api'
 import { MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
@@ -31,7 +28,6 @@ import { BulkStudentsDialog } from './bulk-students-dialog'
 
 export function TeacherPage() {
   const company = useCompany()
-  const navigate = useNavigate()
   const members = useQuery({
     queryKey: ['members', company.companyId],
     queryFn: () => api.members(company.companyId),
@@ -46,7 +42,6 @@ export function TeacherPage() {
   const [resetPasswordFor, setResetPasswordFor] = useState<MemberView | null>(null)
   const [newStudent, setNewStudent] = useState(false)
   const [bulkStudents, setBulkStudents] = useState(false)
-  const [resetOpen, setResetOpen] = useState(false)
   const removeRole = useCommand((id: string) => commands.removeRole(company.companyId, id), { success: 'Rol quitado.' })
   const setModule = useCommand((m: ModuleCode, v: boolean) => commands.setModule(company.companyId, m, v), {
     success: 'Módulo actualizado.',
@@ -55,13 +50,6 @@ export function TeacherPage() {
     (s: Parameters<typeof commands.updateCompanySettings>[1]) => commands.updateCompanySettings(company.companyId, s),
     { success: 'Configuración actualizada.' },
   )
-  const reset = useCommand(commands.resetDemoData, {
-    onSuccess: () => {
-      setResetOpen(false)
-      toast.success('Datos de demostración reiniciados.')
-      navigate(company.to())
-    },
-  })
 
   if (!company.supervisor) return <p className="py-20 text-center text-sm text-muted-foreground">Sólo docentes.</p>
   if (!members.data) return <Loading />
@@ -85,7 +73,6 @@ export function TeacherPage() {
           <TabsTrigger value="members">Integrantes y roles</TabsTrigger>
           <TabsTrigger value="config">Módulos y control interno</TabsTrigger>
           <TabsTrigger value="activity">Actividad</TabsTrigger>
-          <TabsTrigger value="data">Datos de demostración</TabsTrigger>
         </TabsList>
 
         <TabsContent value="members" className="mt-3">
@@ -136,6 +123,7 @@ export function TeacherPage() {
                           type="button"
                           className="text-muted-foreground hover:text-red-600"
                           aria-label="Quitar rol"
+                          disabled={removeRole.isPending}
                           onClick={() => removeRole.mutate([r.id])}
                         >
                           <X className="size-3" />
@@ -200,7 +188,12 @@ export function TeacherPage() {
                   return (
                     <li key={m} className="flex items-center justify-between gap-3 text-sm">
                       {MODULES[m].name}
-                      <Switch checked={row?.is_enabled ?? true} onCheckedChange={(v) => setModule.mutate([m, v])} />
+                      <Switch
+                        aria-label={MODULES[m].name}
+                        checked={row?.is_enabled ?? true}
+                        disabled={setModule.isPending}
+                        onCheckedChange={(v) => setModule.mutate([m, v])}
+                      />
                     </li>
                   )
                 })}
@@ -217,6 +210,8 @@ export function TeacherPage() {
                   </div>
                 </div>
                 <Switch
+                  aria-label="Separación de funciones"
+                  disabled={setSettings.isPending}
                   checked={company.company.settings.sod_enabled}
                   onCheckedChange={(v) => setSettings.mutate([{ sod_enabled: v }])}
                 />
@@ -229,6 +224,8 @@ export function TeacherPage() {
                   </div>
                 </div>
                 <Switch
+                  aria-label="Permitir stock negativo"
+                  disabled={setSettings.isPending}
                   checked={company.company.settings.allow_negative_stock}
                   onCheckedChange={(v) => setSettings.mutate([{ allow_negative_stock: v }])}
                 />
@@ -256,36 +253,12 @@ export function TeacherPage() {
             <AuditTimeline events={(audit.data ?? []).slice(0, 25)} compact />
           </Section>
         </TabsContent>
-
-        <TabsContent value="data" className="mt-3">
-          <Section title="Reiniciar datos de demostración">
-            <p className="text-sm text-muted-foreground">
-              Vuelve la empresa {company.company.legal_name} a su estado inicial: stock de apertura, alertas de stock
-              mínimo y un circuito de compra completo de ejemplo. Los documentos, las tareas y la auditoría creados
-              después se archivan (no se pierden) y dejan de verse en la empresa. Los usuarios de demostración se
-              mantienen.
-            </p>
-            <Button variant="destructive" className="mt-4" onClick={() => setResetOpen(true)}>
-              <RotateCcw /> Reiniciar datos
-            </Button>
-          </Section>
-        </TabsContent>
       </Tabs>
 
       {assignFor && <AssignRoleDialog member={assignFor} onClose={() => setAssignFor(null)} />}
       {resetPasswordFor && <ResetPasswordDialog member={resetPasswordFor} onClose={() => setResetPasswordFor(null)} />}
       <NewStudentDialog open={newStudent} onOpenChange={setNewStudent} />
       <BulkStudentsDialog open={bulkStudents} onOpenChange={setBulkStudents} />
-      <ActionDialog
-        open={resetOpen}
-        onOpenChange={setResetOpen}
-        title="¿Reiniciar los datos de demostración?"
-        description="Todo lo registrado en esta empresa desde el inicio deja de verse (queda archivado, no se borra). Esta acción afecta a todos los usuarios que usen este navegador."
-        confirmLabel="Reiniciar"
-        tone="destructive"
-        busy={reset.isPending}
-        onConfirm={() => reset.mutate([])}
-      />
     </>
   )
 }

@@ -5,6 +5,7 @@
 
 import {
   ACTION_VERBS,
+  ADJUSTMENT_REASONS,
   DOC_STATUSES,
   DOC_TYPES,
   MODULES,
@@ -14,6 +15,9 @@ import {
   ROLE_PERMISSIONS,
   TASK_RULES,
   TRANSITIONS,
+  UNITS,
+  VAT_CONDITIONS,
+  VAT_RATES,
   permissionModule,
   type TransitionInfo,
 } from '../domain/catalog'
@@ -541,6 +545,12 @@ interface MovementInput {
 export function postMovement(ctx: Ctx, m: MovementInput) {
   const { db } = ctx
   const product = getProduct(db, m.company_id, m.product_id)
+  if (!Number.isFinite(m.quantity) || round3(m.quantity) === 0)
+    fail('DATO_INVALIDO', 'La cantidad del movimiento debe ser finita y distinta de cero (hasta 3 decimales).')
+  if (m.unit_cost !== undefined && (!Number.isFinite(m.unit_cost) || m.unit_cost < 0))
+    fail('DATO_INVALIDO', 'El costo unitario debe ser un número finito mayor o igual que cero.')
+  if (!db.warehouses.some((w) => w.id === m.warehouse_id && w.company_id === m.company_id))
+    fail('DATO_INVALIDO', 'Elegí un depósito de esta empresa.')
   if (!product.is_stockable) return
   const company = getCompany(db, m.company_id)
   let bal = db.stockBalances.find((b) => b.product_id === m.product_id && b.warehouse_id === m.warehouse_id)
@@ -735,12 +745,13 @@ function validateRequisition(ctx: Ctx, companyId: string, input: RequisitionInpu
       'Toda compra empieza con una necesidad justificada.',
     )
   }
-  const lines = input.lines.filter((l) => l.product_id)
+  const lines = input.lines.filter((l) => l.product_id).map((l) => ({ ...l, quantity: round3(l.quantity) }))
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un producto.')
   for (const l of lines) {
     const p = getProduct(ctx.db, companyId, l.product_id)
     if (!p.is_active) fail('DATO_INVALIDO', `${productLabel(p)} está inactivo.`)
-    if (!(l.quantity > 0)) fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero.`)
+    if (!Number.isFinite(l.quantity) || !(l.quantity > 0))
+      fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero y tener hasta 3 decimales.`)
   }
   if (input.needed_by && input.needed_by < todayAR())
     fail('DATO_INVALIDO', 'La fecha necesaria no puede ser anterior a hoy.')
@@ -889,6 +900,17 @@ export interface PurchaseOrderInput {
   }[]
 }
 
+/** Los borradores reservan cantidades, aunque todavía no cambien el estado de la SC. */
+export function requisitionAvailableQuantity(db: DB, lineId: string, currentDocId?: string): number {
+  const line = db.prLines.find((l) => l.id === lineId)
+  if (!line) return 0
+  const reserved = db.poLines
+    .filter((l) => l.requisition_line_id === lineId && l.document_id !== currentDocId)
+    .filter((l) => db.documents.some((d) => d.id === l.document_id && d.status !== 'ANULADO'))
+    .reduce((sum, l) => sum + l.quantity, 0)
+  return round3(line.quantity - reserved)
+}
+
 function validatePurchaseOrder(ctx: Ctx, companyId: string, input: PurchaseOrderInput, currentDocId?: string) {
   const { db } = ctx
   const supplier = db.suppliers.find((s) => s.id === input.supplier_id && s.company_id === companyId)
@@ -896,14 +918,23 @@ function validatePurchaseOrder(ctx: Ctx, companyId: string, input: PurchaseOrder
   if (!supplier.is_active) fail('DATO_INVALIDO', `El proveedor ${supplier.legal_name} está inactivo.`)
   if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
     fail('DATO_INVALIDO', 'Elegí el depósito de destino.')
-  const lines = input.lines.filter((l) => l.product_id)
+  if (!Number.isInteger(input.payment_terms_days) || input.payment_terms_days < 0)
+    fail('DATO_INVALIDO', 'El plazo de pago debe ser una cantidad entera de días mayor o igual que cero.')
+  const lines = input.lines
+    .filter((l) => l.product_id)
+    .map((l) => ({ ...l, quantity: round3(l.quantity), unit_price: round4(l.unit_price) }))
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un ítem.')
   const usedByReqLine = new Map<string, number>()
   for (const l of lines) {
     const p = getProduct(db, companyId, l.product_id)
     if (!p.is_active) fail('DATO_INVALIDO', `${productLabel(p)} está inactivo.`)
-    if (!(l.quantity > 0)) fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero.`)
-    if (!(l.unit_price >= 0)) fail('DATO_INVALIDO', `Indicá el precio unitario de ${p.code}.`)
+    if (!Number.isFinite(l.quantity) || !(l.quantity > 0))
+      fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero y tener hasta 3 decimales.`)
+    if (!Number.isFinite(l.unit_price) || !(l.unit_price >= 0))
+      fail('DATO_INVALIDO', `Indicá un precio unitario válido para ${p.code}.`)
+    if (!VAT_RATES.includes(l.vat_rate)) fail('DATO_INVALIDO', `La alícuota de IVA de ${p.code} no es válida.`)
+    if (!Number.isFinite(l.quantity * l.unit_price * (1 + l.vat_rate / 100)))
+      fail('DATO_INVALIDO', `El importe de ${p.code} es demasiado grande.`)
     if (l.requisition_line_id) {
       const rl = db.prLines.find((x) => x.id === l.requisition_line_id && x.company_id === companyId)
       if (!rl) fail('DATO_INVALIDO', 'La línea de solicitud vinculada no existe.')
@@ -913,13 +944,9 @@ function validatePurchaseOrder(ctx: Ctx, companyId: string, input: PurchaseOrder
       }
       if (rl.product_id !== l.product_id)
         fail('DATO_INVALIDO', `El producto no coincide con el de ${req.display_number}.`)
-      const orderedElsewhere = db.poLines
-        .filter((pl) => pl.requisition_line_id === rl.id && pl.document_id !== currentDocId)
-        .filter((pl) => db.documents.find((d) => d.id === pl.document_id)?.status !== 'ANULADO')
-        .reduce((s, pl) => s + pl.quantity, 0)
       const used = (usedByReqLine.get(rl.id) ?? 0) + l.quantity
       usedByReqLine.set(rl.id, used)
-      const pending = round3(rl.quantity - orderedElsewhere)
+      const pending = requisitionAvailableQuantity(db, rl.id, currentDocId)
       if (used > pending + EPS) {
         fail(
           'CANTIDAD_EXCEDE_PENDIENTE',
@@ -1232,8 +1259,31 @@ export function cmdCreateGoodsReceipt(ctx: Ctx, companyId: string, input: GoodsR
   }
   if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
     fail('DATO_INVALIDO', 'Elegí el depósito.')
-  const lines = input.lines.filter((l) => l.quantity > 0)
+  for (const line of input.lines) {
+    if (!Number.isFinite(line.quantity) || line.quantity < 0 || (line.quantity > 0 && round3(line.quantity) === 0))
+      fail(
+        'DATO_INVALIDO',
+        'Las cantidades recibidas deben ser números mayores o iguales que cero (hasta 3 decimales).',
+      )
+  }
+  const lines = input.lines.filter((l) => l.quantity > 0).map((l) => ({ ...l, quantity: round3(l.quantity) }))
   if (!lines.length) fail('DATO_INVALIDO', 'Indicá la cantidad recibida de al menos un ítem.')
+  const receivedByLine = new Map<string, number>()
+  for (const line of lines) {
+    const pl = db.poLines.find((l) => l.id === line.po_line_id && l.document_id === po.id)
+    if (!pl) fail('DATO_INVALIDO', 'Una línea no corresponde a la orden de compra.')
+    const p = getProduct(db, companyId, pl.product_id)
+    const pending = round3(pl.quantity - receivedInConfirmed(db, pl.id))
+    const received = round3((receivedByLine.get(pl.id) ?? 0) + line.quantity)
+    receivedByLine.set(pl.id, received)
+    if (received > pending + EPS) {
+      fail(
+        'CANTIDAD_EXCEDE_PENDIENTE',
+        `${p.code}: se reciben ${fmtQty(received)} pero sólo quedan ${fmtQty(pending, p.uom_code)} pendientes.`,
+        'No se puede recibir más de lo ordenado. Si llegó de más, se devuelve o se gestiona una nueva OC.',
+      )
+    }
+  }
   const doc = newDocument(ctx, companyId, 'GOODS_RECEIPT', actor, {
     supplier_id: po.supplier_id,
     notes: input.notes,
@@ -1247,17 +1297,7 @@ export function cmdCreateGoodsReceipt(ctx: Ctx, companyId: string, input: GoodsR
   })
   let total = 0
   lines.forEach((l, i) => {
-    const pl = db.poLines.find((x) => x.id === l.po_line_id && x.document_id === po.id)
-    if (!pl) fail('DATO_INVALIDO', 'Una línea no corresponde a la orden de compra.')
-    const p = getProduct(db, companyId, pl.product_id)
-    const pending = round3(pl.quantity - receivedInConfirmed(db, pl.id))
-    if (l.quantity > pending + EPS) {
-      fail(
-        'CANTIDAD_EXCEDE_PENDIENTE',
-        `${p.code}: se reciben ${fmtQty(l.quantity)} pero sólo quedan ${fmtQty(pending, p.uom_code)} pendientes.`,
-        'No se puede recibir más de lo ordenado. Si llegó de más, se devuelve o se gestiona una nueva OC.',
-      )
-    }
+    const pl = db.poLines.find((x) => x.id === l.po_line_id && x.document_id === po.id)!
     total += l.quantity * pl.unit_price
     db.grLines.push({
       id: uid(),
@@ -1429,9 +1469,24 @@ export function cmdCreateStockAdjustment(ctx: Ctx, companyId: string, input: Sto
   const actor = requirePermission(ctx, companyId, 'stock_adjustment.create')
   if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
     fail('DATO_INVALIDO', 'Elegí el depósito.')
+  if (!Object.hasOwn(ADJUSTMENT_REASONS, input.reason_code))
+    fail('DATO_INVALIDO', 'Elegí un motivo válido para el ajuste.')
   if (input.notes.trim().length < 3 && input.reason_code === 'OTRO')
     fail('DATO_INVALIDO', 'Explicá el motivo del ajuste.')
-  const lines = input.lines.filter((l) => l.product_id && l.quantity_delta !== 0)
+  const lines = input.lines
+    .filter((l) => l.product_id && l.quantity_delta !== 0)
+    .map((l) => {
+      if (!Number.isFinite(l.quantity_delta) || round3(l.quantity_delta) === 0)
+        fail('DATO_INVALIDO', 'La cantidad del ajuste debe ser finita y distinta de cero (hasta 3 decimales).')
+      if (l.unit_cost !== undefined && (!Number.isFinite(l.unit_cost) || l.unit_cost < 0))
+        fail('DATO_INVALIDO', 'El costo unitario debe ser un número finito mayor o igual que cero.')
+      const p = getProduct(db, companyId, l.product_id)
+      if (!p.is_stockable)
+        fail('DATO_INVALIDO', `${p.code} es un ${PRODUCT_TYPES[p.product_type].toLowerCase()}: no lleva stock.`)
+      const bal = db.stockBalances.find((b) => b.product_id === p.id && b.warehouse_id === input.warehouse_id)
+      const cost = l.unit_cost ?? (bal?.avg_unit_cost || p.standard_cost)
+      return { ...l, quantity_delta: round3(l.quantity_delta), unit_cost: round4(cost) }
+    })
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un producto con una cantidad distinta de cero.')
   const doc = newDocument(ctx, companyId, 'STOCK_ADJUSTMENT', actor, {
     notes: input.notes,
@@ -1439,18 +1494,14 @@ export function cmdCreateStockAdjustment(ctx: Ctx, companyId: string, input: Sto
   })
   let total = 0
   lines.forEach((l, i) => {
-    const p = getProduct(db, companyId, l.product_id)
-    if (!p.is_stockable)
-      fail('DATO_INVALIDO', `${p.code} es un ${PRODUCT_TYPES[p.product_type].toLowerCase()}: no lleva stock.`)
-    const bal = db.stockBalances.find((b) => b.product_id === p.id && b.warehouse_id === input.warehouse_id)
-    const cost = l.unit_cost && l.unit_cost > 0 ? l.unit_cost : bal?.avg_unit_cost || p.standard_cost
+    const cost = l.unit_cost
     total += l.quantity_delta * cost
     db.saLines.push({
       id: uid(),
       company_id: companyId,
       document_id: doc.id,
       line_no: i + 1,
-      product_id: p.id,
+      product_id: l.product_id,
       quantity_delta: round3(l.quantity_delta),
       unit_cost: round4(cost),
       notes: l.notes ?? '',
@@ -1519,6 +1570,124 @@ function masterLabel(kind: MasterKind, row: T.Customer | T.Supplier | T.Product)
   return kind === 'product' ? productLabel(row as T.Product) : `${row.code} ${(row as T.Partner).legal_name}`
 }
 
+/** Sólo campos editables; las referencias y los importes se validan también fuera del formulario. */
+function masterData(
+  db: DB,
+  kind: MasterKind,
+  companyId: string,
+  input: Record<string, unknown>,
+  previous?: T.Customer | T.Supplier | T.Product,
+) {
+  const source: Record<string, unknown> = { ...previous, ...input }
+  const text = (key: string, fallback = '') => {
+    const value = source[key] ?? fallback
+    if (typeof value !== 'string') fail('DATO_INVALIDO', `El campo ${key} debe ser texto.`)
+    return value.trim()
+  }
+  const number = (key: string, fallback: number | null, integer = false, positive = false) => {
+    const value = source[key] === undefined ? fallback : source[key]
+    if (value === null && fallback === null) return null
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      (integer && !Number.isSafeInteger(value)) ||
+      (positive && value <= 0)
+    ) {
+      fail(
+        'DATO_INVALIDO',
+        `El campo ${key} debe ser ${integer ? 'un entero' : 'un número'} ${positive ? 'mayor que cero' : 'no negativo'}.`,
+      )
+    }
+    return value
+  }
+  if (kind === 'product') {
+    const productType = text('product_type')
+    const uom = text('uom_code')
+    if (!Object.hasOwn(PRODUCT_TYPES, productType)) fail('DATO_INVALIDO', 'Elegí un tipo de producto válido.')
+    if (!Object.hasOwn(UNITS, uom)) fail('DATO_INVALIDO', 'Elegí una unidad de medida válida.')
+    const vat = number('vat_rate', 21)!
+    if (!VAT_RATES.includes(vat)) fail('DATO_INVALIDO', 'Elegí una alícuota de IVA válida.')
+    const supplierId = text('default_supplier_id') || null
+    const warehouseId = text('default_warehouse_id') || null
+    const supplier = db.suppliers.find((s) => s.id === supplierId && s.company_id === companyId)
+    if (
+      supplierId &&
+      (!supplier || (!supplier.is_active && supplierId !== (previous as T.Product | undefined)?.default_supplier_id))
+    ) {
+      fail('DATO_INVALIDO', 'El proveedor habitual debe estar activo y pertenecer a esta empresa.')
+    }
+    if (warehouseId && !db.warehouses.some((w) => w.id === warehouseId && w.company_id === companyId)) {
+      fail('DATO_INVALIDO', 'El depósito habitual no existe en esta empresa.')
+    }
+    const stockable = productType !== 'SERVICIO'
+    if (previous) {
+      const p = previous as T.Product
+      const used = [
+        ...db.prLines,
+        ...db.poLines,
+        ...db.grLines,
+        ...db.saLines,
+        ...db.stockMovements,
+        ...db.stockBalances,
+      ].some((line) => line.product_id === p.id)
+      if (used && (p.uom_code !== uom || p.is_stockable !== stockable)) {
+        fail(
+          'DATO_INVALIDO',
+          'No se puede cambiar la unidad ni convertir entre producto y servicio cuando hay documentos o movimientos. Creá otro producto.',
+        )
+      }
+    }
+    const minStock = number('min_stock', 0)!
+    const reorderQty = number('reorder_qty', null, false, true)
+    if (
+      !UNITS[uom].decimals &&
+      (!Number.isInteger(minStock) || (reorderQty != null && !Number.isInteger(reorderQty)))
+    ) {
+      fail('DATO_INVALIDO', `La unidad ${uom} requiere cantidades enteras.`)
+    }
+    return {
+      name: text('name'),
+      description: text('description'),
+      category: text('category'),
+      product_type: productType,
+      uom_code: uom,
+      is_stockable: stockable,
+      standard_cost: number('standard_cost', 0),
+      sale_price: number('sale_price', null),
+      vat_rate: vat,
+      min_stock: stockable ? minStock : 0,
+      reorder_qty: stockable ? reorderQty : null,
+      default_supplier_id: supplierId,
+      default_warehouse_id: stockable ? warehouseId : null,
+      location: stockable ? text('location') : '',
+    }
+  }
+  const vatCondition = text('vat_condition', 'RESPONSABLE_INSCRIPTO')
+  if (!Object.hasOwn(VAT_CONDITIONS, vatCondition)) fail('DATO_INVALIDO', 'Elegí una condición frente al IVA válida.')
+  const taxId = text('tax_id')
+  if (taxId && !/^\d{2}-\d{8}-\d$/.test(taxId)) fail('DATO_INVALIDO', 'El CUIT debe tener el formato 30-12345678-9.')
+  const email = text('email')
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail('DATO_INVALIDO', 'Ingresá un email válido.')
+  return {
+    legal_name: text('legal_name'),
+    trade_name: text('trade_name'),
+    tax_id: taxId,
+    vat_condition: vatCondition,
+    address_line: text('address_line'),
+    city: text('city'),
+    province: text('province'),
+    phone: text('phone'),
+    email,
+    contact_name: text('contact_name'),
+    payment_terms_days: number('payment_terms_days', 0, true),
+    notes: text('notes'),
+    ...(kind === 'customer'
+      ? { credit_limit: number('credit_limit', null) }
+      : { category: text('category'), lead_time_days: number('lead_time_days', null, true) }),
+  }
+}
+
 export function cmdSaveMaster(
   ctx: Ctx,
   kind: MasterKind,
@@ -1529,6 +1698,8 @@ export function cmdSaveMaster(
   const isNew = !input.id
   const actor = requirePermission(ctx, companyId, `${kind}.${isNew ? 'create' : 'update'}`)
   const table = masterTable(db, kind)
+  const previous = isNew ? undefined : table.find((r) => r.id === input.id && r.company_id === companyId)
+  if (!isNew && !previous) fail('DATO_INVALIDO', `El ${MASTER_LABEL[kind]} no existe.`)
   const code = String(input.code ?? '')
     .trim()
     .toUpperCase()
@@ -1539,10 +1710,7 @@ export function cmdSaveMaster(
   const nameField = kind === 'product' ? 'name' : 'legal_name'
   if (String(input[nameField] ?? '').trim().length < 2)
     fail('DATO_INVALIDO', kind === 'product' ? 'Ingresá la descripción del producto.' : 'Ingresá la razón social.')
-  const clean: Record<string, unknown> = { ...input, code }
-  if (kind === 'product') clean.is_stockable = input.product_type !== 'SERVICIO'
-  delete clean.id
-  delete clean.company_id
+  const clean: Record<string, unknown> = { ...masterData(db, kind, companyId, input, previous), code }
 
   if (isNew) {
     const row = {
@@ -1592,6 +1760,8 @@ export function cmdSetMasterActive(ctx: Ctx, kind: MasterKind, companyId: string
   const actor = requirePermission(ctx, companyId, `${kind}.update`)
   const row = masterTable(ctx.db, kind).find((r) => r.id === id && r.company_id === companyId)
   if (!row) fail('DATO_INVALIDO', `El ${MASTER_LABEL[kind]} no existe.`)
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si el registro está activo.')
+  if (row.is_active === active) return
   row.is_active = active
   row.updated_at = ctx.now
   row.updated_by = ctx.userId
@@ -1609,11 +1779,18 @@ export function cmdSetMasterActive(ctx: Ctx, kind: MasterKind, companyId: string
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
+  const profile = getProfile(ctx.db, ctx.userId)
+  if (!profile?.is_active) fail('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
   const task = ctx.db.tasks.find((t) => t.id === taskId)
-  if (!task) fail('DATO_INVALIDO', 'La tarea no existe.')
+  if (!task || (!isInstanceAdmin(profile) && !getMember(ctx.db, profile.id, task.company_id)?.is_active))
+    fail('DATO_INVALIDO', 'La tarea no existe.')
+  const eff = effectivePermissions(ctx.db, profile.id, task.company_id)
   if (task.status !== 'PENDIENTE' && task.status !== 'EN_CURSO')
     fail('TRANSICION_INVALIDA', 'La tarea ya está resuelta.')
   if (claim) {
+    const mine =
+      task.assigned_user_id === profile.id || (!!task.assigned_role && eff.roles.includes(task.assigned_role))
+    if (!mine && !eff.supervisor) fail('SIN_PERMISO', 'Esta tarea corresponde a otro usuario o sector.')
     if (task.claimed_by && task.claimed_by !== ctx.userId) {
       fail('TAREA_TOMADA', `La tarea ya la tomó ${fullName(getProfile(ctx.db, task.claimed_by))}.`)
     }
@@ -1621,6 +1798,8 @@ export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
     task.claimed_at = ctx.now
     task.status = 'EN_CURSO'
   } else {
+    if (task.claimed_by !== profile.id && !eff.supervisor)
+      fail('SIN_PERMISO', 'Sólo quien tomó la tarea (o el docente) puede liberarla.')
     task.claimed_by = null
     task.claimed_at = null
     task.status = 'PENDIENTE'
@@ -1639,7 +1818,13 @@ export function cmdMarkNotificationsRead(ctx: Ctx, ids: string[] | 'all', compan
 export function cmdAssignRole(ctx: Ctx, companyId: string, userId: string, role: T.RoleCode, sectorId: string | null) {
   const actor = requireSupervisor(ctx, companyId)
   const { db } = ctx
+  const profile = getProfile(db, userId)
+  if (!profile?.is_active) fail('DATO_INVALIDO', 'Elegí un usuario activo.')
+  if (!Object.hasOwn(ROLES, role)) fail('DATO_INVALIDO', 'Elegí un rol válido.')
+  if (sectorId && !db.sectors.some((s) => s.id === sectorId && s.company_id === companyId))
+    fail('DATO_INVALIDO', 'El sector no pertenece a esta empresa.')
   let member = getMember(db, userId, companyId)
+  if (member && !member.is_active) fail('DATO_INVALIDO', 'El integrante está desactivado en esta empresa.')
   if (!member) {
     member = { id: uid(), company_id: companyId, user_id: userId, job_title: '', is_active: true }
     db.members.push(member)
@@ -1648,7 +1833,6 @@ export function cmdAssignRole(ctx: Ctx, companyId: string, userId: string, role:
     fail('DATO_INVALIDO', 'Esa asignación ya existe.')
   }
   db.memberRoles.push({ id: uid(), company_id: companyId, member_id: member.id, role_code: role, sector_id: sectorId })
-  const profile = getProfile(db, userId)
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -1896,6 +2080,13 @@ function requireSchoolAdmin(ctx: Ctx): Actor {
     sector_id: null,
     sector_name: '—',
   }
+}
+
+/** El reinicio reconstruye toda la instancia local, por eso exige administración escolar. */
+export function authorizeDemoReset(ctx: Ctx) {
+  const profile = getProfile(ctx.db, ctx.userId)
+  if (!profile?.is_active) fail('SIN_SESION', 'Tu sesión terminó. Volvé a ingresar.')
+  requireSchoolAdmin(ctx)
 }
 
 export interface TeacherInput {
