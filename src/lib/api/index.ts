@@ -136,7 +136,7 @@ export const api = {
   audit: (companyId: string) => query((db, u) => Q.listAudit(db, u, companyId)),
   dashboard: (companyId: string) => query((db, u) => Q.dashboard(db, u, companyId)),
   members: (companyId: string) => query((db, u) => Q.listMembers(db, u, companyId)),
-  users: () => query((db) => db.profiles.map(({ password: _p, ...rest }) => rest)),
+  users: () => query(Q.listUsers),
   courses: () => query((db, u) => Q.listCourses(db, u)),
   teachers: () => query((db, u) => Q.listTeachers(db, u)),
 
@@ -216,6 +216,7 @@ export const commands = {
 
   async resetDemoData() {
     await wait(300)
+    read((db) => E.authorizeDemoReset({ db, userId: requireActiveUser(db), now: new Date().toISOString() }))
     resetDatabase()
   },
 }

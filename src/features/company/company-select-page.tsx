@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, LogOut, Plus } from 'lucide-react'
+import { Building2, LogOut, Plus, UserRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -69,6 +69,16 @@ export function CompanySelectPage() {
         ))}
       </div>
       <div className="mt-6 flex flex-wrap gap-2">
+        <Button variant="outline" asChild>
+          <Link to="/perfil">
+            <UserRound /> Mi perfil
+          </Link>
+        </Button>
+        {(data.user.app_role === 'ADMIN' || data.user.app_role === 'SUPERADMIN') && (
+          <Button variant="outline" asChild>
+            <Link to="/admin">Administración escolar</Link>
+          </Button>
+        )}
         {canCreate && (
           <Button onClick={() => setCreating(true)}>
             <Plus /> Crear empresa para un curso

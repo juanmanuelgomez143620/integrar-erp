@@ -55,6 +55,59 @@ export const DEFAULT_SESSION_TIMEOUT_MINUTES = 15
 let cache: DB | null = null
 const listeners = new Set<() => void>()
 
+/** Nunca informar una operación exitosa si el navegador no guardó sus datos. */
+export class StorageError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StorageError'
+  }
+}
+
+const COLLECTIONS = [
+  'profiles',
+  'courses',
+  'companies',
+  'islands',
+  'sectors',
+  'warehouses',
+  'members',
+  'memberRoles',
+  'companyModules',
+  'customers',
+  'suppliers',
+  'products',
+  'documentSequences',
+  'documents',
+  'prLines',
+  'poLines',
+  'grLines',
+  'saLines',
+  'docLinks',
+  'stockMovements',
+  'stockBalances',
+  'approvalRules',
+  'approvalRequests',
+  'tasks',
+  'notifications',
+  'audit',
+] as const
+
+function isDatabase(value: unknown): value is DB {
+  if (!value || typeof value !== 'object') return false
+  const db = value as DB
+  return (
+    Number.isInteger(db.version) &&
+    db.version >= 1 &&
+    typeof db.seededAt === 'string' &&
+    !!db.school &&
+    typeof db.school === 'object' &&
+    !!db.seq &&
+    Number.isFinite(db.seq.audit) &&
+    Number.isFinite(db.seq.movement) &&
+    COLLECTIONS.every((key) => Array.isArray(db[key]))
+  )
+}
+
 /**
  * Pasos para llevar una base guardada con una versión anterior a la actual
  * sin perder lo que cargaron docentes y estudiantes. Cada paso lleva de la
@@ -88,21 +141,29 @@ function readStorage(): DB | null {
   try {
     raw = localStorage.getItem(STORAGE_KEY)
   } catch {
-    return null // Sin almacenamiento disponible (modo privado).
+    throw new StorageError(
+      'No se puede acceder a los datos del navegador. Habilitá el almacenamiento local y volvé a intentar.',
+    )
   }
   if (!raw) return null
   let stored: DB
   try {
     stored = JSON.parse(raw) as DB
   } catch {
-    archive(raw)
-    return null
+    throw new StorageError(
+      'Los datos guardados no se pueden leer. Se conservaron sin cambios; pedí ayuda al administrador para recuperarlos.',
+    )
   }
+  if (!isDatabase(stored))
+    throw new StorageError(
+      'La base guardada está incompleta. Se conservaron los datos sin cambios; pedí ayuda al administrador.',
+    )
   if (stored.version > DB_VERSION) {
     // Otra pestaña ya usa una versión más nueva de la aplicación: recargar trae
     // el código nuevo. Nunca se pisan esos datos con una base de demostración vieja.
-    window.location.reload()
-    return stored
+    throw new StorageError(
+      'Los datos pertenecen a una versión más nueva de la aplicación. Actualizá esta página antes de continuar.',
+    )
   }
   const storedVersion = stored.version
   const upgraded = upgradeDatabase(stored)
@@ -110,16 +171,16 @@ function readStorage(): DB | null {
     if (storedVersion !== DB_VERSION) writeStorage(upgraded)
     return upgraded
   }
-  // No se puede actualizar: se archiva antes de reemplazarla, igual que al reiniciar.
-  archive(raw)
-  return null
+  throw new StorageError('Esta versión no puede actualizar la base guardada. Los datos se conservaron sin cambios.')
 }
 
 function writeStorage(db: DB) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(db))
   } catch {
-    // Sin almacenamiento disponible (modo privado): la sesión funciona en memoria.
+    throw new StorageError(
+      'No se guardaron los cambios. El almacenamiento del navegador está lleno o bloqueado; liberá espacio y volvé a intentar.',
+    )
   }
 }
 
@@ -161,9 +222,11 @@ export function transact<R>(fn: (db: DB) => R): R {
  */
 function archive(serialized: string) {
   try {
-    localStorage.setItem(`integrar-erp.archive.${new Date().toISOString()}`, serialized)
+    localStorage.setItem(`integrar-erp.archive.${new Date().toISOString()}.${crypto.randomUUID()}`, serialized)
   } catch {
-    // Sin espacio disponible: no se bloquea el reinicio por esto.
+    throw new StorageError(
+      'No se pudo guardar la copia de respaldo. El reinicio se canceló y los datos actuales se conservaron.',
+    )
   }
 }
 
@@ -183,7 +246,7 @@ export function onDatabaseChange(fn: () => void): () => void {
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    if (event.key === STORAGE_KEY) {
+    if (event.key === STORAGE_KEY || event.key === null) {
       cache = null
       emit()
     }

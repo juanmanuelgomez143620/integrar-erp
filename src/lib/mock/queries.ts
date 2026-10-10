@@ -3,7 +3,7 @@
 
 import { DOC_STATUSES, DOC_TYPES, MODULES, ROLES, TRANSITIONS, type StatusInfo } from '../domain/catalog'
 import type * as T from '../domain/types'
-import { money } from '../format'
+import { money, todayAR } from '../format'
 import type { DB } from './db'
 import {
   can,
@@ -17,6 +17,8 @@ import {
   isInstanceAdmin,
   isSchoolAdmin,
   requirePermission,
+  requisitionAvailableQuantity,
+  round3,
 } from './engine'
 
 export type PublicProfile = Omit<T.Profile, 'password'>
@@ -161,9 +163,9 @@ export function listSuppliers(db: DB, userId: string, companyId: string) {
 }
 
 export interface ProductRow extends T.Product {
-  stock: number
+  stock: number | null
   below_min: boolean
-  avg_cost: number
+  avg_cost: number | null
   supplier_name: string
 }
 
@@ -177,26 +179,27 @@ function stockOf(db: DB, productId: string) {
   const balances = balancesOf(db, productId)
   const qty = balances.reduce((s, b) => s + b.qty_on_hand, 0)
   const value = balances.reduce((s, b) => s + b.qty_on_hand * b.avg_unit_cost, 0)
-  return { qty, avg: qty > 0 ? value / qty : (balances[0]?.avg_unit_cost ?? 0) }
+  return { qty, avg: qty > 0 ? value / qty : (balances[0]?.avg_unit_cost ?? null) }
 }
 
-function productRow(db: DB, p: T.Product): ProductRow {
+function productRow(db: DB, p: T.Product, canStock: boolean): ProductRow {
   const s = stockOf(db, p.id)
   return {
     ...p,
-    stock: s.qty,
-    avg_cost: s.avg || p.standard_cost,
-    below_min: p.is_stockable && p.min_stock > 0 && s.qty < p.min_stock,
+    stock: canStock ? s.qty : null,
+    avg_cost: canStock ? (s.avg ?? p.standard_cost) : null,
+    below_min: canStock && p.is_active && p.is_stockable && p.min_stock > 0 && s.qty < p.min_stock,
     supplier_name: db.suppliers.find((x) => x.id === p.default_supplier_id)?.legal_name ?? '—',
   }
 }
 
 export function listProducts(db: DB, userId: string, companyId: string): ProductRow[] {
   assertPerm(db, userId, companyId, 'product.read')
+  const canStock = can(effectivePermissions(db, userId, companyId), 'stock.read')
   return db.products
     .filter((p) => p.company_id === companyId)
     .sort((a, b) => compareCodes(a.code, b.code))
-    .map((p) => productRow(db, p))
+    .map((p) => productRow(db, p, canStock))
 }
 
 export interface KardexRow extends T.StockMovement {
@@ -218,7 +221,7 @@ export function productDetail(db: DB, userId: string, companyId: string, code: s
   if (!p) return null
   const canStock = can(effectivePermissions(db, userId, companyId), 'stock.read')
   return {
-    product: productRow(db, p),
+    product: productRow(db, p, canStock),
     balances: canStock
       ? balancesOf(db, p.id).map((b) => ({
           ...b,
@@ -274,7 +277,7 @@ export function listStock(db: DB, userId: string, companyId: string): StockRow[]
         avg_cost: b.avg_unit_cost,
         value: b.qty_on_hand * b.avg_unit_cost,
         total_qty: total,
-        below_min: p.min_stock > 0 && total < p.min_stock,
+        below_min: p.is_active && p.min_stock > 0 && total < p.min_stock,
       })
     }
   }
@@ -649,7 +652,17 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
           qty_received: l.qty_received,
           requisition_label: req?.display_number ?? null,
           requisition_line_id: l.requisition_line_id,
-          requisition_max: rl ? rl.quantity - rl.qty_ordered + l.quantity : null,
+          requisition_max: rl
+            ? round3(
+                requisitionAvailableQuantity(db, rl.id, doc.id) -
+                  db.poLines
+                    .filter(
+                      (other) =>
+                        other.document_id === doc.id && other.requisition_line_id === rl.id && other.id !== l.id,
+                    )
+                    .reduce((sum, other) => sum + other.quantity, 0),
+              )
+            : null,
         }
       })
   }
@@ -752,7 +765,7 @@ export function pendingRequisitionLines(db: DB, userId: string, companyId: strin
     .sort((a, b) => a.number - b.number)) {
     const item = listItem(db, doc)
     for (const line of db.prLines.filter((l) => l.document_id === doc.id).sort(byLineNo)) {
-      const pending = line.quantity - line.qty_ordered
+      const pending = requisitionAvailableQuantity(db, line.id)
       if (pending > 1e-9)
         result.push({ line, pending, requisition: item, product: db.products.find((p) => p.id === line.product_id)! })
     }
@@ -808,6 +821,8 @@ export function listTasks(
   scope: 'mine' | 'all',
   includeClosed = false,
 ): TaskItem[] {
+  const profile = getProfile(db, userId)
+  if (!profile?.is_active || (!isInstanceAdmin(profile) && !getMember(db, userId, companyId)?.is_active)) return []
   const eff = effectivePermissions(db, userId, companyId)
   const canAll = eff.all || eff.perms.has('task.read')
   const company = db.companies.find((c) => c.id === companyId)!
@@ -848,6 +863,8 @@ export function listTasks(
 
 /** Avisos del usuario en la empresa, del más nuevo al más viejo. Con `limit: null`, el historial completo. */
 export function listNotifications(db: DB, userId: string, companyId: string, limit: number | null = 60) {
+  const profile = getProfile(db, userId)
+  if (!profile?.is_active || (!isInstanceAdmin(profile) && !getMember(db, userId, companyId)?.is_active)) return []
   const rows = db.notifications
     .filter((n) => n.company_id === companyId && n.recipient_user_id === userId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -931,13 +948,15 @@ export interface Dashboard {
 
 export function dashboard(db: DB, userId: string, companyId: string): Dashboard {
   const eff = effectivePermissions(db, userId, companyId)
-  const docs = db.documents.filter((d) => d.company_id === companyId)
+  const docs = db.documents.filter(
+    (d) => d.company_id === companyId && can(eff, `${DOC_TYPES[d.doc_type].resource}.read`),
+  )
   const pos = docs.filter((d) => d.doc_type === 'PURCHASE_ORDER')
-  const month = new Date().toISOString().slice(0, 7)
+  const month = todayAR().slice(0, 7)
   const canPurchasing = can(eff, 'purchase_order.read')
   const canStock = can(eff, 'stock.read')
   const lowStock = db.products
-    .filter((p) => p.company_id === companyId && p.is_stockable && p.min_stock > 0)
+    .filter((p) => canStock && p.company_id === companyId && p.is_active && p.is_stockable && p.min_stock > 0)
     .sort((a, b) => compareCodes(a.code, b.code))
     .map((p) => ({ p, qty: stockOf(db, p.id).qty }))
     .filter(({ p, qty }) => qty < p.min_stock)
@@ -984,7 +1003,7 @@ export function dashboard(db: DB, userId: string, companyId: string): Dashboard 
     low_stock: canStock ? lowStock : [],
     activity: listAudit(db, userId, companyId).slice(0, 8),
     tasks: tasks.slice(0, 6),
-    lead_time_hours: leadTimes.length ? leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length : null,
+    lead_time_hours: canPurchasing && leadTimes.length ? leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length : null,
     can: { purchasing: canPurchasing, stock: canStock, audit: can(eff, 'audit.read') },
   }
 }
@@ -1074,6 +1093,12 @@ export function publicSchoolInfo(db: DB): Pick<T.SchoolSettings, 'official_name'
 function requireSchoolAdminRead(db: DB, userId: string) {
   if (!isSchoolAdmin(getProfile(db, userId)))
     fail('SIN_PERMISO', 'Sólo la administración de la escuela puede ver esto.')
+}
+
+/** El directorio institucional no se expone a estudiantes ni docentes de otras empresas. */
+export function listUsers(db: DB, userId: string): PublicProfile[] {
+  requireSchoolAdminRead(db, userId)
+  return db.profiles.map(publicProfile).sort(compareNames)
 }
 
 /** Cursos del año lectivo: los administra la escuela; el docente los consulta para crear la empresa de su curso. */

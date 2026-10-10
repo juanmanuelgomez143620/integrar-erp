@@ -127,9 +127,9 @@ export function ProductsPage() {
                   key: 'stock',
                   header: 'Stock',
                   align: 'right' as const,
-                  sort: (p: ProductRow) => p.stock,
+                  sort: (p: ProductRow) => p.stock ?? -1,
                   cell: (p: ProductRow) =>
-                    p.is_stockable ? (
+                    p.is_stockable && p.stock != null ? (
                       <span className={cn('tabular', p.below_min && 'font-semibold text-red-700')}>{qty(p.stock)}</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">no aplica</span>
@@ -148,8 +148,13 @@ export function ProductsPage() {
             key: 'cost',
             header: 'Costo (PPP)',
             align: 'right',
-            sort: (p) => p.avg_cost,
-            cell: (p) => <span className="tabular">{money(p.avg_cost)}</span>,
+            sort: (p) => p.avg_cost ?? -1,
+            cell: (p) =>
+              p.avg_cost != null ? (
+                <span className="tabular">{money(p.avg_cost)}</span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              ),
           },
           {
             key: 'supplier',
