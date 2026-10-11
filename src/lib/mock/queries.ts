@@ -1087,8 +1087,8 @@ export function demoUsers(db: DB) {
  * ingreso). Con Supabase: función pública que devuelve sólo estos campos,
  * nunca la fila completa de school_settings.
  */
-export function publicSchoolInfo(db: DB): Pick<T.SchoolSettings, 'official_name' | 'short_name'> {
-  return { official_name: db.school.official_name, short_name: db.school.short_name }
+export function publicSchoolInfo(db: DB): Pick<T.SchoolSettings, 'official_name' | 'short_name' | 'logo_path'> {
+  return { official_name: db.school.official_name, short_name: db.school.short_name, logo_path: db.school.logo_path }
 }
 
 function requireSchoolAdminRead(db: DB, userId: string) {

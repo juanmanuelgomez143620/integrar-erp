@@ -53,11 +53,26 @@ export function LoginPage() {
     run(() => login(username, password))
   }
 
+  const schoolLogo = school?.logo_path
+    ? school.logo_path.startsWith('data:')
+      ? school.logo_path
+      : `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${school.logo_path}`
+    : null
+
   return (
     <div className="grid min-h-svh lg:grid-cols-[minmax(380px,44%)_1fr]">
       <aside className="relative hidden flex-col justify-between overflow-hidden bg-navy p-10 text-white lg:flex">
         <BrandMark tone="dark" />
         <div className="relative z-10 max-w-md">
+          {schoolLogo && (
+            <div className="mb-6 flex justify-center">
+              <img
+                src={schoolLogo}
+                alt={`${school?.official_name} - Logo`}
+                className="max-w-xs max-h-20 object-contain"
+              />
+            </div>
+          )}
           <h1 className="text-3xl leading-tight font-bold tracking-tight">
             Una empresa, muchas áreas, <span className="text-sky-300">una sola base de datos.</span>
           </h1>
@@ -87,6 +102,15 @@ export function LoginPage() {
           <div className="mb-8 lg:hidden">
             <BrandMark />
           </div>
+          {schoolLogo && (
+            <div className="mb-6 lg:hidden flex justify-center">
+              <img
+                src={schoolLogo}
+                alt={`${school?.official_name} - Logo`}
+                className="max-w-xs max-h-16 object-contain"
+              />
+            </div>
+          )}
           <h2 className="text-xl font-semibold text-navy">Ingresar</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Ingresá con el usuario y la contraseña que te dio tu docente.

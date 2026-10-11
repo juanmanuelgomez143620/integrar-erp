@@ -351,6 +351,22 @@ export function createSupabaseBackend(config: SupabaseConfig) {
         p_orientation: input.orientation,
       }),
     updateSchoolSettings: (input) => rpc('school_settings_update', { p_settings: input }),
+    uploadSchoolLogo: async (file) => {
+      const bucket = 'school-logos'
+      const path = `logo-${Date.now()}.${file.name.split('.').pop()}`
+      const res = await authorized(`/storage/v1/object/${bucket}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type },
+        body: Uint8Array.from(atob(file.data), (c) => c.charCodeAt(0)),
+      })
+      if (!res.ok) {
+        const data = await body(res)
+        throw new BusinessError('DATO_INVALIDO', data?.message ?? 'No se pudo subir el logo.')
+      }
+      const logoPath = `${bucket}/${path}`
+      await rpc('school_settings_update', { p_settings: { logo_path: logoPath } })
+      return { logo_path: logoPath }
+    },
     createCompanyFromTemplate: (courseId) => rpc('company_create_from_template', { p_course_id: courseId }),
 
     async resetDemoData() {

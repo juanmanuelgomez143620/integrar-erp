@@ -213,6 +213,8 @@ const mockCommands = {
   createTeacher: (input: E.TeacherInput) => command((c) => E.cmdCreateTeacher(c, input)),
   createCourse: (input: E.CourseInput) => command((c) => E.cmdCreateCourse(c, input)),
   updateSchoolSettings: (input: E.SchoolSettingsInput) => command((c) => E.cmdUpdateSchoolSettings(c, input)),
+  uploadSchoolLogo: (file: { name: string; type: string; data: string }) =>
+    command((c) => E.cmdUploadSchoolLogo(c, file)),
   createCompanyFromTemplate: (courseId: string) =>
     command((c) => E.cmdCreateCompanyFromTemplate(c, { course_id: courseId })),
 

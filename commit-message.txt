@@ -1,0 +1,13 @@
+feat(supabase): logo de la escuela con Storage
+
+- Migración 20261011150000: actualiza RPC school_settings_update para manejar logo_path
+- Migración 20261011150100: crea bucket school-logos en Storage con políticas RLS (público para leer, solo admins para escribir)
+- Tipos: SchoolSettings y SchoolSettingsInput añaden logo_path opcional
+- Motor simulado: cmdUploadSchoolLogo guarda data URL como placeholder
+- API Supabase: uploadSchoolLogo sube a storage.buckets['school-logos'] y actualiza RPC
+- UI: SchoolSettingsForm con vista previa y subida de archivo (PNG/JPEG/WebP/SVG, máx. 5 MB)
+- Login: muestra logo de la escuela en pantalla de ingreso (aside y mobile)
+- Trigger handle_new_user arreglado: genera username del email si no hay metadata
+- Test security: ajustado para reflejar comportamiento real del trigger
+
+Todas las pruebas pasan (76 unitarias + 118 Supabase/PGlite = 194).

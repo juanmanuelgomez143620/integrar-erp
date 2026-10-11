@@ -48,6 +48,12 @@ export interface SchoolSettings {
   /** Minutos sin actividad antes de cerrar la sesión (computadoras compartidas). 0 = no se cierra. */
   session_timeout_minutes: number
   features: Record<string, boolean>
+  /** Ruta del logo en Storage (p. ej. school-logos/ens9-logo.png). */
+  logo_path?: string | null
+  /** Solo en el motor simulado / DB: timestamp de última actualización. */
+  updated_at?: string
+  /** Solo en el motor simulado / DB: usuario que hizo la última actualización. */
+  updated_by?: string
 }
 
 export interface Profile {

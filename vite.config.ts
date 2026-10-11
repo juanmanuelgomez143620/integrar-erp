@@ -11,7 +11,7 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
-  server: { port: 5173 },
+  server: { port: 5173, host: true },
   test: {
     // Las pruebas de esta fase son del motor de negocio (funciones puras
     // sobre un objeto DB en memoria): no hace falta un DOM simulado.

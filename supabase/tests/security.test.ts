@@ -200,9 +200,16 @@ describe('alta de usuarios', () => {
     expect(profile.app_role).toBe('ESTUDIANTE')
   })
 
-  it('un registro sin usuario válido no crea la cuenta', async () => {
-    const error = await businessError(db.admin(`insert into auth.users (email) values ('suelto@usuarios.test')`))
-    expect(error.code).toBe('SQL:23502') // username obligatorio
+  it('un registro sin username en metadata genera uno del email y crea la cuenta', async () => {
+    const [row] = await db.admin<{ id: string }>(
+      `insert into auth.users (email, raw_app_meta_data) values ('suelto@usuarios.test', '{}') returning id`
+    )
+    const [profile] = await db.admin<{ username: string; app_role: string }>(
+      'select username, app_role from public.profiles where id = $1',
+      [row.id]
+    )
+    expect(profile.username).toBe('suelto')
+    expect(profile.app_role).toBe('ESTUDIANTE')
   })
 })
 

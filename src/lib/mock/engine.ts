@@ -2173,6 +2173,7 @@ export interface SchoolSettingsInput {
   province: string
   contact_email: string
   session_timeout_minutes: number
+  logo_path?: string | null
 }
 
 /**
@@ -2186,6 +2187,7 @@ export function cmdUpdateSchoolSettings(ctx: Ctx, input: SchoolSettingsInput) {
   const short = input.short_name.trim()
   const email = input.contact_email.trim()
   const minutes = input.session_timeout_minutes
+  const logo = input.logo_path?.trim() ?? null
   if (official.length < 3) fail('DATO_INVALIDO', 'Ingresá el nombre oficial de la escuela.')
   if (short.length < 2 || short.length > 30)
     fail('DATO_INVALIDO', 'El nombre corto debe tener entre 2 y 30 caracteres (por ejemplo, "ENS N.º 9").')
@@ -2201,6 +2203,7 @@ export function cmdUpdateSchoolSettings(ctx: Ctx, input: SchoolSettingsInput) {
     province: input.province.trim(),
     contact_email: email,
     session_timeout_minutes: minutes,
+    logo_path: logo,
   }
   const changes = diff(before, ctx.db.school, [
     'official_name',
@@ -2209,6 +2212,7 @@ export function cmdUpdateSchoolSettings(ctx: Ctx, input: SchoolSettingsInput) {
     'province',
     'contact_email',
     'session_timeout_minutes',
+    'logo_path',
   ])
   if (!Object.keys(changes).length) return
   logAudit(ctx, {
@@ -2343,4 +2347,39 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   }
   scanStockAlerts(system, companyId)
   return { id: companyId, slug }
+}
+
+/**
+ * Sube el logo de la escuela a Storage y actualiza school_settings.logo_path.
+ * En el simulador no hay Storage real, así que se usa un data URL como placeholder.
+ * Con Supabase, la implementación real sube a storage.buckets['school-logos'].
+ */
+export function cmdUploadSchoolLogo(
+  ctx: Ctx,
+  file: { name: string; type: string; data: string },
+): { logo_path: string } {
+  const actor = requireSchoolAdmin(ctx)
+  const allowed = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml']
+  if (!allowed.includes(file.type)) fail('DATO_INVALIDO', 'El logo debe ser PNG, JPEG, WebP o SVG.')
+  if (file.data.length > 5_000_000) fail('DATO_INVALIDO', 'El archivo es demasiado grande (máx. 5 MB).')
+  // En el simulador guardamos el data URL como logo_path (no hay Storage real)
+  const logoPath = `data:${file.type};base64,${file.data}`
+  const before = { ...ctx.db.school }
+  ctx.db.school = {
+    ...ctx.db.school,
+    logo_path: logoPath,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  } as T.SchoolSettings
+  logAudit(ctx, {
+    company_id: null,
+    actor,
+    action: 'UPLOAD_LOGO',
+    entity_type: 'school_settings',
+    entity_id: null,
+    entity_label: ctx.db.school.official_name,
+    summary: `Subió el logo de la escuela (${file.name})`,
+    changes: { logo_path: { from: before.logo_path, to: logoPath } },
+  })
+  return { logo_path: logoPath }
 }
