@@ -72,9 +72,9 @@ async function snapshot(company: string) {
   const out: Record<string, unknown> = {}
   for (const t of tables) {
     const column = t === 'companies' ? 'id' : 'company_id'
-    out[t] = (await db.admin(`select to_jsonb(x) as r from public.${t} x where ${column} = $1 order by 1`, [company])).map(
-      (row) => JSON.stringify(row),
-    ).sort()
+    out[t] = (await db.admin(`select to_jsonb(x) as r from public.${t} x where ${column} = $1 order by 1`, [company]))
+      .map((row) => JSON.stringify(row))
+      .sort()
   }
   return out
 }
@@ -220,7 +220,9 @@ beforeAll(async () => {
       p_submit: true,
     })
   ).id
-  B.requisitionLine = (await one(`select id from public.purchase_requisition_lines where document_id = $1`, [B.requisition])).id
+  B.requisitionLine = (
+    await one(`select id from public.purchase_requisition_lines where document_id = $1`, [B.requisition])
+  ).id
   B.order = (
     await rpc<{ id: string }>('alumnoB', 'po_create', {
       p_company_id: B.id,
@@ -228,7 +230,15 @@ beforeAll(async () => {
         supplier_id: B.supplier,
         warehouse_id: B.warehouse,
         payment_terms_days: 30,
-        lines: [{ product_id: B.product, requisition_line_id: B.requisitionLine, quantity: 50, unit_price: 1300, vat_rate: 21 }],
+        lines: [
+          {
+            product_id: B.product,
+            requisition_line_id: B.requisitionLine,
+            quantity: 50,
+            unit_price: 1300,
+            vat_rate: 21,
+          },
+        ],
       }),
     })
   ).id
@@ -320,7 +330,8 @@ describe('S01: ninguna función pública da acceso a otra empresa', () => {
           try {
             const result = await rpc(attacker, name, argsFor(name, params, company))
             const leaks = leaked(result)
-            if (leaks.length) report.push(`${name} como ${attacker} (${company === B.id ? 'B' : 'A'}): ${leaks.length} ids de B`)
+            if (leaks.length)
+              report.push(`${name} como ${attacker} (${company === B.id ? 'B' : 'A'}): ${leaks.length} ids de B`)
           } catch {
             // Rechazado: es lo esperado para casi todo.
           }

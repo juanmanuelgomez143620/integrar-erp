@@ -14,7 +14,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "tsc --noEmit && eslint . && prettier --check . --log-level warn && vitest run --reporter=dot",
+    "check": "tsc --noEmit && eslint . && prettier --check . --log-level warn && vitest run --reporter=dot --maxWorkers=2",
     "db:catalog": "node scripts/generate-catalog-sql.mjs",
     "db:demo": "node scripts/generate-demo-sql.mjs"
   },
