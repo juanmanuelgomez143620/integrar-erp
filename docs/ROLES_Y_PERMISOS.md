@@ -35,7 +35,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 | `AUDITOR` | Auditoría interna | 1 (o rotativo) | Control de Gestión | Consulta todo, revisa la auditoría, detecta desvíos. **No modifica nada** |
 | `COMPRAS` | Compras | 2 | Compras | Atiende solicitudes, gestiona proveedores, emite órdenes de compra |
 | `VENTAS` | Ventas | 3 | Ventas | Clientes (MVP); presupuestos, pedidos y facturación (Fase 4) |
-| `CONTABILIDAD` | Contabilidad | 4 | Contabilidad | Consulta en MVP; asientos, libros y balances (Fase 2+) |
+| `CONTABILIDAD` | Contabilidad | 4 | Contabilidad | Plan de cuentas, asientos, libros y cierre de los meses (Fase 2); balances (fases siguientes) |
 | `IMPUESTOS` | Impuestos | 4 | Impuestos | Libros IVA, obligaciones y vencimientos (Fase 7) |
 | `TESORERIA` | Tesorería y Finanzas | 5 | Tesorería | Pagos, cobros, cajas y bancos (Fase 3+) |
 | `RRHH` | Recursos Humanos y Sueldos | 6 | RRHH | Legajos, novedades y liquidación (Fase 6) |
@@ -59,6 +59,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | masters | `customer.read/create/update/export`, `supplier.read/create/update/export`, `product.read/create/update/export` |
 | purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export` |
 | inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel` |
+| accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
 | audit | `audit.read`, `audit.export` |
 
@@ -82,11 +83,16 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Tablero ejecutivo | L | — | — | — | — | — | — | — | — | — | L | Todo |
 | Todas las tareas | L | — | — | — | — | — | — | — | — | — | L | Todo |
 | Auditoría completa | L E | — | — | — | — | — | — | — | — | — | L E | Todo |
+| Plan de cuentas (Fase 2) | L | — | — | — | — | L C M | L | — | L | — | L | Todo |
+| Asientos (Fase 2) | L E | — | — | — | — | L C M X E | L | — | L | — | L E | Todo |
+| Libro diario, mayor y sumas y saldos (Fase 2) | L E | — | — | — | — | L E | L | — | L | — | L E | Todo |
+| Ejercicios y períodos (Fase 2) | L | — | — | — | — | L, cierra meses | L | — | L | — | L | Todo³ |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
+³ Sólo el docente reabre un mes cerrado (con motivo) y abre un ejercicio nuevo.
 
-En el MVP, las islas de Contabilidad, Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta**: ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto).
+En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros.
 
 ## 5. Reglas de aprobación del MVP
 

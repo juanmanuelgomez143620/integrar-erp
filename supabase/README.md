@@ -1,12 +1,12 @@
 # Base de datos (Supabase)
 
-Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTEGR-AR. Todavía **no están aplicadas** a ningún proyecto. La interfaz usa el backend simulado (`src/lib/mock`, la especificación ejecutable de estas reglas) salvo que se compile con `VITE_BACKEND=supabase`: entonces usa este backend a través de `src/lib/api/supabase.ts`, con el mismo contrato.
+Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTEGR-AR. En el proyecto de desarrollo están aplicadas hasta la del logo de la escuela; faltan la del alta segura de usuarios (`20261013120000`) y las de Contabilidad (`20261014120000` a `20261014120300`; la última le agrega la contabilidad a las empresas que ya existían). La interfaz usa el backend simulado (`src/lib/mock`, la especificación ejecutable de estas reglas) salvo que se compile con `VITE_BACKEND=supabase`: entonces usa este backend a través de `src/lib/api/supabase.ts`, con el mismo contrato.
 
 ## Estructura
 
 | Carpeta | Contenido |
 |---|---|
-| `migrations/` | Migraciones en orden (formato de la CLI de Supabase). Dos se **generan** y no se editan a mano: la de catálogos, desde `src/lib/domain/catalog.ts` (`npm run db:catalog`), y la de la empresa plantilla, desde el seed del backend simulado (`npm run db:demo`). |
+| `migrations/` | Migraciones en orden (formato de la CLI de Supabase). Las de catálogos y de la empresa plantilla se **generan** y no se editan a mano: desde `src/lib/domain/catalog.ts` (`npm run db:catalog`) y desde el seed del backend simulado y `src/lib/domain/chart-of-accounts.ts` (`npm run db:demo`). Los generadores escriben la última versión (la de la Fase 2); una migración ya aplicada nunca se reescribe: si hay cambios, se genera otra con un nombre nuevo (`npm run db:catalog -- archivo.sql`). |
 | `seed.sql` | Datos para desarrollo local (`npx supabase db reset`): una escuela de demostración y la plantilla. |
 | `functions/admin-users/` | Edge Function de cuentas: altas de estudiantes (individual y masiva), de docentes y restablecimiento de contraseñas, con la API de administración de Auth. La lógica (`handler.ts`) usa sólo APIs web estándar y se prueba en Node. |
 | `tests/` | Pruebas de la base con [PGlite](https://pglite.dev) (PostgreSQL embebido): corren con `npm test`, en local y en CI, sin Docker. |
@@ -36,6 +36,8 @@ Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTE
 | Empresa plantilla y empresas por curso | Listo |
 | Lecturas: una función por cada consulta de `queries.ts`, con paridad comprobada usuario por usuario | Listo |
 | Cuentas: altas de estudiantes y docentes, restablecer contraseña (Edge Function `admin-users`) | Listo |
+| Contabilidad (Fase 2): plan de cuentas, ejercicios y períodos, asientos con contraasiento, libro diario, mayor, sumas y saldos y apertura de cada empresa | Listo (sin aplicar) |
+| Motor de imputación (`posting_rules`) para los asientos automáticos de las Fases 3 y 4 | Pendiente |
 | Adaptador de la interfaz (`src/lib/api/supabase.ts`): sesión con Auth, RPC, cuentas, sondeo cada 20 s | Listo |
 | Logo de la escuela (Storage), Realtime opcional | Pendiente |
 
