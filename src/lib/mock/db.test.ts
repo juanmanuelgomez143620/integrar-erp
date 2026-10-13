@@ -98,20 +98,24 @@ describe('persistencia de las operaciones', () => {
     expect(JSON.parse(values.get(KEY)!).version).toBe(future.version)
   })
 
-  it('migra datos v1 sin perder productos ni operaciones', async () => {
+  it('migra datos v1 sin perder productos ni operaciones, y les agrega la contabilidad', async () => {
     const old = structuredClone(db.read((data) => data))
     old.version = 1
+    old.documents = old.documents.filter((d) => d.doc_type !== 'JOURNAL_ENTRY')
     const raw = JSON.parse(JSON.stringify(old))
     delete raw.school.contact_email
     delete raw.school.session_timeout_minutes
+    for (const key of ['jeLines', 'accounts', 'fiscalYears', 'fiscalPeriods']) delete raw[key]
     values.set(KEY, JSON.stringify(raw))
     vi.resetModules()
     const current = await import('./db')
     const upgraded = current.read((data) => data)
     expect(upgraded.version).toBe(current.DB_VERSION)
     expect(upgraded.products).toEqual(old.products)
-    expect(upgraded.documents).toEqual(old.documents)
+    expect(upgraded.documents.filter((d) => d.doc_type !== 'JOURNAL_ENTRY')).toEqual(old.documents)
     expect(upgraded.school.session_timeout_minutes).toBe(15)
+    expect(upgraded.accounts.length).toBeGreaterThan(50)
+    expect(upgraded.documents.filter((d) => d.je?.origin === 'APERTURA')).toHaveLength(upgraded.companies.length)
     expect(JSON.parse(values.get(KEY)!).version).toBe(current.DB_VERSION)
   })
 })

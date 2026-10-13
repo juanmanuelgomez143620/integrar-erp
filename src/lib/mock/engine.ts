@@ -21,9 +21,21 @@ import {
   permissionModule,
   type TransitionInfo,
 } from '../domain/catalog'
+import {
+  ACCOUNT_CODE_PATTERN,
+  BASE_CHART,
+  IMPUTABLE_LEVEL,
+  INVENTORY_ACCOUNTS,
+  OPENING_BALANCES,
+  OPENING_BALANCING_ACCOUNT,
+  accountLevel,
+  accountTypeOf,
+  normalSideOf,
+  parentCode,
+} from '../domain/chart-of-accounts'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
-import { money, qty as fmtQty, todayAR } from '../format'
+import { date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
 import type { DB } from './db'
 
 // ============================================================ Infraestructura
@@ -1776,6 +1788,584 @@ export function cmdSetMasterActive(ctx: Ctx, kind: MasterKind, companyId: string
   })
 }
 
+// ============================================================ Contabilidad (docs/FASE_2_CONTABILIDAD.md)
+
+const MONTHS = [
+  'Enero',
+  'Febrero',
+  'Marzo',
+  'Abril',
+  'Mayo',
+  'Junio',
+  'Julio',
+  'Agosto',
+  'Septiembre',
+  'Octubre',
+  'Noviembre',
+  'Diciembre',
+]
+
+/** Comparación de nombres sin mayúsculas ni acentos (private.sort_key en la base). */
+const nameKey = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .trim()
+
+export const accountLabel = (a: T.Account) => `${a.code} ${a.name}`
+
+function getAccount(db: DB, companyId: string, id: string) {
+  const a = db.accounts.find((x) => x.id === id && x.company_id === companyId)
+  if (!a) fail('DATO_INVALIDO', 'La cuenta no existe en esta empresa.')
+  return a
+}
+
+/** Asientos que están en el libro diario: los registrados y los anulados después de registrarse. */
+export function isPosted(doc: T.Document) {
+  return doc.doc_type === 'JOURNAL_ENTRY' && doc.je?.entry_number != null
+}
+
+/** Saldo (debe − haber) de una cuenta imputable según los asientos del libro diario. */
+export function accountBalance(db: DB, accountId: string) {
+  const posted = new Set(db.documents.filter(isPosted).map((d) => d.id))
+  return round2(
+    db.jeLines
+      .filter((l) => l.account_id === accountId && posted.has(l.document_id))
+      .reduce((sum, l) => sum + l.debit - l.credit, 0),
+  )
+}
+
+function hasPostedMovements(db: DB, accountId: string) {
+  const posted = new Set(db.documents.filter(isPosted).map((d) => d.id))
+  return db.jeLines.some((l) => l.account_id === accountId && posted.has(l.document_id))
+}
+
+function insertBaseChart(ctx: Ctx, companyId: string) {
+  for (const [code, name, description = '', contra = false] of BASE_CHART) {
+    const type = accountTypeOf(code)
+    const level = accountLevel(code)
+    ctx.db.accounts.push({
+      id: uid(),
+      company_id: companyId,
+      code,
+      name,
+      account_type: type,
+      normal_side: normalSideOf(type, contra),
+      level,
+      is_imputable: level === IMPUTABLE_LEVEL,
+      description,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: null,
+      updated_at: ctx.now,
+      updated_by: null,
+    })
+  }
+}
+
+function createFiscalYear(ctx: Ctx, companyId: string, year: number): T.FiscalYear {
+  const fiscalYear: T.FiscalYear = {
+    id: uid(),
+    company_id: companyId,
+    name: `Ejercicio ${year}`,
+    start_date: `${year}-01-01`,
+    end_date: `${year}-12-31`,
+    created_at: ctx.now,
+  }
+  ctx.db.fiscalYears.push(fiscalYear)
+  MONTHS.forEach((month, i) => {
+    const mm = String(i + 1).padStart(2, '0')
+    const lastDay = new Date(Date.UTC(year, i + 1, 0)).getUTCDate()
+    ctx.db.fiscalPeriods.push({
+      id: uid(),
+      company_id: companyId,
+      fiscal_year_id: fiscalYear.id,
+      number: i + 1,
+      name: `${month} ${year}`,
+      start_date: `${year}-${mm}-01`,
+      end_date: `${year}-${mm}-${lastDay}`,
+      status: 'ABIERTO',
+      closed_by: null,
+      closed_at: null,
+    })
+  })
+  return fiscalYear
+}
+
+export interface JournalEntryInput {
+  document_date: string
+  description: string
+  lines: { account_id: string; debit: number; credit: number; notes?: string }[]
+}
+
+type EntryLine = JournalEntryInput['lines'][number]
+
+const isMoney = (n: number) => Number.isFinite(n) && n >= 0 && round2(n) === n
+
+/** Controles del borrador: puede quedar desbalanceado, pero cada línea tiene que ser válida. */
+function validateEntry(db: DB, companyId: string, input: JournalEntryInput): EntryLine[] {
+  if (input.description.trim().length < 3)
+    fail('DATO_INVALIDO', 'Escribí la leyenda del asiento: qué hecho económico registra.')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.document_date) || Number.isNaN(Date.parse(input.document_date)))
+    fail('DATO_INVALIDO', 'Indicá la fecha del asiento.')
+  const lines = input.lines.filter((l) => l.account_id || l.debit || l.credit)
+  if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos una línea con cuenta e importe.')
+  if (lines.length > 40) fail('DATO_INVALIDO', 'Un asiento admite hasta 40 líneas.')
+  lines.forEach((l, i) => {
+    if (!l.account_id) fail('DATO_INVALIDO', `Elegí la cuenta de la línea ${i + 1}.`)
+    const account = getAccount(db, companyId, l.account_id)
+    if (!account.is_imputable)
+      fail(
+        'DATO_INVALIDO',
+        `${accountLabel(account)} es un rubro: agrupa otras cuentas. Elegí una cuenta imputable (de nivel 4).`,
+      )
+    if (!account.is_active) fail('DATO_INVALIDO', `La cuenta ${accountLabel(account)} está desactivada.`)
+    if (!isMoney(l.debit) || !isMoney(l.credit))
+      fail('DATO_INVALIDO', `Los importes de la línea ${i + 1} deben ser positivos y tener hasta 2 decimales.`)
+    if (l.debit > 0 && l.credit > 0)
+      fail('DATO_INVALIDO', `La línea ${i + 1} tiene importe al debe y al haber: cada línea va de un solo lado.`)
+    if (!(l.debit > 0 || l.credit > 0)) fail('DATO_INVALIDO', `Indicá el importe de la línea ${i + 1}.`)
+  })
+  return lines.map((l) => ({
+    account_id: l.account_id,
+    debit: l.debit,
+    credit: l.credit,
+    notes: l.notes?.trim() ?? '',
+  }))
+}
+
+function writeEntryLines(ctx: Ctx, doc: T.Document, lines: EntryLine[]) {
+  ctx.db.jeLines = ctx.db.jeLines.filter((l) => l.document_id !== doc.id)
+  lines.forEach((l, i) => {
+    ctx.db.jeLines.push({
+      id: uid(),
+      company_id: doc.company_id,
+      document_id: doc.id,
+      line_no: i + 1,
+      account_id: l.account_id,
+      debit: l.debit,
+      credit: l.credit,
+      notes: l.notes ?? '',
+    })
+  })
+  const total = round2(lines.reduce((sum, l) => sum + l.debit, 0))
+  doc.subtotal = total
+  doc.total = total
+}
+
+function newEntry(
+  ctx: Ctx,
+  companyId: string,
+  actor: Actor,
+  date: string,
+  header: Pick<T.JournalEntryHeader, 'description' | 'origin' | 'reverses_id'>,
+  lines: EntryLine[],
+) {
+  const doc = newDocument(ctx, companyId, 'JOURNAL_ENTRY', actor, {
+    document_date: date,
+    je: { ...header, fiscal_year_id: null, entry_number: null, posted_at: null },
+  })
+  writeEntryLines(ctx, doc, lines)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'journal_entry',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number} (${lines.length} línea${lines.length === 1 ? '' : 's'})`,
+  })
+  return doc
+}
+
+function requireTransition(doc: T.Document, action: T.TransitionAction) {
+  if (!findTransition(doc.doc_type, doc.status, action))
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} está en estado "${statusLabel(doc.doc_type, doc.status)}" y no admite esta acción.`,
+    )
+}
+
+/**
+ * Registra el asiento en el libro diario (private.post_journal_entry): partida
+ * doble, cuentas activas, período abierto y fecha correlativa; le asigna el
+ * número de asiento del ejercicio.
+ */
+function postEntry(ctx: Ctx, doc: T.Document, summary?: (entryNumber: number) => string) {
+  const { db } = ctx
+  requireTransition(doc, 'CONFIRM')
+  const lines = db.jeLines.filter((l) => l.document_id === doc.id).sort((a, b) => a.line_no - b.line_no)
+  if (lines.length < 2 || !lines.some((l) => l.debit > 0) || !lines.some((l) => l.credit > 0))
+    fail(
+      'ASIENTO_INCOMPLETO',
+      'Un asiento tiene al menos una cuenta al debe y otra al haber.',
+      'En la partida doble, todo hecho económico afecta como mínimo a dos cuentas.',
+    )
+  for (const l of lines) {
+    const account = getAccount(db, doc.company_id, l.account_id)
+    if (!account.is_active || !account.is_imputable)
+      fail('DATO_INVALIDO', `La cuenta ${accountLabel(account)} no admite movimientos: corregí el borrador.`)
+  }
+  const debit = round2(lines.reduce((sum, l) => sum + l.debit, 0))
+  const credit = round2(lines.reduce((sum, l) => sum + l.credit, 0))
+  if (debit !== credit)
+    fail(
+      'ASIENTO_DESBALANCEADO',
+      `El asiento no balancea: el debe suma ${money(debit)} y el haber ${money(credit)} (diferencia ${money(Math.abs(round2(debit - credit)))}).`,
+      'En la partida doble, lo que se debita tiene que ser igual a lo que se acredita.',
+    )
+  const company = getCompany(db, doc.company_id)
+  const date = doc.document_date
+  if (date > businessDate(company)) fail('FECHA_INVALIDA', 'La fecha del asiento no puede ser posterior a hoy.')
+  const period = db.fiscalPeriods.find(
+    (p) => p.company_id === doc.company_id && p.start_date <= date && date <= p.end_date,
+  )
+  if (!period)
+    fail(
+      'SIN_EJERCICIO',
+      `No hay un ejercicio abierto que incluya el ${fmtDate(date)}.`,
+      'El docente abre los ejercicios en "Ejercicios y períodos".',
+    )
+  if (period.status === 'CERRADO')
+    fail(
+      'PERIODO_CERRADO',
+      `${period.name} está cerrado: no se registran asientos en ese mes.`,
+      'Si hace falta, el docente puede reabrir el período.',
+    )
+  const last = db.documents
+    .filter((d) => d.company_id === doc.company_id && isPosted(d) && d.je!.fiscal_year_id === period.fiscal_year_id)
+    .reduce<T.Document | null>((max, d) => (!max || d.je!.entry_number! > max.je!.entry_number! ? d : max), null)
+  if (last && date < last.document_date)
+    fail(
+      'FECHA_INVALIDA',
+      `El libro diario es correlativo: el último asiento registrado (N.º ${last.je!.entry_number}) es del ${fmtDate(last.document_date)}. Usá esa fecha o una posterior.`,
+      'En un libro encuadernado no se puede intercalar un asiento entre dos ya registrados.',
+    )
+  const number = (last?.je!.entry_number ?? 0) + 1
+  transition(ctx, doc, 'CONFIRM', {
+    summary: summary?.(number) ?? `Registró ${doc.display_number} como asiento N.º ${number} del libro diario`,
+  })
+  doc.je = { ...doc.je!, fiscal_year_id: period.fiscal_year_id, entry_number: number, posted_at: ctx.now }
+}
+
+export function cmdCreateJournalEntry(ctx: Ctx, companyId: string, input: JournalEntryInput, confirm: boolean) {
+  const actor = requirePermission(ctx, companyId, 'journal_entry.create')
+  const lines = validateEntry(ctx.db, companyId, input)
+  const doc = newEntry(
+    ctx,
+    companyId,
+    actor,
+    input.document_date,
+    { description: input.description.trim(), origin: 'MANUAL', reverses_id: null },
+    lines,
+  )
+  if (confirm) postEntry(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+export function cmdUpdateJournalEntry(ctx: Ctx, docId: string, input: JournalEntryInput) {
+  const doc = getDoc(ctx.db, docId, 'JOURNAL_ENTRY')
+  const actor = requirePermission(ctx, doc.company_id, 'journal_entry.update')
+  if (doc.status !== 'BORRADOR')
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} ya no es un borrador: no se modifica. Si tiene un error, se anula con un contraasiento.`,
+    )
+  const lines = validateEntry(ctx.db, doc.company_id, input)
+  const before = { document_date: doc.document_date, description: doc.je!.description, total: doc.total }
+  doc.document_date = input.document_date
+  doc.je = { ...doc.je!, description: input.description.trim() }
+  doc.updated_at = ctx.now
+  doc.updated_by = ctx.userId
+  writeEntryLines(ctx, doc, lines)
+  const changes = diff(
+    before,
+    { document_date: doc.document_date, description: doc.je.description, total: doc.total },
+    ['document_date', 'description', 'total'],
+  )
+  logAudit(ctx, {
+    company_id: doc.company_id,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'journal_entry',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    summary: `Modificó ${doc.display_number}`,
+    changes: Object.keys(changes).length ? changes : null,
+  })
+}
+
+export function cmdConfirmJournalEntry(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'JOURNAL_ENTRY')
+  requirePermission(ctx, doc.company_id, 'journal_entry.create')
+  postEntry(ctx, doc)
+}
+
+/**
+ * El borrador se anula sin más. Un asiento registrado no se borra ni se
+ * modifica: se anula con un contraasiento (mismas cuentas, debe y haber
+ * invertidos, fecha de hoy) y los dos quedan en el libro diario.
+ */
+export function cmdCancelJournalEntry(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'JOURNAL_ENTRY')
+  if (doc.status !== 'CONFIRMADO') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'journal_entry.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  if (doc.je!.origin === 'CONTRAASIENTO')
+    fail('DATO_INVALIDO', 'Un contraasiento no se anula. Si hubo un error, registrá el asiento correcto.')
+  const company = getCompany(db, doc.company_id)
+  const lines = db.jeLines
+    .filter((l) => l.document_id === doc.id)
+    .sort((a, b) => a.line_no - b.line_no)
+    .map((l) => ({ account_id: l.account_id, debit: l.credit, credit: l.debit, notes: l.notes }))
+  const reversal = newEntry(
+    ctx,
+    doc.company_id,
+    actor,
+    businessDate(company),
+    {
+      description: `Anulación del asiento N.º ${doc.je!.entry_number} (${doc.display_number}): ${comment}`,
+      origin: 'CONTRAASIENTO',
+      reverses_id: doc.id,
+    },
+    lines,
+  )
+  postEntry(
+    ctx,
+    reversal,
+    (n) => `Registró ${reversal.display_number}, contraasiento de ${doc.display_number}, como asiento N.º ${n}`,
+  )
+  link(ctx, doc.company_id, doc.id, reversal.id)
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number} con el contraasiento ${reversal.display_number} — ${comment}`,
+  })
+}
+
+export interface AccountInput {
+  code: string
+  name: string
+  description: string
+  is_contra: boolean
+}
+
+/** Alta de una cuenta imputable dentro de un rubro existente, o cambio de nombre y descripción. */
+export function cmdSaveAccount(ctx: Ctx, companyId: string, input: AccountInput & { id?: string }) {
+  const { db } = ctx
+  const isNew = !input.id
+  const actor = requirePermission(ctx, companyId, isNew ? 'account.create' : 'account.update')
+  const name = input.name.trim()
+  const description = input.description.trim()
+  if (name.length < 3) fail('DATO_INVALIDO', 'Ingresá el nombre de la cuenta.')
+  if (db.accounts.some((a) => a.company_id === companyId && a.id !== input.id && nameKey(a.name) === nameKey(name)))
+    fail('DATO_INVALIDO', `Ya existe una cuenta llamada "${name}".`)
+  if (isNew) {
+    const code = input.code.trim()
+    if (!ACCOUNT_CODE_PATTERN.test(code) || accountLevel(code) !== IMPUTABLE_LEVEL)
+      fail('DATO_INVALIDO', 'El código de una cuenta nueva tiene cuatro niveles, por ejemplo 1.1.01.05.')
+    if (!db.accounts.some((a) => a.company_id === companyId && a.code === parentCode(code)))
+      fail(
+        'DATO_INVALIDO',
+        `No existe el rubro ${parentCode(code)}: las cuentas nuevas van dentro de un rubro del plan.`,
+      )
+    if (db.accounts.some((a) => a.company_id === companyId && a.code === code))
+      fail('DATO_INVALIDO', `Ya existe la cuenta ${code}.`)
+    const type = accountTypeOf(code)
+    const account: T.Account = {
+      id: uid(),
+      company_id: companyId,
+      code,
+      name,
+      account_type: type,
+      normal_side: normalSideOf(type, input.is_contra),
+      level: IMPUTABLE_LEVEL,
+      is_imputable: true,
+      description,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    }
+    db.accounts.push(account)
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'CREATE',
+      entity_type: 'account',
+      entity_id: account.id,
+      entity_label: accountLabel(account),
+      summary: `Dio de alta la cuenta ${accountLabel(account)}`,
+    })
+    return account.id
+  }
+  const account = getAccount(db, companyId, input.id!)
+  if (!account.is_imputable) fail('DATO_INVALIDO', 'Los rubros del plan de cuentas no se modifican.')
+  const side = normalSideOf(account.account_type, input.is_contra)
+  if (side !== account.normal_side && hasPostedMovements(db, account.id))
+    fail('DATO_INVALIDO', 'La cuenta ya tiene movimientos: no se puede cambiar si es regularizadora.')
+  const before = { ...account }
+  Object.assign(account, { name, description, normal_side: side, updated_at: ctx.now, updated_by: ctx.userId })
+  const changes = diff(before, account, ['name', 'description', 'normal_side'])
+  if (Object.keys(changes).length) {
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'account',
+      entity_id: account.id,
+      entity_label: accountLabel(account),
+      summary: `Modificó la cuenta ${accountLabel(account)}`,
+      changes,
+    })
+  }
+  return account.id
+}
+
+export function cmdSetAccountActive(ctx: Ctx, companyId: string, accountId: string, active: boolean) {
+  const actor = requirePermission(ctx, companyId, 'account.update')
+  const account = getAccount(ctx.db, companyId, accountId)
+  if (!account.is_imputable) fail('DATO_INVALIDO', 'Sólo se desactivan cuentas imputables (de nivel 4).')
+  if (account.is_active === active) return
+  const balance = accountBalance(ctx.db, account.id)
+  if (!active && balance !== 0)
+    fail(
+      'DATO_INVALIDO',
+      `La cuenta ${accountLabel(account)} tiene saldo (${money(Math.abs(balance))}): primero hay que dejarla en cero.`,
+    )
+  account.is_active = active
+  account.updated_at = ctx.now
+  account.updated_by = ctx.userId
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'account',
+    entity_id: account.id,
+    entity_label: accountLabel(account),
+    summary: `${active ? 'Activó' : 'Desactivó'} la cuenta ${accountLabel(account)}`,
+  })
+}
+
+/** El docente abre un ejercicio nuevo (año calendario) con sus doce períodos mensuales. */
+export function cmdOpenFiscalYear(ctx: Ctx, companyId: string, year: number) {
+  const actor = requireSupervisor(ctx, companyId)
+  const current = Number(businessDate(getCompany(ctx.db, companyId)).slice(0, 4))
+  if (!Number.isInteger(year) || year < 2000 || year > current + 1)
+    fail('DATO_INVALIDO', `Elegí un año válido, hasta ${current + 1}.`)
+  if (ctx.db.fiscalYears.some((y) => y.company_id === companyId && y.start_date === `${year}-01-01`))
+    fail('DATO_INVALIDO', `El ejercicio ${year} ya existe.`)
+  const fiscalYear = createFiscalYear(ctx, companyId, year)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'OPEN_FISCAL_YEAR',
+    entity_type: 'fiscal_year',
+    entity_id: fiscalYear.id,
+    entity_label: fiscalYear.name,
+    summary: `Abrió el ${fiscalYear.name.toLowerCase()} con sus doce períodos mensuales`,
+  })
+  return fiscalYear.id
+}
+
+/** Contabilidad cierra un mes cuando terminó de revisarlo; sólo el docente lo reabre. */
+export function cmdSetPeriodStatus(
+  ctx: Ctx,
+  companyId: string,
+  periodId: string,
+  status: T.FiscalPeriod['status'],
+  reason: string,
+) {
+  const period = ctx.db.fiscalPeriods.find((p) => p.id === periodId && p.company_id === companyId)
+  if (!period) fail('DATO_INVALIDO', 'El período no existe en esta empresa.')
+  if (status !== 'ABIERTO' && status !== 'CERRADO') fail('DATO_INVALIDO', 'Indicá si el período se abre o se cierra.')
+  const closing = status === 'CERRADO'
+  const actor = closing ? requirePermission(ctx, companyId, 'fiscal_period.update') : requireSupervisor(ctx, companyId)
+  if (period.status === status) fail('DATO_INVALIDO', `${period.name} ya está ${closing ? 'cerrado' : 'abierto'}.`)
+  const comment = reason.trim()
+  if (!closing && comment.length < 3)
+    fail('MOTIVO_REQUERIDO', 'Indicá el motivo de la reapertura: queda registrado en la auditoría.')
+  period.status = status
+  period.closed_by = closing ? ctx.userId : null
+  period.closed_at = closing ? ctx.now : null
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: closing ? 'CLOSE_PERIOD' : 'REOPEN_PERIOD',
+    entity_type: 'fiscal_period',
+    entity_id: period.id,
+    entity_label: period.name,
+    summary: `${closing ? 'Cerró' : 'Reabrió'} el período ${period.name}${comment ? ` — ${comment}` : ''}`,
+  })
+}
+
+/**
+ * Contabilidad de una empresa nueva (plantilla o curso): plan de cuentas
+ * básico, ejercicio del año en curso y asiento N.º 1 de apertura al 1.º de
+ * enero. Los bienes de cambio salen del inventario inicial, así el mayor
+ * coincide con el stock; la diferencia va a resultados no asignados.
+ */
+export function startAccounting(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const company = getCompany(db, companyId)
+  if (!db.accounts.some((a) => a.company_id === companyId)) insertBaseChart(ctx, companyId)
+  const year = Number(businessDate(company).slice(0, 4))
+  const fiscalYear =
+    db.fiscalYears.find((y) => y.company_id === companyId && y.start_date === `${year}-01-01`) ??
+    createFiscalYear(ctx, companyId, year)
+  if (db.documents.some((d) => d.company_id === companyId && d.doc_type === 'JOURNAL_ENTRY')) return
+
+  const amounts = new Map<string, number>()
+  const add = (code: string, amount: number) => {
+    const account = db.accounts.find((a) => a.company_id === companyId && a.code === code && a.is_imputable)
+    if (account) amounts.set(account.id, (amounts.get(account.id) ?? 0) + amount)
+  }
+  for (const b of OPENING_BALANCES) add(b.code, b.debit - b.credit)
+  for (const adj of db.documents.filter(
+    (d) =>
+      d.company_id === companyId &&
+      d.doc_type === 'STOCK_ADJUSTMENT' &&
+      d.status === 'CONFIRMADO' &&
+      d.sa?.reason_code === 'INVENTARIO_INICIAL',
+  )) {
+    for (const l of db.saLines.filter((x) => x.document_id === adj.id)) {
+      const code = INVENTORY_ACCOUNTS[getProduct(db, companyId, l.product_id).product_type]
+      if (code) add(code, l.quantity_delta * l.unit_cost)
+    }
+  }
+  add(OPENING_BALANCING_ACCOUNT, -[...amounts.values()].reduce((sum, n) => sum + n, 0))
+  const code = (id: string) => db.accounts.find((a) => a.id === id)!.code
+  const lines = [...amounts]
+    .map(([account_id, net]) => ({ account_id, net: round2(net) }))
+    .filter((l) => l.net !== 0)
+    .sort((a, b) => Number(b.net > 0) - Number(a.net > 0) || (code(a.account_id) < code(b.account_id) ? -1 : 1))
+    .map((l) => ({ account_id: l.account_id, debit: Math.max(l.net, 0), credit: Math.max(-l.net, 0), notes: '' }))
+  const doc = newEntry(
+    ctx,
+    companyId,
+    SYSTEM_ACTOR,
+    fiscalYear.start_date,
+    {
+      description: `Asiento de apertura del ${fiscalYear.name.toLowerCase()}: saldos iniciales de la empresa.`,
+      origin: 'APERTURA',
+      reverses_id: null,
+    },
+    lines,
+  )
+  postEntry(ctx, doc, (n) => `Registró ${doc.display_number}, asiento N.º ${n} de apertura del ejercicio`)
+}
+
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
@@ -2246,11 +2836,11 @@ function uniqueSlug(db: DB, base: string) {
 /**
  * Crea la empresa de un curso a partir de la plantilla (H-20, DATABASE.md §12).
  * Copia la estructura (islas, sectores, depósitos, reglas de aprobación,
- * módulos y control interno) y los maestros (proveedores, clientes,
- * productos); no copia personas ni operaciones, así que la numeración de
- * documentos empieza en 1. Vuelve a cargar el inventario inicial con su
- * documento (y sus alertas de stock mínimo) y deja como supervisor al docente
- * que la crea.
+ * módulos y control interno), los maestros (proveedores, clientes,
+ * productos) y el plan de cuentas; no copia personas ni operaciones, así que
+ * la numeración de documentos empieza en 1. Vuelve a cargar el inventario
+ * inicial con su documento (y sus alertas de stock mínimo), abre el ejercicio
+ * con su asiento de apertura y deja como supervisor al docente que la crea.
  */
 export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: string }): { id: string; slug: string } {
   const { db } = ctx
@@ -2302,6 +2892,7 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
     default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,
     default_warehouse_id: p.default_warehouse_id ? (warehouseIds.get(p.default_warehouse_id) ?? null) : null,
   }))
+  copy(db.accounts, () => audited)
 
   const member: T.Member = {
     id: uid(),
@@ -2346,6 +2937,7 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
     )
   }
   scanStockAlerts(system, companyId)
+  startAccounting(system, companyId)
   return { id: companyId, slug }
 }
 

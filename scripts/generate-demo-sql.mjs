@@ -1,18 +1,22 @@
 // Genera la función private.seed_demo_company() a partir del seed del backend
 // simulado (src/lib/mock/seed.ts → buildSeed): la empresa plantilla Forestal
-// del Norte SRL con su estructura, maestros e inventario inicial, iguales a los
-// de la demo local. No incluye las operaciones de ejemplo de la demo (SC, OC y
-// REC): las empresas de los cursos tampoco las copian.
+// del Norte SRL con su estructura, maestros, inventario inicial y contabilidad,
+// iguales a los de la demo local. No incluye las operaciones de ejemplo de la
+// demo (SC, OC, REC y asientos manuales): las empresas de los cursos tampoco
+// las copian. También genera los datos del plan de cuentas básico y de la
+// apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// La función es "create or replace": regenerarla en una migración nueva la actualiza.
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 2).
+// Las funciones son "create or replace": si cambian después de aplicada, se
+// regeneran en una migración nueva con otro nombre.
 
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261003191200_demo_template.sql'
+const target = process.argv[2] ?? '20261014120200_demo_template_contabilidad.sql'
 
 const server = await createServer({
   root,
@@ -34,7 +38,25 @@ const values = (rows, columns) => rows.map((r) => `      (${columns.map((c) => s
 
 try {
   const { buildSeed } = await server.ssrLoadModule('/src/lib/mock/seed.ts')
+  const chart = await server.ssrLoadModule('/src/lib/domain/chart-of-accounts.ts')
   const db = buildSeed()
+  const accounts = chart.BASE_CHART.map(([code, name, description = '', contra = false]) => {
+    const type = chart.accountTypeOf(code)
+    const level = chart.accountLevel(code)
+    return {
+      code,
+      name,
+      account_type: type,
+      normal_side: chart.normalSideOf(type, contra),
+      level,
+      is_imputable: level === chart.IMPUTABLE_LEVEL,
+      description,
+    }
+  })
+  const inventoryCases = Object.entries(chart.INVENTORY_ACCOUNTS)
+    .filter(([, code]) => code)
+    .map(([type, code]) => `when ${sql(type)} then ${sql(code)}`)
+    .join(' ')
   const company = db.companies.find((c) => c.is_template)
   if (!company) throw new Error('El seed no tiene una empresa plantilla')
   const of = (rows) => rows.filter((r) => r.company_id === company.id)
@@ -78,11 +100,59 @@ ${values(adj.lines, ['code', 'qty', 'cost', 'ord'])}
     )
     .join('\n')
 
-  const out = `-- 13. Empresa plantilla de demostración: FORESTAL DEL NORTE SRL (datos ficticios).
--- GENERADO por scripts/generate-demo-sql.mjs desde src/lib/mock/seed.ts: no editar a mano.
+  const out = `-- 16. Empresa plantilla de demostración: FORESTAL DEL NORTE SRL (datos ficticios),
+-- ahora con su contabilidad, y los datos del plan de cuentas básico y de la apertura.
+-- GENERADO por scripts/generate-demo-sql.mjs desde src/lib/mock/seed.ts y
+-- src/lib/domain/chart-of-accounts.ts: no editar a mano.
 -- Se ejecuta al instalar una escuela (docs/INSTANCIAS.md): select private.seed_demo_company();
 -- Idempotente: si la plantilla ya existe, devuelve su id sin tocarla.
 
+-- ------------------------------------------------------------------ Plan de cuentas básico (a validar por el docente)
+create or replace function private.insert_base_chart(p_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.accounts (company_id, code, name, account_type, normal_side, level, is_imputable, description)
+  select p_company, a.code, a.name, a.account_type, a.normal_side, a.level, a.is_imputable, a.description
+    from (values
+${values(accounts, ['code', 'name', 'account_type', 'normal_side', 'level', 'is_imputable', 'description'])}
+    ) as a (code, name, account_type, normal_side, level, is_imputable, description);
+end;
+$$;
+
+-- Saldos fijos del asiento de apertura; los bienes de cambio salen del inventario inicial.
+create or replace function private.opening_amounts()
+returns table (code text, debit numeric, credit numeric)
+language sql
+immutable
+set search_path = ''
+as $$
+  select o.code::text, o.debit::numeric, o.credit::numeric
+    from (values
+${values(chart.OPENING_BALANCES, ['code', 'debit', 'credit'])}
+    ) as o (code, debit, credit)
+$$;
+
+-- Cuenta de bienes de cambio de cada tipo de producto.
+create or replace function private.inventory_account(p_product_type text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$ select case p_product_type ${inventoryCases} end $$;
+
+-- La diferencia del asiento de apertura.
+create or replace function private.opening_balancing_account()
+returns text
+language sql
+immutable
+set search_path = ''
+as $$ select ${sql(chart.OPENING_BALANCING_ACCOUNT)}::text $$;
+
+-- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()
 returns uuid
 language plpgsql
@@ -166,8 +236,10 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
     left join public.suppliers s on s.company_id = v_id and s.code = p.supplier_code
     left join public.warehouses w on w.company_id = v_id and w.code = p.warehouse_code;
 
-  -- Inventario inicial documentado (un ajuste por depósito) y alertas de arranque.
+  -- Inventario inicial documentado (un ajuste por depósito), contabilidad con su
+  -- asiento de apertura y alertas de arranque.
 ${stockBlocks}
+  perform private.start_accounting(v_id);
   perform private.scan_stock_alerts(v_id);
   return v_id;
 end;
@@ -177,7 +249,8 @@ $$;
   writeFileSync(file, out)
   console.log(
     `${file}\n${sectors.length} sectores · ${warehouses.length} depósitos · ${suppliers.length} proveedores · ` +
-      `${of(db.customers).length} clientes · ${products.length} productos · ${initial.length} ajustes de inventario inicial`,
+      `${of(db.customers).length} clientes · ${products.length} productos · ${initial.length} ajustes de inventario inicial · ` +
+      `${accounts.length} cuentas`,
   )
 } finally {
   await server.close()

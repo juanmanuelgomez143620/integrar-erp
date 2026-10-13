@@ -5,6 +5,7 @@
 // pestañas con el evento `storage`, simulando el tiempo real.
 
 import type * as T from '../domain/types'
+import { startAccounting } from './engine'
 import { buildSeed } from './seed'
 
 export interface DocumentSequence {
@@ -36,6 +37,10 @@ export interface DB {
   poLines: T.PurchaseOrderLine[]
   grLines: T.GoodsReceiptLine[]
   saLines: T.StockAdjustmentLine[]
+  jeLines: T.JournalEntryLine[]
+  accounts: T.Account[]
+  fiscalYears: T.FiscalYear[]
+  fiscalPeriods: T.FiscalPeriod[]
   docLinks: T.DocumentLink[]
   stockMovements: T.StockMovement[]
   stockBalances: T.StockBalance[]
@@ -46,7 +51,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -82,6 +87,10 @@ const COLLECTIONS = [
   'poLines',
   'grLines',
   'saLines',
+  'jeLines',
+  'accounts',
+  'fiscalYears',
+  'fiscalPeriods',
   'docLinks',
   'stockMovements',
   'stockBalances',
@@ -91,6 +100,14 @@ const COLLECTIONS = [
   'notifications',
   'audit',
 ] as const
+
+/** Colecciones que aparecieron después de la versión 1: una base anterior todavía no las tiene. */
+const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = {
+  jeLines: 3,
+  accounts: 3,
+  fiscalYears: 3,
+  fiscalPeriods: 3,
+}
 
 function isDatabase(value: unknown): value is DB {
   if (!value || typeof value !== 'object') return false
@@ -104,7 +121,7 @@ function isDatabase(value: unknown): value is DB {
     !!db.seq &&
     Number.isFinite(db.seq.audit) &&
     Number.isFinite(db.seq.movement) &&
-    COLLECTIONS.every((key) => Array.isArray(db[key]))
+    COLLECTIONS.every((key) => Array.isArray(db[key]) || (COLLECTION_SINCE[key] ?? 1) > db.version)
   )
 }
 
@@ -122,6 +139,16 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       contact_email: v1.contact_email ?? '',
       session_timeout_minutes: v1.session_timeout_minutes ?? DEFAULT_SESSION_TIMEOUT_MINUTES,
     }
+  },
+  // v2 → v3: contabilidad (Fase 2). Cada empresa recibe el plan de cuentas básico,
+  // el ejercicio en curso y su asiento de apertura.
+  2: (db) => {
+    db.jeLines ??= []
+    db.accounts ??= []
+    db.fiscalYears ??= []
+    db.fiscalPeriods ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) startAccounting(ctx, company.id)
   },
 }
 

@@ -17,7 +17,7 @@ export type RoleCode =
   | 'AUDITOR'
   | 'DOCENTE'
 
-export type ModuleCode = 'core' | 'masters' | 'purchasing' | 'inventory' | 'management' | 'audit'
+export type ModuleCode = 'core' | 'masters' | 'purchasing' | 'inventory' | 'accounting' | 'management' | 'audit'
 
 export type PermissionAction = 'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export'
 
@@ -25,7 +25,7 @@ export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 
 
 export type ProductType = 'MATERIA_PRIMA' | 'INSUMO' | 'PRODUCTO_TERMINADO' | 'MERCADERIA_REVENTA' | 'SERVICIO'
 
-export type DocType = 'PURCHASE_REQUISITION' | 'PURCHASE_ORDER' | 'GOODS_RECEIPT' | 'STOCK_ADJUSTMENT'
+export type DocType = 'PURCHASE_REQUISITION' | 'PURCHASE_ORDER' | 'GOODS_RECEIPT' | 'STOCK_ADJUSTMENT' | 'JOURNAL_ENTRY'
 
 export type TransitionAction =
   'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW' | 'REOPEN' | 'SEND' | 'CONFIRM' | 'CANCEL' | 'CLOSE' | 'SYSTEM'
@@ -228,6 +228,21 @@ export interface StockAdjustmentHeader {
   reason_code: AdjustmentReason
 }
 
+export type JournalEntryOrigin = 'MANUAL' | 'APERTURA' | 'CONTRAASIENTO' | 'AUTOMATICO'
+
+/** Cabecera del asiento (tabla journal_entries, 1 a 1 con documents). */
+export interface JournalEntryHeader {
+  /** Leyenda: qué hecho económico registra. */
+  description: string
+  origin: JournalEntryOrigin
+  /** Se asignan al registrarlo: ejercicio y número correlativo del libro diario. */
+  fiscal_year_id: string | null
+  entry_number: number | null
+  posted_at: string | null
+  /** En un contraasiento, el asiento que anula. */
+  reverses_id: string | null
+}
+
 /** Cabecera común de todo comprobante (tabla `documents`) + detalle por tipo. */
 export interface Document extends Audited {
   id: string
@@ -249,6 +264,7 @@ export interface Document extends Audited {
   po?: PurchaseOrderHeader
   gr?: GoodsReceiptHeader
   sa?: StockAdjustmentHeader
+  je?: JournalEntryHeader
 }
 
 export interface RequisitionLine {
@@ -299,6 +315,59 @@ export interface StockAdjustmentLine {
   quantity_delta: number
   unit_cost: number
   notes: string
+}
+
+export interface JournalEntryLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  account_id: string
+  debit: number
+  credit: number
+  notes: string
+}
+
+export type AccountType = 'ACTIVO' | 'PASIVO' | 'PATRIMONIO_NETO' | 'RESULTADO_POSITIVO' | 'RESULTADO_NEGATIVO'
+
+export type BalanceSide = 'DEBE' | 'HABER'
+
+/** Cuenta del plan de cuentas. Sólo el nivel 4 es imputable; los niveles 1 a 3 agrupan. */
+export interface Account extends Audited {
+  id: string
+  company_id: string
+  /** Jerárquico: 1 · 1.1 · 1.1.01 · 1.1.01.01 (clase, grupo, rubro y cuenta). */
+  code: string
+  name: string
+  account_type: AccountType
+  /** Lado en el que la cuenta tiene su saldo normal; al revés que su tipo en las regularizadoras. */
+  normal_side: BalanceSide
+  level: number
+  is_imputable: boolean
+  description: string
+  is_active: boolean
+}
+
+export interface FiscalYear {
+  id: string
+  company_id: string
+  name: string
+  start_date: string
+  end_date: string
+  created_at: string
+}
+
+export interface FiscalPeriod {
+  id: string
+  company_id: string
+  fiscal_year_id: string
+  number: number
+  name: string
+  start_date: string
+  end_date: string
+  status: 'ABIERTO' | 'CERRADO'
+  closed_by: string | null
+  closed_at: string | null
 }
 
 export interface DocumentLink {

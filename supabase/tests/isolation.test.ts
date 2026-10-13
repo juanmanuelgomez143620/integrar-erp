@@ -68,6 +68,11 @@ async function snapshot(company: string) {
     'tasks',
     'notifications',
     'audit_events',
+    'accounts',
+    'fiscal_years',
+    'fiscal_periods',
+    'journal_entries',
+    'journal_entry_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -89,7 +94,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         ? B.receipt
         : fn.startsWith('sa_')
           ? B.adjustment
-          : B.order
+          : fn.startsWith('je_')
+            ? B.journal
+            : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -109,8 +116,15 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         quantity_delta: 1,
         unit_price: 1,
         vat_rate: 21,
+        account_id: B.account,
+        debit: 1,
+        credit: 0,
       },
+      { account_id: B.account, debit: 0, credit: 1 },
     ],
+    document_date: '2027-03-01',
+    description: 'Asiento de un intruso',
+    is_contra: false,
     id: B.product,
     code: 'MP-001',
     name: 'Intruso',
@@ -146,6 +160,12 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_comment: 'Intento de un intruso',
     p_scope: 'all',
     p_limit: null,
+    p_account_id: B.account,
+    p_period_id: B.period,
+    p_status: 'CERRADO',
+    p_year: 2028,
+    p_from: '2027-01-01',
+    p_to: '2027-12-31',
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {
@@ -264,6 +284,13 @@ beforeAll(async () => {
   B.task = (await one(`select id from public.tasks where company_id = $1 limit 1`, [B.id])).id
   B.notification = (await one(`select id from public.notifications where company_id = $1 limit 1`, [B.id])).id
   B.memberRole = (await one(`select id from public.member_roles where company_id = $1 limit 1`, [B.id])).id
+  B.account = (await one(`select id from public.accounts where company_id = $1 and code = '1.1.01.01'`, [B.id])).id
+  B.period = (
+    await one(`select id from public.fiscal_periods where company_id = $1 order by start_date limit 1`, [B.id])
+  ).id
+  B.journal = (
+    await one(`select document_id as id from public.journal_entries where company_id = $1 limit 1`, [B.id])
+  ).id
 
   bIds = new Set(
     (
@@ -281,6 +308,10 @@ beforeAll(async () => {
          union select id::text from public.member_roles where company_id = $1
          union select id::text from public.purchase_requisition_lines where company_id = $1
          union select id::text from public.purchase_order_lines where company_id = $1
+         union select id::text from public.accounts where company_id = $1
+         union select id::text from public.fiscal_years where company_id = $1
+         union select id::text from public.fiscal_periods where company_id = $1
+         union select id::text from public.journal_entry_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )
@@ -327,8 +358,10 @@ describe('S01: ninguna función pública da acceso a otra empresa', () => {
       for (const attacker of ['alumnoA', 'docenteA']) {
         for (const company of [B.id, A.id]) {
           attempts++
+          // Fuera del try: si a una función nueva le falta un valor de prueba, la prueba falla (no se saltea).
+          const args = argsFor(name, params, company)
           try {
-            const result = await rpc(attacker, name, argsFor(name, params, company))
+            const result = await rpc(attacker, name, args)
             const leaks = leaked(result)
             if (leaks.length)
               report.push(`${name} como ${attacker} (${company === B.id ? 'B' : 'A'}): ${leaks.length} ids de B`)

@@ -15,9 +15,11 @@ import {
   getMemberRoles,
   getProfile,
   isInstanceAdmin,
+  isPosted,
   isSchoolAdmin,
   requirePermission,
   requisitionAvailableQuantity,
+  round2,
   round3,
 } from './engine'
 
@@ -313,6 +315,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.grLines.filter((l) => l.document_id === doc.id).length
     case 'STOCK_ADJUSTMENT':
       return db.saLines.filter((l) => l.document_id === doc.id).length
+    case 'JOURNAL_ENTRY':
+      return db.jeLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -326,6 +330,8 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return db.grLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'STOCK_ADJUSTMENT':
       return db.saLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
+    case 'JOURNAL_ENTRY':
+      return []
   }
 }
 
@@ -346,7 +352,9 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
     sector_name: db.sectors.find((s) => s.id === doc.sector_id)?.name ?? '—',
     created_by_name: nameOf(db, doc.created_by),
     line_count: lineCount(db, doc),
-    summary: products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+    summary: doc.je
+      ? doc.je.description
+      : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -387,7 +395,13 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     }
   }
   const readable = new Set(readableDocTypes(db, userId, doc.company_id))
-  const order: T.DocType[] = ['PURCHASE_REQUISITION', 'PURCHASE_ORDER', 'GOODS_RECEIPT', 'STOCK_ADJUSTMENT']
+  const order: T.DocType[] = [
+    'PURCHASE_REQUISITION',
+    'PURCHASE_ORDER',
+    'GOODS_RECEIPT',
+    'STOCK_ADJUSTMENT',
+    'JOURNAL_ENTRY',
+  ]
   return db.documents
     .filter((d) => seen.has(d.id))
     .sort((a, b) => order.indexOf(a.doc_type) - order.indexOf(b.doc_type) || a.number - b.number)
@@ -460,6 +474,9 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       doc.created_by === userId
     ) {
       reason = 'Separación de funciones: otro integrante de Depósito o Gerencia debe anularla.'
+    }
+    if (doc.doc_type === 'JOURNAL_ENTRY' && tr.action === 'CANCEL' && doc.je?.origin === 'CONTRAASIENTO') {
+      reason = 'Un contraasiento no se anula. Si hubo un error, registrá el asiento correcto.'
     }
     result.push({
       action: tr.action,
@@ -543,6 +560,16 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       return { who: 'Depósito', text: 'Revisar y confirmar el ajuste.' }
     case 'STOCK_ADJUSTMENT:CONFIRMADO':
       return { who: '—', text: 'El ajuste impactó en el stock y quedó documentado.' }
+    case 'JOURNAL_ENTRY:BORRADOR':
+      return {
+        who: 'Contabilidad',
+        text: 'Revisar que las cuentas sean las correctas y que el debe y el haber sumen lo mismo, y registrar el asiento en el libro diario.',
+      }
+    case 'JOURNAL_ENTRY:CONFIRMADO':
+      return {
+        who: '—',
+        text: `Está en el libro diario con el N.º ${doc.je?.entry_number}. Si tiene un error, no se corrige: se anula con un contraasiento y se registra el asiento correcto.`,
+      }
     default:
       return { who: '—', text: DOC_STATUSES[doc.doc_type][doc.status]?.description ?? '' }
   }
@@ -579,9 +606,34 @@ export interface ApprovalView extends T.ApprovalRequest {
   requested_by_name: string
 }
 
+export interface JournalLineView {
+  id: string
+  line_no: number
+  account: { id: string; code: string; name: string }
+  debit: number
+  credit: number
+  notes: string
+}
+
+/** Asiento contable: sus líneas van por cuenta, no por producto. */
+export interface JournalView {
+  description: string
+  origin: T.JournalEntryOrigin
+  entry_number: number | null
+  fiscal_year_name: string | null
+  posted_at: string | null
+  lines: JournalLineView[]
+  total_debit: number
+  total_credit: number
+  /** En un asiento anulado, su contraasiento; en un contraasiento, el asiento que anula. */
+  reversed_by: { display_number: string; path: string } | null
+  reverses: { display_number: string; path: string } | null
+}
+
 export interface DocumentDetail {
   doc: DocumentListItem
   lines: DetailLine[]
+  journal: JournalView | null
   supplier: T.Supplier | null
   warehouse: T.Warehouse | null
   related_order: DocumentListItem | null
@@ -716,13 +768,19 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
             { label: 'Emitió', ...firstBy(['SUBMIT', 'CREATE']) },
             { label: 'Autorizó', ...firstBy(['APPROVE']) },
           ]
-        : [
-            { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-            { label: 'Controló', name: '', sector: '', at: '' },
-          ]
+        : doc.doc_type === 'JOURNAL_ENTRY'
+          ? [
+              { label: 'Registró', ...firstBy(['CONFIRM', 'CREATE']) },
+              { label: 'Revisó', name: '', sector: '', at: '' },
+            ]
+          : [
+              { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+              { label: 'Controló', name: '', sector: '', at: '' },
+            ]
   return {
     doc: listItem(db, doc),
     lines,
+    journal: doc.je ? journalView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     warehouse: db.warehouses.find((w) => w.id === warehouseId) ?? null,
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
@@ -740,6 +798,317 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     actions: availableActions(db, userId, doc),
     next_step: nextStep(db, doc),
     signatures,
+  }
+}
+
+function journalView(db: DB, doc: T.Document): JournalView {
+  const je = doc.je!
+  const lines = db.jeLines
+    .filter((l) => l.document_id === doc.id)
+    .sort(byLineNo)
+    .map((l) => {
+      const a = db.accounts.find((x) => x.id === l.account_id)!
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        account: { id: a.id, code: a.code, name: a.name },
+        debit: l.debit,
+        credit: l.credit,
+        notes: l.notes,
+      }
+    })
+  const ref = (d: T.Document | undefined) => (d ? { display_number: d.display_number, path: docPath(db, d) } : null)
+  return {
+    description: je.description,
+    origin: je.origin,
+    entry_number: je.entry_number,
+    fiscal_year_name: db.fiscalYears.find((y) => y.id === je.fiscal_year_id)?.name ?? null,
+    posted_at: je.posted_at,
+    lines,
+    total_debit: round2(lines.reduce((sum, l) => sum + l.debit, 0)),
+    total_credit: round2(lines.reduce((sum, l) => sum + l.credit, 0)),
+    reversed_by: ref(db.documents.find((d) => d.je?.reverses_id === doc.id)),
+    reverses: ref(je.reverses_id ? db.documents.find((d) => d.id === je.reverses_id) : undefined),
+  }
+}
+
+// ============================================================ Contabilidad
+
+export interface AccountRow extends T.Account {
+  debit: number
+  credit: number
+  /** Debe − haber de los asientos del libro diario; un rubro suma sus cuentas. */
+  balance: number
+  /** Saldo del lado contrario a su naturaleza (por ejemplo, Caja acreedora): un error típico. */
+  contrary: boolean
+}
+
+const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s))
+
+function assertRange(from: string, to: string) {
+  if (!isDate(from) || !isDate(to)) fail('DATO_INVALIDO', 'Indicá las fechas desde y hasta.')
+  if (from > to) fail('DATO_INVALIDO', 'La fecha desde no puede ser posterior a la fecha hasta.')
+}
+
+/** Líneas de los asientos del libro diario de la empresa, con su asiento. */
+function postedLines(db: DB, companyId: string) {
+  const docs = new Map(db.documents.filter((d) => d.company_id === companyId && isPosted(d)).map((d) => [d.id, d]))
+  return db.jeLines.filter((l) => docs.has(l.document_id)).map((line) => ({ line, doc: docs.get(line.document_id)! }))
+}
+
+/** Orden del libro diario: fecha, número de asiento y línea. */
+const byJournalOrder = (a: { line: T.JournalEntryLine; doc: T.Document }, b: typeof a) =>
+  compareCodes(a.doc.document_date, b.doc.document_date) ||
+  a.doc.je!.entry_number! - b.doc.je!.entry_number! ||
+  a.line.line_no - b.line.line_no
+
+const isContrary = (a: T.Account, balance: number) => (a.normal_side === 'DEBE' ? balance < 0 : balance > 0)
+
+export function listAccounts(db: DB, userId: string, companyId: string): AccountRow[] {
+  assertPerm(db, userId, companyId, 'account.read')
+  const totals = new Map<string, { debit: number; credit: number }>()
+  for (const { line } of postedLines(db, companyId)) {
+    const t = totals.get(line.account_id) ?? { debit: 0, credit: 0 }
+    t.debit += line.debit
+    t.credit += line.credit
+    totals.set(line.account_id, t)
+  }
+  const accounts = db.accounts.filter((a) => a.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
+  return accounts.map((a) => {
+    const own = a.is_imputable ? [a] : accounts.filter((x) => x.is_imputable && x.code.startsWith(`${a.code}.`))
+    const debit = round2(own.reduce((sum, x) => sum + (totals.get(x.id)?.debit ?? 0), 0))
+    const credit = round2(own.reduce((sum, x) => sum + (totals.get(x.id)?.credit ?? 0), 0))
+    const balance = round2(debit - credit)
+    return { ...a, debit, credit, balance, contrary: a.is_imputable && isContrary(a, balance) }
+  })
+}
+
+export interface PeriodView extends T.FiscalPeriod {
+  closed_by_name: string
+  entries: number
+  drafts: number
+}
+
+export interface FiscalYearView extends T.FiscalYear {
+  periods: PeriodView[]
+}
+
+/** Ejercicios del más reciente al más antiguo, con sus meses y cuántos asientos tiene cada uno. */
+export function listFiscalYears(db: DB, userId: string, companyId: string): FiscalYearView[] {
+  assertPerm(db, userId, companyId, 'ledger.read')
+  const entries = db.documents.filter((d) => d.company_id === companyId && d.doc_type === 'JOURNAL_ENTRY')
+  const inPeriod = (d: T.Document, p: T.FiscalPeriod) =>
+    p.start_date <= d.document_date && d.document_date <= p.end_date
+  return db.fiscalYears
+    .filter((y) => y.company_id === companyId)
+    .sort((a, b) => compareCodes(b.start_date, a.start_date))
+    .map((y) => ({
+      ...y,
+      periods: db.fiscalPeriods
+        .filter((p) => p.fiscal_year_id === y.id)
+        .sort((a, b) => a.number - b.number)
+        .map((p) => ({
+          ...p,
+          closed_by_name: p.closed_by ? nameOf(db, p.closed_by) : '',
+          entries: entries.filter((d) => isPosted(d) && inPeriod(d, p)).length,
+          drafts: entries.filter((d) => d.status === 'BORRADOR' && inPeriod(d, p)).length,
+        })),
+    }))
+}
+
+export interface JournalBookEntry {
+  id: string
+  display_number: string
+  path: string
+  entry_number: number
+  date: string
+  description: string
+  origin: T.JournalEntryOrigin
+  status: string
+  /** Como en los manuales: primero las cuentas del debe y después las del haber. */
+  lines: { account_code: string; account_name: string; debit: number; credit: number; notes: string }[]
+  total: number
+}
+
+export interface JournalBook {
+  entries: JournalBookEntry[]
+  total_debit: number
+  total_credit: number
+}
+
+/** Libro diario: los asientos registrados entre dos fechas, en orden correlativo. */
+export function journalBook(db: DB, userId: string, companyId: string, from: string, to: string): JournalBook {
+  assertPerm(db, userId, companyId, 'ledger.read')
+  assertRange(from, to)
+  const rows = postedLines(db, companyId)
+    .filter(({ doc }) => from <= doc.document_date && doc.document_date <= to)
+    .sort(byJournalOrder)
+  const entries: JournalBookEntry[] = []
+  for (const { line, doc } of rows) {
+    let entry = entries.at(-1)
+    if (entry?.id !== doc.id) {
+      entry = {
+        id: doc.id,
+        display_number: doc.display_number,
+        path: docPath(db, doc),
+        entry_number: doc.je!.entry_number!,
+        date: doc.document_date,
+        description: doc.je!.description,
+        origin: doc.je!.origin,
+        status: doc.status,
+        lines: [],
+        total: doc.total,
+      }
+      entries.push(entry)
+    }
+    const a = db.accounts.find((x) => x.id === line.account_id)!
+    entry.lines.push({
+      account_code: a.code,
+      account_name: a.name,
+      debit: line.debit,
+      credit: line.credit,
+      notes: line.notes,
+    })
+  }
+  for (const e of entries) e.lines.sort((a, b) => Number(b.debit > 0) - Number(a.debit > 0))
+  return {
+    entries,
+    total_debit: round2(rows.reduce((sum, r) => sum + r.line.debit, 0)),
+    total_credit: round2(rows.reduce((sum, r) => sum + r.line.credit, 0)),
+  }
+}
+
+export interface LedgerRow {
+  document_id: string
+  display_number: string
+  path: string
+  entry_number: number
+  date: string
+  description: string
+  debit: number
+  credit: number
+  /** Saldo acumulado (debe − haber) después de este movimiento. */
+  balance: number
+}
+
+export interface Ledger {
+  account: AccountRow
+  opening_balance: number
+  rows: LedgerRow[]
+  total_debit: number
+  total_credit: number
+  closing_balance: number
+}
+
+/** Libro mayor de una cuenta imputable: saldo anterior, movimientos con saldo acumulado y saldo final. */
+export function ledger(
+  db: DB,
+  userId: string,
+  companyId: string,
+  accountId: string,
+  from: string,
+  to: string,
+): Ledger | null {
+  assertPerm(db, userId, companyId, 'ledger.read')
+  assertRange(from, to)
+  const account = listAccounts(db, userId, companyId).find((a) => a.id === accountId)
+  if (!account) return null
+  if (!account.is_imputable) fail('DATO_INVALIDO', 'El mayor se consulta por cuenta imputable (de nivel 4).')
+  const lines = postedLines(db, companyId)
+    .filter(({ line }) => line.account_id === accountId)
+    .sort(byJournalOrder)
+  const opening = round2(
+    lines.filter(({ doc }) => doc.document_date < from).reduce((sum, { line }) => sum + line.debit - line.credit, 0),
+  )
+  let balance = opening
+  const rows = lines
+    .filter(({ doc }) => from <= doc.document_date && doc.document_date <= to)
+    .map(({ line, doc }) => {
+      balance = round2(balance + line.debit - line.credit)
+      return {
+        document_id: doc.id,
+        display_number: doc.display_number,
+        path: docPath(db, doc),
+        entry_number: doc.je!.entry_number!,
+        date: doc.document_date,
+        description: line.notes || doc.je!.description,
+        debit: line.debit,
+        credit: line.credit,
+        balance,
+      }
+    })
+  return {
+    account,
+    opening_balance: opening,
+    rows,
+    total_debit: round2(rows.reduce((sum, r) => sum + r.debit, 0)),
+    total_credit: round2(rows.reduce((sum, r) => sum + r.credit, 0)),
+    closing_balance: balance,
+  }
+}
+
+export interface TrialBalanceRow {
+  account_id: string
+  code: string
+  name: string
+  account_type: T.AccountType
+  debit: number
+  credit: number
+  debit_balance: number
+  credit_balance: number
+  contrary: boolean
+}
+
+export interface TrialBalance {
+  rows: TrialBalanceRow[]
+  totals: { debit: number; credit: number; debit_balance: number; credit_balance: number }
+  /** Las sumas del debe y del haber coinciden, y también los saldos. */
+  balanced: boolean
+}
+
+/** Balance de sumas y saldos de las cuentas con movimientos entre dos fechas. */
+export function trialBalance(db: DB, userId: string, companyId: string, from: string, to: string): TrialBalance {
+  assertPerm(db, userId, companyId, 'ledger.read')
+  assertRange(from, to)
+  const totals = new Map<string, { debit: number; credit: number }>()
+  for (const { line, doc } of postedLines(db, companyId)) {
+    if (doc.document_date < from || doc.document_date > to) continue
+    const t = totals.get(line.account_id) ?? { debit: 0, credit: 0 }
+    t.debit += line.debit
+    t.credit += line.credit
+    totals.set(line.account_id, t)
+  }
+  const rows = db.accounts
+    .filter((a) => totals.has(a.id))
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((a) => {
+      const debit = round2(totals.get(a.id)!.debit)
+      const credit = round2(totals.get(a.id)!.credit)
+      const balance = round2(debit - credit)
+      return {
+        account_id: a.id,
+        code: a.code,
+        name: a.name,
+        account_type: a.account_type,
+        debit,
+        credit,
+        debit_balance: Math.max(balance, 0),
+        credit_balance: Math.max(-balance, 0),
+        contrary: isContrary(a, balance),
+      }
+    })
+  const sum = (key: 'debit' | 'credit' | 'debit_balance' | 'credit_balance') =>
+    round2(rows.reduce((s, r) => s + r[key], 0))
+  const result = {
+    debit: sum('debit'),
+    credit: sum('credit'),
+    debit_balance: sum('debit_balance'),
+    credit_balance: sum('credit_balance'),
+  }
+  return {
+    rows,
+    totals: result,
+    balanced: result.debit === result.credit && result.debit_balance === result.credit_balance,
   }
 }
 

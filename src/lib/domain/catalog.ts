@@ -3,9 +3,11 @@
 // document_transitions, task_rules). Ver DATABASE.md §5, §7 y §9.
 
 import type {
+  AccountType,
   AdjustmentReason,
   Badge,
   DocType,
+  JournalEntryOrigin,
   ModuleCode,
   MovementType,
   Priority,
@@ -22,6 +24,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   masters: { name: 'Maestros (clientes, proveedores, productos)', lockable: true },
   purchasing: { name: 'Compras', lockable: true },
   inventory: { name: 'Depósito y stock', lockable: true },
+  accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
   audit: { name: 'Auditoría', lockable: true },
 }
@@ -38,6 +41,10 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   goods_receipt: 'inventory',
   stock: 'inventory',
   stock_adjustment: 'inventory',
+  account: 'accounting',
+  journal_entry: 'accounting',
+  ledger: 'accounting',
+  fiscal_period: 'accounting',
   dashboard: 'management',
   task: 'management',
   audit: 'audit',
@@ -64,9 +71,9 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   AUDITOR: { code: 'AUDITOR', name: 'Auditoría interna', island: 1, defaultSector: 'CGE', isSupervisor: false, description: 'Consulta todo y revisa la auditoría. No modifica nada.' },
   COMPRAS: { code: 'COMPRAS', name: 'Compras', island: 2, defaultSector: 'COM', isSupervisor: false, description: 'Atiende solicitudes, gestiona proveedores y emite órdenes de compra.' },
   VENTAS: { code: 'VENTAS', name: 'Ventas', island: 3, defaultSector: 'VEN', isSupervisor: false, description: 'Administra la cartera de clientes.' },
-  CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Consulta operaciones (asientos en fases siguientes).' },
-  IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones (obligaciones en fases siguientes).' },
-  TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Consulta órdenes de compra para proyectar pagos.' },
+  CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Registra los asientos, lleva los libros contables y cierra los meses.' },
+  IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones y libros contables (obligaciones en fases siguientes).' },
+  TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Consulta órdenes de compra para proyectar pagos y los saldos de caja y bancos.' },
   RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Legajos y sueldos en fases siguientes.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Detecta necesidades de materiales y las solicita a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe mercadería, controla el stock y pide reposición.' },
@@ -92,6 +99,7 @@ export const ROLE_ORDER: RoleCode[] = [
 // ---------------------------------------------------------------- Permisos
 
 const CORE_READ = ['company.read', 'member.read', 'sector.read']
+const LEDGER_READ = ['account.read', 'journal_entry.read', 'ledger.read']
 
 /** Matriz del MVP (docs/ROLES_Y_PERMISOS.md §4). DOCENTE es supervisor: todo. */
 // prettier-ignore
@@ -103,6 +111,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_requisition.read',
     'purchase_order.read', 'purchase_order.approve', 'purchase_order.cancel', 'purchase_order.export',
     'goods_receipt.read', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
+    ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -131,10 +140,13 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...CORE_READ,
     'customer.read', 'supplier.read', 'product.read', 'stock.read', 'stock_adjustment.read',
     'purchase_order.read', 'goods_receipt.read',
+    ...LEDGER_READ, 'account.create', 'account.update',
+    'journal_entry.create', 'journal_entry.update', 'journal_entry.cancel', 'journal_entry.export',
+    'ledger.export', 'fiscal_period.update',
   ],
-  TESORERIA: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read'],
+  TESORERIA: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ],
   RRHH: [...CORE_READ],
-  IMPUESTOS: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read'],
+  IMPUESTOS: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ],
   LOGISTICA: [...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read'],
   AUDITOR: [
     ...CORE_READ,
@@ -142,6 +154,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'stock.read', 'stock.export', 'stock_adjustment.read', 'purchase_requisition.read',
     'purchase_order.read', 'purchase_order.export', 'goods_receipt.read',
     'dashboard.read', 'task.read', 'audit.read', 'audit.export',
+    ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
   ],
   DOCENTE: [],
 }
@@ -180,6 +193,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'STOCK_ADJUSTMENT', prefix: 'AJS', name: 'Ajuste de stock', plural: 'Ajustes de stock',
     resource: 'stock_adjustment', module: 'inventory', path: 'stock/ajustes',
     description: 'Corrección documentada del stock: inventario inicial, conteo físico, rotura o consumo interno.',
+  },
+  JOURNAL_ENTRY: {
+    code: 'JOURNAL_ENTRY', prefix: 'AS', name: 'Asiento contable', plural: 'Asientos', resource: 'journal_entry',
+    module: 'accounting', path: 'contabilidad/asientos',
+    description: 'Registro de un hecho económico por partida doble: las cuentas que se debitan y las que se acreditan, por el mismo importe.',
   },
 }
 
@@ -221,6 +239,11 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Todavía no movió stock.' },
     CONFIRMADO: { label: 'Confirmado', badge: 'success', final: true, description: 'El ajuste impactó en el stock.' },
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto.' },
+  },
+  JOURNAL_ENTRY: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Todavía no está en el libro diario: se puede corregir.' },
+    CONFIRMADO: { label: 'Registrado', badge: 'success', final: true, description: 'Está en el libro diario con su número de asiento. Ya no se modifica.' },
+    ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba registrado, un contraasiento lo compensa y los dos quedan en el libro diario.' },
   },
 }
 
@@ -290,6 +313,11 @@ export const TRANSITIONS: TransitionInfo[] = [
   // Ajuste de stock
   t('STOCK_ADJUSTMENT', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'stock_adjustment.create', 'Confirmar ajuste', 'Impacta en el stock.'),
   t('STOCK_ADJUSTMENT', 'BORRADOR', 'CANCEL', 'ANULADO', 'stock_adjustment.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+
+  // Asiento contable
+  t('JOURNAL_ENTRY', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'journal_entry.create', 'Registrar en el libro diario', 'Controla la partida doble y el período, y le asigna el número de asiento.'),
+  t('JOURNAL_ENTRY', 'BORRADOR', 'CANCEL', 'ANULADO', 'journal_entry.cancel', 'Anular', 'El borrador queda sin efecto; nunca estuvo en el libro diario.', true, 'destructive'),
+  t('JOURNAL_ENTRY', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'journal_entry.cancel', 'Anular con contraasiento', 'Registra con fecha de hoy un asiento con el debe y el haber invertidos. Los dos quedan en el libro diario.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -305,6 +333,9 @@ export const ACTION_VERBS: Record<string, string> = {
   CANCEL: 'Anuló',
   CLOSE: 'Cerró el saldo de',
   SYSTEM: 'Actualizó',
+  CLOSE_PERIOD: 'Cerró el período',
+  REOPEN_PERIOD: 'Reabrió el período',
+  OPEN_FISCAL_YEAR: 'Abrió el ejercicio',
   ACTIVATE: 'Activó',
   DEACTIVATE: 'Desactivó',
   ASSIGN_ROLE: 'Asignó rol',
@@ -339,6 +370,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'PURCHASE_ORDER', status: 'RECIBIDO_PARCIAL', taskType: 'RECIBIR_MERCADERIA', assignee: 'ROLE', role: 'DEPOSITO', title: 'Recibir saldo de {number}', description: 'Queda mercadería pendiente de entrega.' },
   { docType: 'GOODS_RECEIPT', status: 'BORRADOR', taskType: 'CONFIRMAR_RECEPCION', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar cantidades y confirmar para que ingrese al stock.' },
   { docType: 'STOCK_ADJUSTMENT', status: 'BORRADOR', taskType: 'CONFIRMAR_AJUSTE', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar el ajuste y confirmarlo.' },
+  { docType: 'JOURNAL_ENTRY', status: 'BORRADOR', taskType: 'REGISTRAR_ASIENTO', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar que el debe y el haber sumen lo mismo y registrar el asiento en el libro diario.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -349,6 +381,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   RECIBIR_MERCADERIA: 'Recibir mercadería',
   CONFIRMAR_RECEPCION: 'Confirmar recepción',
   CONFIRMAR_AJUSTE: 'Confirmar ajuste',
+  REGISTRAR_ASIENTO: 'Registrar asiento',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -417,3 +450,18 @@ export const MOVEMENT_TYPES: Record<MovementType, string> = {
 }
 
 export const VAT_RATES = [21, 10.5, 27, 0]
+
+export const ACCOUNT_TYPES: Record<AccountType, string> = {
+  ACTIVO: 'Activo',
+  PASIVO: 'Pasivo',
+  PATRIMONIO_NETO: 'Patrimonio neto',
+  RESULTADO_POSITIVO: 'Resultado positivo',
+  RESULTADO_NEGATIVO: 'Resultado negativo',
+}
+
+export const JOURNAL_ORIGINS: Record<JournalEntryOrigin, string> = {
+  MANUAL: 'Manual',
+  APERTURA: 'Apertura',
+  CONTRAASIENTO: 'Contraasiento',
+  AUTOMATICO: 'Automático',
+}

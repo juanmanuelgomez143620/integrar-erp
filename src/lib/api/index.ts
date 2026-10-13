@@ -15,26 +15,38 @@ import { createSupabaseBackend, type SupabaseConfig } from './supabase'
 
 export { BusinessError } from '../mock/engine'
 export type {
+  AccountRow,
   AvailableAction,
   CompanyContext,
   Dashboard,
   DetailLine,
   DocumentDetail,
   DocumentListItem,
+  FiscalYearView,
   FlowNode,
+  JournalBook,
+  JournalBookEntry,
+  JournalView,
+  Ledger,
+  LedgerRow,
   MeContext,
   MemberView,
   PendingRequisitionLine,
+  PeriodView,
   ProductDetail,
   ProductRow,
   ReceivableOrder,
   StockRow,
   TaskItem,
+  TrialBalance,
+  TrialBalanceRow,
 } from '../mock/queries'
 export type {
+  AccountInput,
   ChangePasswordInput,
   CourseInput,
   GoodsReceiptInput,
+  JournalEntryInput,
   PurchaseOrderInput,
   RequisitionInput,
   SchoolSettingsInput,
@@ -131,6 +143,14 @@ const mockApi = {
   documentById: (docId: string) => query((db, u) => Q.documentDetailById(db, u, docId)),
   pendingRequisitionLines: (companyId: string) => query((db, u) => Q.pendingRequisitionLines(db, u, companyId)),
   receivableOrders: (companyId: string) => query((db, u) => Q.receivableOrders(db, u, companyId)),
+  accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
+  fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
+  journalBook: (companyId: string, from: string, to: string) =>
+    query((db, u) => Q.journalBook(db, u, companyId, from, to)),
+  ledger: (companyId: string, accountId: string, from: string, to: string) =>
+    query((db, u) => Q.ledger(db, u, companyId, accountId, from, to)),
+  trialBalance: (companyId: string, from: string, to: string) =>
+    query((db, u) => Q.trialBalance(db, u, companyId, from, to)),
   tasks: (companyId: string, scope: 'mine' | 'all', includeClosed = false) =>
     query((db, u) => Q.listTasks(db, u, companyId, scope, includeClosed)),
   notifications: (companyId: string, limit: number | null = 60) =>
@@ -186,6 +206,20 @@ const mockCommands = {
   confirmStockAdjustment: (docId: string) => command((c) => E.cmdConfirmStockAdjustment(c, docId)),
   cancelStockAdjustment: (docId: string, reason: string) =>
     command((c) => E.cmdCancelStockAdjustment(c, docId, reason)),
+
+  createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
+    command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),
+  updateJournalEntry: (docId: string, input: E.JournalEntryInput) =>
+    command((c) => E.cmdUpdateJournalEntry(c, docId, input)),
+  confirmJournalEntry: (docId: string) => command((c) => E.cmdConfirmJournalEntry(c, docId)),
+  cancelJournalEntry: (docId: string, reason: string) => command((c) => E.cmdCancelJournalEntry(c, docId, reason)),
+  saveAccount: (companyId: string, input: E.AccountInput & { id?: string }) =>
+    command((c) => E.cmdSaveAccount(c, companyId, input)),
+  setAccountActive: (companyId: string, accountId: string, active: boolean) =>
+    command((c) => E.cmdSetAccountActive(c, companyId, accountId, active)),
+  openFiscalYear: (companyId: string, year: number) => command((c) => E.cmdOpenFiscalYear(c, companyId, year)),
+  setPeriodStatus: (companyId: string, periodId: string, status: 'ABIERTO' | 'CERRADO', reason: string) =>
+    command((c) => E.cmdSetPeriodStatus(c, companyId, periodId, status, reason)),
 
   saveMaster: (kind: E.MasterKind, companyId: string, input: Record<string, unknown> & { id?: string }) =>
     command((c) => E.cmdSaveMaster(c, kind, companyId, input)),

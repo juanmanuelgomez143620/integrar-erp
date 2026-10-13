@@ -8,7 +8,7 @@ import { Mono } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { DocStatus, StatusBadge } from '@/components/common/status-badge'
 import { api, type DocumentListItem } from '@/lib/api'
-import { ADJUSTMENT_REASONS, DOC_STATUSES, DOC_TYPES, PRIORITIES } from '@/lib/domain/catalog'
+import { ADJUSTMENT_REASONS, DOC_STATUSES, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES } from '@/lib/domain/catalog'
 import type { DocType } from '@/lib/domain/types'
 import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -19,6 +19,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   PURCHASE_ORDER: { area: 'Compras', newLabel: 'Nueva orden de compra', createPerm: 'purchase_order.create' },
   GOODS_RECEIPT: { area: 'Depósito', newLabel: 'Registrar recepción', createPerm: 'goods_receipt.create' },
   STOCK_ADJUSTMENT: { area: 'Depósito', newLabel: 'Nuevo ajuste', createPerm: 'stock_adjustment.create' },
+  JOURNAL_ENTRY: { area: 'Contabilidad', newLabel: 'Nuevo asiento', createPerm: 'journal_entry.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -117,6 +118,30 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'JOURNAL_ENTRY') {
+    columns.push(
+      {
+        key: 'entry',
+        header: 'N.º de asiento',
+        align: 'right',
+        sort: (d) => d.je?.entry_number ?? 0,
+        cell: (d) => <span className="tabular">{d.je?.entry_number ?? '—'}</span>,
+      },
+      {
+        key: 'origin',
+        header: 'Origen',
+        cell: (d) => <span className="text-xs">{JOURNAL_ORIGINS[d.je!.origin]}</span>,
+      },
+      { key: 'summary', header: 'Leyenda', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      {
+        key: 'total',
+        header: 'Importe',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   columns.push({
     key: 'by',
     header: 'Creado por',
@@ -124,7 +149,10 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
     cell: (d) => <span className="text-xs">{d.created_by_name}</span>,
   })
 
-  const newPath = company.docPath(docType, docType === 'STOCK_ADJUSTMENT' ? 'nuevo' : 'nueva')
+  const newPath = company.docPath(
+    docType,
+    docType === 'STOCK_ADJUSTMENT' || docType === 'JOURNAL_ENTRY' ? 'nuevo' : 'nueva',
+  )
 
   return (
     <>
@@ -168,7 +196,9 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         search={(d) =>
           `${d.display_number} ${d.supplier_name} ${d.summary} ${d.sector_name} ${d.created_by_name} ${d.reference_label ?? ''}`
         }
-        searchPlaceholder="Buscar por número, proveedor, producto…"
+        searchPlaceholder={
+          docType === 'JOURNAL_ENTRY' ? 'Buscar por número o leyenda…' : 'Buscar por número, proveedor, producto…'
+        }
         onRowClick={(d) => navigate(d.path)}
         empty={`Todavía no hay ${info.plural.toLowerCase()}.`}
       />

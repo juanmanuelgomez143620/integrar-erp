@@ -248,6 +248,12 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     documentById: (docId) => rpc('document_detail_by_id', { p_document_id: docId }),
     pendingRequisitionLines: (companyId) => rpc('requisition_lines_pending', company(companyId)),
     receivableOrders: (companyId) => rpc('orders_receivable', company(companyId)),
+    accounts: (companyId) => rpc('accounts_list', company(companyId)),
+    fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
+    journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
+    ledger: (companyId, accountId, from, to) =>
+      rpc('ledger', { ...company(companyId), p_account_id: accountId, p_from: from, p_to: to }),
+    trialBalance: (companyId, from, to) => rpc('trial_balance', { ...company(companyId), p_from: from, p_to: to }),
     tasks: (companyId, scope, includeClosed = false) =>
       rpc('tasks_list', { ...company(companyId), p_scope: scope, p_include_closed: includeClosed }),
     notifications: (companyId, limit = 60) => rpc('notifications_list', { ...company(companyId), p_limit: limit }),
@@ -298,6 +304,23 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('sa_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
     confirmStockAdjustment: (docId) => rpc('sa_confirm', doc(docId)),
     cancelStockAdjustment: (docId, reason) => rpc('sa_cancel', { ...doc(docId), p_reason: reason }),
+
+    createJournalEntry: (companyId, input, confirm) =>
+      rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    updateJournalEntry: (docId, input) => rpc('je_update', { ...doc(docId), p_input: input }),
+    confirmJournalEntry: (docId) => rpc('je_confirm', doc(docId)),
+    cancelJournalEntry: (docId, reason) => rpc('je_cancel', { ...doc(docId), p_reason: reason }),
+    saveAccount: (companyId, input) => rpc('account_save', { ...company(companyId), p_input: input }),
+    setAccountActive: (companyId, accountId, active) =>
+      rpc('account_set_active', { ...company(companyId), p_account_id: accountId, p_active: active }),
+    openFiscalYear: (companyId, year) => rpc('fiscal_year_open', { ...company(companyId), p_year: year }),
+    setPeriodStatus: (companyId, periodId, status, reason) =>
+      rpc('fiscal_period_set_status', {
+        ...company(companyId),
+        p_period_id: periodId,
+        p_status: status,
+        p_reason: reason,
+      }),
 
     saveMaster: (kind, companyId, input) => rpc('master_save', { p_kind: kind, ...company(companyId), p_data: input }),
     setMasterActive: (kind, companyId, id, active) =>

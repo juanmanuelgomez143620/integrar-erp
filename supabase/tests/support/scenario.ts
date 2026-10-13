@@ -2,6 +2,7 @@
 // hechas con el motor simulado que dejan documentos en (casi) todos los
 // estados, tareas tomadas, avisos leídos y movimientos de stock de cada tipo.
 
+import { todayAR } from '../../../src/lib/format'
 import type { DB } from '../../../src/lib/mock/db'
 import * as E from '../../../src/lib/mock/engine'
 import { buildSeed } from '../../../src/lib/mock/seed'
@@ -107,6 +108,48 @@ export function buildScenario(): DB {
     },
     false,
   )
+
+  // Contabilidad: un asiento registrado, otro anulado con contraasiento, un
+  // borrador descartado, una cuenta nueva y un mes cerrado que no es el actual
+  // (además de la apertura, el depósito y el borrador del seed).
+  const account = (code: string) => db.accounts.find((a) => a.company_id === company && a.code === code)!.id
+  const entry = (description: string, debitCode: string, creditCode: string, amount: number): E.JournalEntryInput => ({
+    document_date: todayAR(),
+    description,
+    lines: [
+      { account_id: account(debitCode), debit: amount, credit: 0 },
+      { account_id: account(creditCode), debit: 0, credit: amount, notes: 'Pago en el día' },
+    ],
+  })
+  E.cmdCreateJournalEntry(
+    as('contabilidad'),
+    company,
+    entry('Compra de útiles de librería en efectivo.', '5.2.02.05', '1.1.01.01', 42500),
+    true,
+  )
+  const wrong = E.cmdCreateJournalEntry(
+    as('contabilidad'),
+    company,
+    entry('Pago de la póliza de seguros por banco.', '5.2.02.06', '1.1.01.03', 120000),
+    true,
+  )
+  E.cmdCancelJournalEntry(as('contabilidad'), wrong.id, 'Se cargó un importe equivocado')
+  const discarded = E.cmdCreateJournalEntry(
+    as('contabilidad'),
+    company,
+    entry('Borrador de prueba.', '5.2.02.07', '1.1.01.01', 1000),
+    false,
+  )
+  E.cmdCancelJournalEntry(as('contabilidad'), discarded.id, 'Era una prueba')
+  E.cmdSaveAccount(as('contabilidad'), company, {
+    code: '1.1.01.05',
+    name: 'Banco de la Selva caja de ahorro',
+    description: 'Segunda cuenta bancaria (ficticia).',
+    is_contra: false,
+  })
+  const otherMonth = todayAR().slice(5, 7) === '01' ? 12 : 1
+  const closed = db.fiscalPeriods.find((p) => p.company_id === company && p.number === otherMonth)!
+  E.cmdSetPeriodStatus(as('contabilidad'), company, closed.id, 'CERRADO', '')
 
   // Una tarea tomada y los avisos de Compras leídos.
   const task = db.tasks.find(

@@ -44,6 +44,16 @@ const belowMinimum = ofTemplate(seed.products)
   .map((p) => p.code)
   .sort()
 
+/** Asiento de apertura de la demo: cuenta, debe y haber de cada línea, en orden. */
+const mockOpening = (() => {
+  const doc = ofTemplate(seed.documents).find((d) => d.je?.origin === 'APERTURA')!
+  const code = Object.fromEntries(ofTemplate(seed.accounts).map((a) => [a.id, a.code]))
+  return seed.jeLines
+    .filter((l) => l.document_id === doc.id)
+    .sort((a, b) => a.line_no - b.line_no)
+    .map((l) => ({ code: code[l.account_id], debit: l.debit, credit: l.credit }))
+})()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -78,6 +88,17 @@ const alerts = async (company: string) =>
       [company],
     )
   ).map((r) => r.code)
+
+const opening = async (company: string) =>
+  db.admin<{ code: string; debit: number; credit: number }>(
+    `select a.code, l.debit::float8 as debit, l.credit::float8 as credit
+       from public.journal_entries je
+       join public.journal_entry_lines l on l.document_id = je.document_id
+       join public.accounts a on a.id = l.account_id
+      where je.company_id = $1 and je.origin = 'APERTURA' and je.entry_number = 1
+      order by l.line_no`,
+    [company],
+  )
 
 const createFor = async (user: string, courseId: string) =>
   (
@@ -241,6 +262,12 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await alerts(template)).toEqual(belowMinimum)
   })
 
+  it('nace con el plan de cuentas, el ejercicio en curso y el mismo asiento de apertura que la demo', async () => {
+    expect(await count('accounts', template)).toBe(ofTemplate(seed.accounts).length)
+    expect(await count('fiscal_periods', template)).toBe(12)
+    expect(await opening(template)).toEqual(mockOpening)
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -300,6 +327,8 @@ describe('empresa de un curso (company_create_from_template)', () => {
     )
     expect(docs).toEqual(templateDocs)
     expect(await alerts(created.id)).toEqual(belowMinimum)
+    expect(await count('accounts', created.id)).toBe(await count('accounts', template))
+    expect(await opening(created.id)).toEqual(mockOpening)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

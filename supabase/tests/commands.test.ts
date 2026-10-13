@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createSupabaseBackend } from '../../src/lib/api/supabase'
+import { addDays, todayAR } from '../../src/lib/format'
 import type { DocType } from '../../src/lib/domain/types'
 import type { DB } from '../../src/lib/mock/db'
 import * as E from '../../src/lib/mock/engine'
@@ -107,6 +108,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['purchase_order_lines', mock.poLines],
     ['goods_receipt_lines', mock.grLines],
     ['stock_adjustment_lines', mock.saLines],
+    ['journal_entry_lines', mock.jeLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -133,8 +135,31 @@ async function created(
   return result!.mock.id
 }
 
+/**
+ * Los id numéricos (auditoría, kardex) salen de secuencias, y en la base una
+ * operación que falla consume números aunque se deshaga: dentro de cada lista
+ * se comparan por su orden, no por su valor.
+ */
+function renumber(value: unknown): unknown {
+  const numericId = (x: unknown) =>
+    x && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'number' ? (x as { id: number }).id : null
+  if (Array.isArray(value)) {
+    const ids = value.map(numericId).filter((id): id is number => id !== null)
+    const rank = new Map([...ids].sort((a, b) => a - b).map((id, i) => [id, `n#${i + 1}`]))
+    return value.map((x) => {
+      const y = renumber(x)
+      const id = numericId(x)
+      return id === null ? y : { ...(y as object), id: rank.get(id) }
+    })
+  }
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([k, x]) => [k, renumber(x)]))
+  return value
+}
+
 /** Ids nuevos → "id#n" por orden de aparición; horas nuevas → "t#n" por orden cronológico. */
-function canonical(value: unknown): unknown {
+function canonical(input: unknown): unknown {
+  const value = renumber(input)
   const times = new Set<string>()
   const collect = (v: unknown): void => {
     if (typeof v === 'string' && TIMESTAMP.test(v) && v > cutoff) times.add(v)
@@ -553,9 +578,306 @@ describe('paridad de comandos', () => {
     ).toBeNull()
   })
 
+  it('contabilidad: asientos, contraasientos, plan de cuentas, períodos y ejercicios', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const today = todayAR()
+    const entry = (lines: [string, number, number][], description = 'Pago de gastos del mes.', date = today) => {
+      const input: E.JournalEntryInput = {
+        document_date: date,
+        description,
+        lines: lines.map(([code, debit, credit]) => ({ account_id: account(code), debit, credit })),
+      }
+      return { input, pgInput: { ...input, lines: input.lines.map((l) => ({ ...l, account_id: pg(l.account_id) })) } }
+    }
+    const create = (label: string, username: string, e: ReturnType<typeof entry>, confirm: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateJournalEntry(c, company, e.input, confirm),
+        (b) => b.commands.createJournalEntry(companyPg, e.pgInput, confirm),
+      )
+
+    // Controles de la partida doble, de las cuentas, de la fecha y de los permisos.
+    for (const [label, username, e] of [
+      [
+        'asiento desbalanceado',
+        'contabilidad',
+        entry([
+          ['5.2.02.02', 1000, 0],
+          ['1.1.01.01', 0, 900],
+        ]),
+      ],
+      [
+        'asiento de un solo lado',
+        'contabilidad',
+        entry([
+          ['5.2.02.02', 1000, 0],
+          ['5.2.02.03', 500, 0],
+        ]),
+      ],
+      [
+        'cuenta que es un rubro',
+        'contabilidad',
+        entry([
+          ['1.1.01', 1000, 0],
+          ['1.1.01.01', 0, 1000],
+        ]),
+      ],
+      [
+        'importe con tres decimales',
+        'contabilidad',
+        entry([
+          ['5.2.02.02', 10.005, 0],
+          ['1.1.01.01', 0, 10.005],
+        ]),
+      ],
+      [
+        'fecha futura',
+        'contabilidad',
+        entry(
+          [
+            ['5.2.02.02', 10, 0],
+            ['1.1.01.01', 0, 10],
+          ],
+          'Gasto.',
+          addDays(today, 1),
+        ),
+      ],
+      [
+        'fecha anterior al último asiento',
+        'contabilidad',
+        entry(
+          [
+            ['5.2.02.02', 10, 0],
+            ['1.1.01.01', 0, 10],
+          ],
+          'Gasto.',
+          addDays(today, -1),
+        ),
+      ],
+      [
+        'Compras no registra asientos',
+        'compras1',
+        entry([
+          ['5.2.02.02', 10, 0],
+          ['1.1.01.01', 0, 10],
+        ]),
+      ],
+    ] as const)
+      expect(await create(label, username, e, true), label).toBeNull()
+
+    // Un borrador desbalanceado que se corrige y se registra.
+    const draftInput = entry(
+      [
+        ['5.2.02.03', 25000, 0],
+        ['1.1.01.03', 0, 20000],
+      ],
+      'Pago del servicio de internet.',
+    )
+    const draft = await created(
+      'asiento en borrador',
+      'contabilidad',
+      (c) => E.cmdCreateJournalEntry(c, company, draftInput.input, false),
+      (b) => b.commands.createJournalEntry(companyPg, draftInput.pgInput, false),
+    )
+    expect(
+      await step(
+        'registrar el borrador desbalanceado',
+        'contabilidad',
+        (c) => E.cmdConfirmJournalEntry(c, draft),
+        (b) => b.commands.confirmJournalEntry(pg(draft)),
+      ),
+    ).toBeNull()
+    const fixed = entry(
+      [
+        ['5.2.02.03', 25000, 0],
+        ['1.1.01.03', 0, 25000],
+      ],
+      'Pago del servicio de internet del mes.',
+    )
+    await step(
+      'corregir el borrador',
+      'contabilidad',
+      (c) => E.cmdUpdateJournalEntry(c, draft, fixed.input),
+      (b) => b.commands.updateJournalEntry(pg(draft), fixed.pgInput),
+    )
+    await linkDocument(draft, pg(draft))
+    await step(
+      'registrar el borrador',
+      'contabilidad',
+      (c) => E.cmdConfirmJournalEntry(c, draft),
+      (b) => b.commands.confirmJournalEntry(pg(draft)),
+    )
+    expect(
+      await step(
+        'modificar un asiento registrado',
+        'contabilidad',
+        (c) => E.cmdUpdateJournalEntry(c, draft, fixed.input),
+        (b) => b.commands.updateJournalEntry(pg(draft), fixed.pgInput),
+      ),
+    ).toBeNull()
+
+    // Un asiento registrado que se anula con contraasiento.
+    const adInput = entry(
+      [
+        ['5.2.02.07', 80000, 0],
+        ['1.1.01.03', 0, 80000],
+      ],
+      'Pago de publicidad en la radio.',
+    )
+    const ad = await created(
+      'asiento registrado',
+      'contabilidad',
+      (c) => E.cmdCreateJournalEntry(c, company, adInput.input, true),
+      (b) => b.commands.createJournalEntry(companyPg, adInput.pgInput, true),
+    )
+    expect(
+      await step(
+        'anular sin motivo',
+        'contabilidad',
+        (c) => E.cmdCancelJournalEntry(c, ad, ''),
+        (b) => b.commands.cancelJournalEntry(pg(ad), ''),
+      ),
+    ).toBeNull()
+    await step(
+      'anular con contraasiento',
+      'contabilidad',
+      (c) => E.cmdCancelJournalEntry(c, ad, 'Era un gasto de otro mes'),
+      (b) => b.commands.cancelJournalEntry(pg(ad), 'Era un gasto de otro mes'),
+    )
+    const reversal = mock.documents.find((d) => d.je?.reverses_id === ad)!
+    const [{ document_id: reversalPg }] = await db.admin<{ document_id: string }>(
+      'select document_id from public.journal_entries where reverses_id = $1',
+      [pg(ad)],
+    )
+    await linkDocument(reversal.id, reversalPg)
+    expect(
+      await step(
+        'anular el contraasiento',
+        'contabilidad',
+        (c) => E.cmdCancelJournalEntry(c, reversal.id, 'Prueba'),
+        (b) => b.commands.cancelJournalEntry(reversalPg, 'Prueba'),
+      ),
+    ).toBeNull()
+
+    // Plan de cuentas.
+    const newAccount = {
+      code: '1.1.01.06',
+      name: 'Banco del Litoral caja de ahorro',
+      description: 'Cuenta bancaria ficticia.',
+      is_contra: false,
+    }
+    const added = await step(
+      'cuenta nueva',
+      'contabilidad',
+      (c) => E.cmdSaveAccount(c, company, newAccount),
+      (b) => b.commands.saveAccount(companyPg, newAccount),
+    )
+    expect(added).not.toBeNull()
+    loaded.link(added!.mock, added!.pg as string)
+    for (const [label, input] of [
+      ['cuenta con nombre repetido', { ...newAccount, code: '1.1.01.07', name: 'CAJA' }],
+      ['cuenta de tres niveles', { ...newAccount, code: '1.1.09', name: 'Otra cuenta' }],
+      ['cuenta en un rubro que no existe', { ...newAccount, code: '1.1.09.01', name: 'Otra cuenta' }],
+      ['código repetido', { ...newAccount, name: 'Otra cuenta' }],
+    ] as const)
+      expect(
+        await step(
+          label,
+          'contabilidad',
+          (c) => E.cmdSaveAccount(c, company, input),
+          (b) => b.commands.saveAccount(companyPg, input),
+        ),
+        label,
+      ).toBeNull()
+    await step(
+      'renombrar la cuenta',
+      'contabilidad',
+      (c) =>
+        E.cmdSaveAccount(c, company, { ...newAccount, id: added!.mock, name: 'Banco del Litoral cuenta corriente' }),
+      (b) =>
+        b.commands.saveAccount(companyPg, {
+          ...newAccount,
+          id: added!.pg as string,
+          name: 'Banco del Litoral cuenta corriente',
+        }),
+    )
+    expect(
+      await step(
+        'desactivar una cuenta con saldo',
+        'contabilidad',
+        (c) => E.cmdSetAccountActive(c, company, account('1.1.01.01'), false),
+        (b) => b.commands.setAccountActive(companyPg, pg(account('1.1.01.01')), false),
+      ),
+    ).toBeNull()
+    await step(
+      'desactivar una cuenta sin saldo',
+      'contabilidad',
+      (c) => E.cmdSetAccountActive(c, company, account('1.1.01.02'), false),
+      (b) => b.commands.setAccountActive(companyPg, pg(account('1.1.01.02')), false),
+    )
+
+    // Períodos y ejercicios.
+    const month = mock.fiscalPeriods.find(
+      (p) => p.company_id === company && p.start_date <= today && today <= p.end_date,
+    )!
+    const period = (label: string, username: string, status: 'ABIERTO' | 'CERRADO', reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSetPeriodStatus(c, company, month.id, status, reason),
+        (b) => b.commands.setPeriodStatus(companyPg, pg(month.id), status, reason),
+      )
+    await period('cerrar el mes', 'contabilidad', 'CERRADO', '')
+    expect(
+      await create(
+        'asiento en un mes cerrado',
+        'contabilidad',
+        entry([
+          ['5.2.02.02', 10, 0],
+          ['1.1.01.01', 0, 10],
+        ]),
+        true,
+      ),
+    ).toBeNull()
+    expect(await period('Contabilidad no reabre', 'contabilidad', 'ABIERTO', 'Falta un gasto')).toBeNull()
+    expect(await period('reabrir sin motivo', 'docente', 'ABIERTO', '')).toBeNull()
+    await period('el docente reabre', 'docente', 'ABIERTO', 'Falta registrar un gasto')
+    const nextYear = Number(today.slice(0, 4)) + 1
+    const opened = await step(
+      'abrir el ejercicio siguiente',
+      'docente',
+      (c) => E.cmdOpenFiscalYear(c, company, nextYear),
+      (b) => b.commands.openFiscalYear(companyPg, nextYear),
+    )
+    expect(opened).not.toBeNull()
+    for (const [label, username, year] of [
+      ['abrir el mismo ejercicio otra vez', 'docente', nextYear],
+      ['abrir un ejercicio lejano', 'docente', nextYear + 5],
+      ['Contabilidad no abre ejercicios', 'contabilidad', nextYear + 1],
+    ] as const)
+      expect(
+        await step(
+          label,
+          username,
+          (c) => E.cmdOpenFiscalYear(c, company, year),
+          (b) => b.commands.openFiscalYear(companyPg, year),
+        ),
+        label,
+      ).toBeNull()
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
-    const types: DocType[] = ['PURCHASE_REQUISITION', 'PURCHASE_ORDER', 'GOODS_RECEIPT', 'STOCK_ADJUSTMENT']
+    const types: DocType[] = [
+      'PURCHASE_REQUISITION',
+      'PURCHASE_ORDER',
+      'GOODS_RECEIPT',
+      'STOCK_ADJUSTMENT',
+      'JOURNAL_ENTRY',
+    ]
+    const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`
     expect(mock.documents.filter((x) => x.created_at > cutoff).length).toBeGreaterThanOrEqual(9)
     await sameRead(
@@ -617,6 +939,38 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.pendingRequisitionLines(companyPg),
         (u) => Q.pendingRequisitionLines(mock, u, company),
+      )
+      await sameRead(
+        `plan de cuentas (${username})`,
+        username,
+        (b) => b.api.accounts(companyPg),
+        (u) => Q.listAccounts(mock, u, company),
+      )
+      await sameRead(
+        `ejercicios (${username})`,
+        username,
+        (b) => b.api.fiscalYears(companyPg),
+        (u) => Q.listFiscalYears(mock, u, company),
+      )
+      const [from, to] = [`${year}-01-01`, `${year}-12-31`]
+      await sameRead(
+        `libro diario (${username})`,
+        username,
+        (b) => b.api.journalBook(companyPg, from, to),
+        (u) => Q.journalBook(mock, u, company, from, to),
+      )
+      await sameRead(
+        `sumas y saldos (${username})`,
+        username,
+        (b) => b.api.trialBalance(companyPg, from, to),
+        (u) => Q.trialBalance(mock, u, company, from, to),
+      )
+      const bank = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
+      await sameRead(
+        `mayor de Banco (${username})`,
+        username,
+        (b) => b.api.ledger(companyPg, pg(bank), from, to),
+        (u) => Q.ledger(mock, u, company, bank, from, to),
       )
     }
   })

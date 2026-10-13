@@ -52,6 +52,13 @@ const PartnersPage = lazyPage(() => import('@/features/customers/partners-page')
 const AuditPage = lazyPage(() => import('@/features/audit/audit-page').then((m) => m.AuditPage))
 const CompanyPage = lazyPage(() => import('@/features/company/company-page').then((m) => m.CompanyPage))
 const TeacherPage = lazyPage(() => import('@/features/teacher/teacher-page').then((m) => m.TeacherPage))
+const AccountsPage = lazyPage(() => import('@/features/accounting/accounts-page').then((m) => m.AccountsPage))
+const EntryFormPage = lazyPage(() => import('@/features/accounting/entry-form').then((m) => m.EntryFormPage))
+const JournalPage = lazyPage(() => import('@/features/accounting/book-pages').then((m) => m.JournalPage))
+const LedgerPage = lazyPage(() => import('@/features/accounting/book-pages').then((m) => m.LedgerPage))
+const TrialBalancePage = lazyPage(() => import('@/features/accounting/book-pages').then((m) => m.TrialBalancePage))
+const FiscalYearsPage = lazyPage(() => import('@/features/accounting/fiscal-years-page').then((m) => m.FiscalYearsPage))
+const BookPrintPage = lazyPage(() => import('@/features/accounting/book-print-page').then((m) => m.BookPrintPage))
 
 function NotFound() {
   return (
@@ -81,6 +88,7 @@ export const router = createBrowserRouter([
         element: <CompanyRoute />,
         children: [
           { path: 'documentos/:docId/imprimir', element: <PrintPage /> },
+          { path: 'contabilidad/imprimir/:book', element: <BookPrintPage /> },
           {
             element: <AppShell />,
             children: [
@@ -105,6 +113,15 @@ export const router = createBrowserRouter([
               { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
               { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },
               { path: 'stock/ajustes/:number', element: <DocumentPage key="sa" docType="STOCK_ADJUSTMENT" /> },
+              { path: 'contabilidad/asientos', element: <DocumentListPage key="je" docType="JOURNAL_ENTRY" /> },
+              { path: 'contabilidad/asientos/nuevo', element: <EntryFormPage /> },
+              { path: 'contabilidad/asientos/:number', element: <DocumentPage key="je" docType="JOURNAL_ENTRY" /> },
+              { path: 'contabilidad/asientos/:number/editar', element: <EntryFormPage /> },
+              { path: 'contabilidad/diario', element: <JournalPage /> },
+              { path: 'contabilidad/mayor', element: <LedgerPage /> },
+              { path: 'contabilidad/sumas-y-saldos', element: <TrialBalancePage /> },
+              { path: 'contabilidad/plan-de-cuentas', element: <AccountsPage /> },
+              { path: 'contabilidad/ejercicios', element: <FiscalYearsPage /> },
               { path: 'productos', element: <ProductsPage /> },
               { path: 'productos/:code', element: <ProductDetailPage /> },
               { path: 'proveedores', element: <PartnersPage key="supplier" kind="supplier" /> },

@@ -23,7 +23,7 @@ import { DocumentFlow } from '@/components/common/document-flow'
 import { AuditTimeline } from '@/components/common/audit-timeline'
 import { ActionDialog } from '@/components/common/dialogs'
 import { api, commands, type AvailableAction, type DocumentDetail } from '@/lib/api'
-import { ADJUSTMENT_REASONS, DOC_TYPES, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
+import { ADJUSTMENT_REASONS, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
 import type { DocType, TransitionAction } from '@/lib/domain/types'
 import { date, dateTime, money, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -57,6 +57,10 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmStockAdjustment(id),
     CANCEL: (id, t) => commands.cancelStockAdjustment(id, t),
   },
+  JOURNAL_ENTRY: {
+    CONFIRM: (id) => commands.confirmJournalEntry(id),
+    CANCEL: (id, t) => commands.cancelJournalEntry(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -64,6 +68,7 @@ const AREA: Record<DocType, string> = {
   PURCHASE_ORDER: 'Compras',
   GOODS_RECEIPT: 'Depósito',
   STOCK_ADJUSTMENT: 'Depósito',
+  JOURNAL_ENTRY: 'Contabilidad',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -103,7 +108,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
   const canEdit =
     doc.status === 'BORRADOR' &&
     ((doc.doc_type === 'PURCHASE_REQUISITION' && company.can('purchase_requisition.update')) ||
-      (doc.doc_type === 'PURCHASE_ORDER' && company.can('purchase_order.update')))
+      (doc.doc_type === 'PURCHASE_ORDER' && company.can('purchase_order.update')) ||
+      (doc.doc_type === 'JOURNAL_ENTRY' && company.can('journal_entry.update')))
   const canOrder =
     doc.doc_type === 'PURCHASE_REQUISITION' &&
     ['SOLICITADO', 'ORDENADO_PARCIAL'].includes(doc.status) &&
@@ -344,8 +350,46 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
 
 function HeaderInfo({ detail }: { detail: DocumentDetail }) {
   const company = useCompany()
-  const { doc, supplier, warehouse } = detail
-  const grid = 'grid gap-x-8 sm:grid-cols-2'
+  const { doc, supplier, warehouse, journal } = detail
+  // A 1024 px la columna principal queda angosta (la ayuda va al costado): una sola columna de datos.
+  const grid = 'grid gap-x-8 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2'
+  if (doc.doc_type === 'JOURNAL_ENTRY' && journal) {
+    return (
+      <>
+        <dl className={grid}>
+          <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+          <InfoRow label="N.º de asiento">
+            {journal.entry_number
+              ? `${journal.entry_number} · ${journal.fiscal_year_name}`
+              : 'Se asigna al registrarlo'}
+          </InfoRow>
+          <InfoRow label="Origen">{JOURNAL_ORIGINS[journal.origin]}</InfoRow>
+          <InfoRow label="Creó">
+            {doc.created_by_name}
+            {doc.sector_name !== '—' ? ` · ${doc.sector_name}` : ''}
+          </InfoRow>
+          {journal.reverses && (
+            <InfoRow label="Anula a">
+              <Link className="font-mono hover:underline" to={journal.reverses.path}>
+                {journal.reverses.display_number}
+              </Link>
+            </InfoRow>
+          )}
+          {journal.reversed_by && (
+            <InfoRow label="Contraasiento">
+              <Link className="font-mono hover:underline" to={journal.reversed_by.path}>
+                {journal.reversed_by.display_number}
+              </Link>
+            </InfoRow>
+          )}
+        </dl>
+        <div className="mt-2 rounded-lg bg-muted/60 px-3 py-2 text-sm">
+          <span className="text-muted-foreground">Leyenda: </span>
+          {journal.description}
+        </div>
+      </>
+    )
+  }
   if (doc.doc_type === 'PURCHASE_REQUISITION' && doc.pr) {
     return (
       <>
@@ -431,9 +475,60 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
   )
 }
 
+function JournalLines({ journal }: { journal: NonNullable<DocumentDetail['journal']> }) {
+  const company = useCompany()
+  const head = 'h-9 text-xs font-semibold text-slate-600'
+  const difference = Math.round((journal.total_debit - journal.total_credit) * 100) / 100
+  return (
+    <div className="overflow-x-auto rounded-xl border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableHead className={cn(head, 'w-10')}>#</TableHead>
+            <TableHead className={head}>Cuenta</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Debe</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Haber</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {journal.lines.map((l) => (
+            <TableRow key={l.id}>
+              <TableCell className="text-xs text-muted-foreground">{l.line_no}</TableCell>
+              <TableCell className={cn('text-sm', l.credit > 0 && 'pl-8')}>
+                {l.credit > 0 && <span className="text-muted-foreground">a </span>}
+                {company.can('ledger.read') ? (
+                  <Link to={company.to(`contabilidad/mayor?cuenta=${l.account.id}`)} className="hover:underline">
+                    {l.account.name}
+                  </Link>
+                ) : (
+                  l.account.name
+                )}{' '}
+                <span className="font-mono text-xs text-muted-foreground">{l.account.code}</span>
+                {l.notes && <div className="text-xs text-muted-foreground">{l.notes}</div>}
+              </TableCell>
+              <TableCell className="tabular text-right">{l.debit ? money(l.debit) : ''}</TableCell>
+              <TableCell className="tabular text-right">{l.credit ? money(l.credit) : ''}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+        <TableFooter>
+          <TableRow>
+            <TableCell colSpan={2} className="text-right text-sm font-semibold text-navy">
+              {difference ? `Totales (diferencia ${money(Math.abs(difference))})` : 'Totales'}
+            </TableCell>
+            <TableCell className="tabular text-right font-semibold text-navy">{money(journal.total_debit)}</TableCell>
+            <TableCell className="tabular text-right font-semibold text-navy">{money(journal.total_credit)}</TableCell>
+          </TableRow>
+        </TableFooter>
+      </Table>
+    </div>
+  )
+}
+
 function Lines({ detail }: { detail: DocumentDetail }) {
   const company = useCompany()
   const { doc, lines } = detail
+  if (detail.journal) return <JournalLines journal={detail.journal} />
   const product = (l: (typeof lines)[number]) => (
     <Link to={company.to(`productos/${l.product.code}`)} className="hover:underline">
       <span className="font-mono text-xs font-semibold text-navy">{l.product.code}</span> {l.product.name}

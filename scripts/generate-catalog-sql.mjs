@@ -4,16 +4,17 @@
 // transiciones, reglas de tareas, unidades y tipos de movimiento de stock.
 //
 // Uso: npm run db:catalog [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la migración inicial de catálogos. Cuando esa
-// migración ya esté aplicada en alguna instancia, hay que generar una nueva
-// (el script es idempotente: inserta o actualiza, y borra lo que ya no existe).
+// Sin argumento reescribe la última migración de catálogos (la de la Fase 2).
+// Una migración ya aplicada en alguna instancia no se reescribe: si cambian
+// los catálogos después, se genera una nueva con otro nombre (el script es
+// idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias).
 
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261003190200_catalog_data.sql'
+const target = process.argv[2] ?? '20261014120000_catalog_data_contabilidad.sql'
 
 const server = await createServer({
   root,
@@ -145,7 +146,7 @@ try {
   const auditActions = Object.entries(c.ACTION_VERBS).map(([code, verb]) => ({ code, verb }))
 
   const out = [
-    '-- 3. Datos de los catálogos del sistema.',
+    '-- Datos de los catálogos del sistema (con los de Contabilidad, Fase 2).',
     '-- GENERADO por scripts/generate-catalog-sql.mjs desde src/lib/domain/catalog.ts: no editar a mano.',
     '-- Idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias.',
     '',

@@ -792,11 +792,16 @@ describe('empresa desde la plantilla (H-20)', () => {
       db.suppliers,
       db.customers,
       db.products,
+      db.accounts,
     ])
       expect(countOf(rows, id)).toBe(countOf(rows, template.id))
-    // Sólo los documentos del inventario inicial, numerados desde 1 y confirmados.
+    // Sólo los documentos del inventario inicial y el asiento de apertura, numerados desde 1 y confirmados.
     const docs = db.documents.filter((d) => d.company_id === id)
-    expect(docs.map((d) => `${d.display_number} ${d.status}`)).toEqual(['AJS-00001 CONFIRMADO', 'AJS-00002 CONFIRMADO'])
+    expect(docs.map((d) => `${d.display_number} ${d.status}`)).toEqual([
+      'AJS-00001 CONFIRMADO',
+      'AJS-00002 CONFIRMADO',
+      'AS-00001 CONFIRMADO',
+    ])
     expect(initialStock(id)).toBe(initialStock(template.id))
     // Los productos apuntan a los proveedores y depósitos de la empresa nueva, no a los de la plantilla.
     const product = db.products.find((p) => p.company_id === id && p.default_supplier_id)!

@@ -34,7 +34,13 @@ const USERS = [
   'deposito',
   'admin',
 ]
-const DOC_TYPES: DocType[] = ['PURCHASE_REQUISITION', 'PURCHASE_ORDER', 'GOODS_RECEIPT', 'STOCK_ADJUSTMENT']
+const DOC_TYPES: DocType[] = [
+  'PURCHASE_REQUISITION',
+  'PURCHASE_ORDER',
+  'GOODS_RECEIPT',
+  'STOCK_ADJUSTMENT',
+  'JOURNAL_ENTRY',
+]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
 type Outcome = { ok: true; value: unknown } | { ok: false; error: string }
@@ -178,6 +184,44 @@ describe('documentos', () => {
       await same(u, () => Q.pendingRequisitionLines(mock, userId(u), company), 'requisition_lines_pending', [companyPg])
       await same(u, () => Q.receivableOrders(mock, userId(u), company), 'orders_receivable', [companyPg])
     }
+  })
+})
+
+describe('contabilidad', () => {
+  const year = new Date().getFullYear()
+  const ranges = [
+    [`${year}-01-01`, `${year}-12-31`],
+    [`${year}-01-01`, `${year}-01-31`],
+    [`${year}-02-01`, `${year}-12-31`],
+  ]
+  const accountId = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+
+  it('plan de cuentas con saldos y ejercicios con sus períodos', async () => {
+    for (const u of USERS) {
+      await same(u, () => Q.listAccounts(mock, userId(u), company), 'accounts_list', [companyPg])
+      await same(u, () => Q.listFiscalYears(mock, userId(u), company), 'fiscal_years_list', [companyPg])
+    }
+  })
+
+  it('libro diario y balance de sumas y saldos en distintos rangos', async () => {
+    for (const u of USERS)
+      for (const [from, to] of [...ranges, ['no-es-fecha', `${year}-12-31`], [`${year}-12-31`, `${year}-01-01`]]) {
+        await same(u, () => Q.journalBook(mock, userId(u), company, from, to), 'journal_book', [companyPg, from, to])
+        await same(u, () => Q.trialBalance(mock, userId(u), company, from, to), 'trial_balance', [companyPg, from, to])
+      }
+  })
+
+  it('libro mayor de cuentas con y sin movimientos, de un rubro y de una cuenta ajena', async () => {
+    const accounts = ['1.1.01.01', '1.1.01.03', '5.2.02.06', '1.1.05.01', '1.1.01.05', '1.1.01'].map(accountId)
+    for (const u of ['docente', 'contabilidad', 'gerencia', 'compras1'])
+      for (const id of [...accounts, crypto.randomUUID()])
+        for (const [from, to] of ranges)
+          await same(u, () => Q.ledger(mock, userId(u), company, id, from, to), 'ledger', [
+            companyPg,
+            mock.accounts.some((a) => a.id === id) ? loaded.pg(id) : id,
+            from,
+            to,
+          ])
   })
 })
 

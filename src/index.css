@@ -138,10 +138,28 @@
   white-space: nowrap;
 }
 
+/* Libros contables: una hoja que sigue en varias páginas (la cabecera de la tabla se repite en cada una). */
+.print-book {
+  width: 210mm;
+  max-width: 100%;
+  padding: 15mm;
+  margin: 0 auto;
+  background: #fff;
+}
 @media print {
   @page {
     size: A4;
     margin: 0;
+  }
+  @page book {
+    size: A4;
+    margin: 12mm 12mm 14mm;
+  }
+  .print-book {
+    page: book;
+    width: auto;
+    padding: 0;
+    box-shadow: none !important;
   }
   body {
     background: #fff !important;

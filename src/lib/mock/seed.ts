@@ -10,14 +10,17 @@ import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
 import {
   cmdApprovePurchaseOrder,
   cmdCreateGoodsReceipt,
+  cmdCreateJournalEntry,
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
   cmdCreateStockAdjustment,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
   scanStockAlerts,
+  startAccounting,
   type Ctx,
 } from './engine'
+import { todayAR } from '../format'
 
 export const DEMO_PASSWORD = 'demo1234'
 
@@ -69,6 +72,10 @@ export function buildSeed(): DB {
     poLines: [],
     grLines: [],
     saLines: [],
+    jeLines: [],
+    accounts: [],
+    fiscalYears: [],
+    fiscalPeriods: [],
     docLinks: [],
     stockMovements: [],
     stockBalances: [],
@@ -139,7 +146,7 @@ export function buildSeed(): DB {
   const whPT = { id: id('wh'), company_id: companyId, code: 'DEP-PT', name: 'Depósito de productos terminados' }
   db.warehouses.push(whMP, whPT)
 
-  for (const module of ['masters', 'purchasing', 'inventory', 'management', 'audit'] as T.ModuleCode[]) {
+  for (const module of ['masters', 'purchasing', 'inventory', 'accounting', 'management', 'audit'] as T.ModuleCode[]) {
     db.companyModules.push({ company_id: companyId, module_code: module, is_enabled: true })
   }
 
@@ -387,6 +394,9 @@ export function buildSeed(): DB {
     )
   }
 
+  // ------------------------------------------------------------ Contabilidad: plan de cuentas, ejercicio y apertura
+  startAccounting(ctx(null, 290), companyId)
+
   // ------------------------------------------------------------ Un circuito completo previo (historial de ejemplo)
   const sc = cmdCreateRequisition(
     ctx(users.produccion, 240),
@@ -434,6 +444,35 @@ export function buildSeed(): DB {
       lines: db.poLines.filter((l) => l.document_id === oc.id).map((l) => ({ po_line_id: l.id, quantity: l.quantity })),
     },
     true,
+  )
+
+  // Dos asientos de Contabilidad: uno registrado y un borrador para completar.
+  const account = (code: string) => db.accounts.find((a) => a.company_id === companyId && a.code === code)!.id
+  cmdCreateJournalEntry(
+    ctx(users.contabilidad, 50),
+    companyId,
+    {
+      document_date: todayAR(),
+      description: 'Depósito en el banco del efectivo de la caja.',
+      lines: [
+        { account_id: account('1.1.01.03'), debit: 300000, credit: 0 },
+        { account_id: account('1.1.01.01'), debit: 0, credit: 300000 },
+      ],
+    },
+    true,
+  )
+  cmdCreateJournalEntry(
+    ctx(users.contabilidad, 40),
+    companyId,
+    {
+      document_date: todayAR(),
+      description: 'Pago de la factura de energía eléctrica del mes con transferencia bancaria.',
+      lines: [
+        { account_id: account('5.2.02.02'), debit: 185000, credit: 0 },
+        { account_id: account('1.1.01.03'), debit: 0, credit: 185000 },
+      ],
+    },
+    false,
   )
 
   // Alertas de los productos que ya empiezan por debajo del mínimo.

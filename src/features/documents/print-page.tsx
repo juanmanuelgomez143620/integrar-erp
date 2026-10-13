@@ -4,7 +4,7 @@ import { ArrowLeft, Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Loading } from '@/components/common/blocks'
 import { api } from '@/lib/api'
-import { ADJUSTMENT_REASONS, DOC_TYPES, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
+import { ADJUSTMENT_REASONS, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
 import { date, dateTime, money, qty } from '@/lib/format'
 import { useCompany } from '@/app/company'
 
@@ -17,7 +17,7 @@ export function PrintPage() {
   const { data, isLoading } = useQuery({ queryKey: ['document-by-id', docId], queryFn: () => api.documentById(docId) })
   if (isLoading) return <Loading />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
-  const { doc, lines, supplier, warehouse } = data
+  const { doc, lines, supplier, warehouse, journal } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
   const th = 'border-b border-slate-300 px-2 py-1.5 text-left text-[11px] font-semibold uppercase text-slate-600'
@@ -133,6 +133,27 @@ export function PrintPage() {
               </div>
             </>
           )}
+          {journal && (
+            <>
+              <div>
+                <b>Asiento N.º:</b> {journal.entry_number ?? 'sin registrar (borrador)'}
+              </div>
+              <div>
+                <b>Ejercicio:</b> {journal.fiscal_year_name ?? '—'}
+              </div>
+              <div>
+                <b>Origen:</b> {JOURNAL_ORIGINS[journal.origin]}
+              </div>
+              {journal.reverses && (
+                <div>
+                  <b>Anula a:</b> {journal.reverses.display_number}
+                </div>
+              )}
+              <div className="col-span-2">
+                <b>Leyenda:</b> {journal.description}
+              </div>
+            </>
+          )}
           {doc.notes && (
             <div className="col-span-2">
               <b>Observaciones:</b> {doc.notes}
@@ -140,50 +161,86 @@ export function PrintPage() {
           )}
         </section>
 
-        <table className="mt-4 w-full border-collapse">
-          <thead>
-            <tr>
-              <th className={th}>#</th>
-              <th className={th}>Código</th>
-              <th className={th}>Descripción</th>
-              {doc.doc_type === 'GOODS_RECEIPT' && <th className={`${th} text-right`}>Ordenado</th>}
-              <th className={`${th} text-right`}>
-                {doc.doc_type === 'GOODS_RECEIPT'
-                  ? 'Recibido'
-                  : doc.doc_type === 'STOCK_ADJUSTMENT'
-                    ? 'Ajuste'
-                    : 'Cantidad'}
-              </th>
-              {doc.doc_type === 'PURCHASE_ORDER' && (
-                <>
-                  <th className={`${th} text-right`}>Precio unit.</th>
-                  <th className={`${th} text-right`}>IVA</th>
-                  <th className={`${th} text-right`}>Subtotal</th>
-                </>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((l) => (
-              <tr key={l.id}>
-                <td className={td}>{l.line_no}</td>
-                <td className={`${td} font-mono`}>{l.product.code}</td>
-                <td className={td}>{l.product.name}</td>
-                {doc.doc_type === 'GOODS_RECEIPT' && (
-                  <td className={`${td} text-right`}>{qty(l.qty_ordered_po, l.product.uom_code)}</td>
-                )}
-                <td className={`${td} text-right`}>{qty(l.quantity, l.product.uom_code)}</td>
+        {journal && (
+          <table className="mt-4 w-full border-collapse">
+            <thead>
+              <tr>
+                <th className={th}>Código</th>
+                <th className={th}>Cuenta</th>
+                <th className={`${th} text-right`}>Debe</th>
+                <th className={`${th} text-right`}>Haber</th>
+              </tr>
+            </thead>
+            <tbody>
+              {journal.lines.map((l) => (
+                <tr key={l.id}>
+                  <td className={`${td} font-mono`}>{l.account.code}</td>
+                  <td className={`${td} ${l.credit > 0 ? 'pl-8' : ''}`}>
+                    {l.credit > 0 ? 'a ' : ''}
+                    {l.account.name}
+                    {l.notes && <div className="text-[11px] text-slate-600">{l.notes}</div>}
+                  </td>
+                  <td className={`${td} text-right`}>{l.debit ? money(l.debit) : ''}</td>
+                  <td className={`${td} text-right`}>{l.credit ? money(l.credit) : ''}</td>
+                </tr>
+              ))}
+              <tr className="font-bold">
+                <td className={td} colSpan={2}>
+                  Totales
+                </td>
+                <td className={`${td} text-right`}>{money(journal.total_debit)}</td>
+                <td className={`${td} text-right`}>{money(journal.total_credit)}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
+        {!journal && (
+          <table className="mt-4 w-full border-collapse">
+            <thead>
+              <tr>
+                <th className={th}>#</th>
+                <th className={th}>Código</th>
+                <th className={th}>Descripción</th>
+                {doc.doc_type === 'GOODS_RECEIPT' && <th className={`${th} text-right`}>Ordenado</th>}
+                <th className={`${th} text-right`}>
+                  {doc.doc_type === 'GOODS_RECEIPT'
+                    ? 'Recibido'
+                    : doc.doc_type === 'STOCK_ADJUSTMENT'
+                      ? 'Ajuste'
+                      : 'Cantidad'}
+                </th>
                 {doc.doc_type === 'PURCHASE_ORDER' && (
                   <>
-                    <td className={`${td} text-right`}>{money(l.unit_price)}</td>
-                    <td className={`${td} text-right`}>{String(l.vat_rate).replace('.', ',')} %</td>
-                    <td className={`${td} text-right`}>{money(l.line_subtotal)}</td>
+                    <th className={`${th} text-right`}>Precio unit.</th>
+                    <th className={`${th} text-right`}>IVA</th>
+                    <th className={`${th} text-right`}>Subtotal</th>
                   </>
                 )}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.id}>
+                  <td className={td}>{l.line_no}</td>
+                  <td className={`${td} font-mono`}>{l.product.code}</td>
+                  <td className={td}>{l.product.name}</td>
+                  {doc.doc_type === 'GOODS_RECEIPT' && (
+                    <td className={`${td} text-right`}>{qty(l.qty_ordered_po, l.product.uom_code)}</td>
+                  )}
+                  <td className={`${td} text-right`}>{qty(l.quantity, l.product.uom_code)}</td>
+                  {doc.doc_type === 'PURCHASE_ORDER' && (
+                    <>
+                      <td className={`${td} text-right`}>{money(l.unit_price)}</td>
+                      <td className={`${td} text-right`}>{String(l.vat_rate).replace('.', ',')} %</td>
+                      <td className={`${td} text-right`}>{money(l.line_subtotal)}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
 
         {doc.doc_type === 'PURCHASE_ORDER' && (
           <div className="mt-3 ml-auto w-64">
