@@ -48,6 +48,8 @@ Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTE
 3. Cargar la fila de `school_settings` de la escuela (procedimiento de alta en `docs/INSTANCIAS.md`) y la empresa plantilla: `select private.seed_demo_company();` (idempotente).
 4. Auth: desactivar el registro público y la confirmación por email (las cuentas las crea la Edge Function, ya confirmadas). Revisar los avisos de seguridad (Security Advisor).
 5. Desplegar la función: `npx supabase functions deploy admin-users`. Si el proyecto usa las claves nuevas, cargar los secretos `SUPABASE_PUBLISHABLE_KEY` y `SUPABASE_SECRET_KEY`; si se usa un dominio de cuentas propio, `AUTH_EMAIL_DOMAIN` (el mismo que `VITE_AUTH_EMAIL_DOMAIN`).
-6. Crear la cuenta `SUPERADMIN` de soporte y la `ADMIN` de la escuela desde el panel de Auth, con `app_metadata` = `{"username", "first_name", "last_name", "app_role", "must_change_password": true}` (el perfil nace de esos datos).
+6. Crear la cuenta `SUPERADMIN` de soporte y la `ADMIN` de la escuela. Desde el panel de Auth el usuario nace **pendiente** (inactivo y sin rol), porque el panel no carga los datos del servidor. Se completa con SQL y el perfil se activa solo:
+   `update auth.users set raw_app_meta_data = raw_app_meta_data || '{"username":"admin2","first_name":"…","last_name":"…","app_role":"ADMIN"}' where email = 'admin2@cuentas.integrar.invalid';`
+   El rol sale sólo de `raw_app_meta_data`: nunca de los metadatos que elige el usuario.
 7. Sitio: `VITE_BACKEND=supabase`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` y, si corresponde, `VITE_AUTH_EMAIL_DOMAIN`.
 8. Prueba de humo (`docs/INSTANCIAS.md` §6, paso 7): ingresar, crear la empresa de un curso, alta masiva de estudiantes y un circuito corto de compra. Verificar en especial que Auth acepte el dominio de las cuentas y que el perfil nazca con sus datos.

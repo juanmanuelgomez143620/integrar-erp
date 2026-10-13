@@ -200,16 +200,54 @@ describe('alta de usuarios', () => {
     expect(profile.app_role).toBe('ESTUDIANTE')
   })
 
-  it('un registro sin username en metadata genera uno del email y crea la cuenta', async () => {
+  it('sin datos del servidor, la cuenta queda pendiente: inactiva, sin rol y sin poder hacer nada', async () => {
+    // Aunque el usuario se ponga un rol en sus propios metadatos.
     const [row] = await db.admin<{ id: string }>(
-      `insert into auth.users (email, raw_app_meta_data) values ('suelto@usuarios.test', '{}') returning id`
+      `insert into auth.users (email, raw_app_meta_data, raw_user_meta_data) values ($1, $2, $3) returning id`,
+      [
+        'Suelto.Uno@usuarios.test',
+        JSON.stringify({ provider: 'email' }),
+        JSON.stringify({ username: 'jefe', app_role: 'SUPERADMIN' }),
+      ],
     )
-    const [profile] = await db.admin<{ username: string; app_role: string }>(
-      'select username, app_role from public.profiles where id = $1',
-      [row.id]
+    const [profile] = await db.admin(
+      'select username, app_role, is_active, setup_pending from public.profiles where id = $1',
+      [row.id],
     )
-    expect(profile.username).toBe('suelto')
-    expect(profile.app_role).toBe('ESTUDIANTE')
+    expect(profile).toEqual({ username: 'suelto.uno', app_role: 'ESTUDIANTE', is_active: false, setup_pending: true })
+    expect((await businessError(db.as(row.id, 'select public.my_context()'))).code).toBe('USUARIO_INACTIVO')
+  })
+
+  it('cuando el servidor carga sus datos, la cuenta pendiente se completa y se activa', async () => {
+    const [row] = await db.admin<{ id: string }>(
+      `insert into auth.users (email) values ('pendiente@usuarios.test') returning id`,
+    )
+    await db.admin(`update auth.users set raw_app_meta_data = raw_app_meta_data || $2 where id = $1`, [
+      row.id,
+      JSON.stringify({ username: 'mgarcia', first_name: 'Marta', last_name: 'García', app_role: 'ADMIN' }),
+    ])
+    const [profile] = await db.admin(
+      'select username, first_name, app_role, is_active, setup_pending from public.profiles where id = $1',
+      [row.id],
+    )
+    expect(profile).toEqual({
+      username: 'mgarcia',
+      first_name: 'Marta',
+      app_role: 'ADMIN',
+      is_active: true,
+      setup_pending: false,
+    })
+  })
+
+  it('a un usuario desactivado no lo reactiva ningún cambio en sus metadatos', async () => {
+    const id = await createUser(db, 'desactivado')
+    await db.admin('update public.profiles set is_active = false where id = $1', [id])
+    await db.admin(
+      `update auth.users set raw_app_meta_data = raw_app_meta_data || '{"providers":["email"]}' where id = $1`,
+      [id],
+    )
+    const [profile] = await db.admin('select is_active from public.profiles where id = $1', [id])
+    expect(profile).toEqual({ is_active: false })
   })
 })
 
