@@ -32,7 +32,7 @@ function PrintButton({ book, range, extra = '' }: { book: string; range: DateRan
 export function JournalPage() {
   const company = useCompany()
   const [range, setRange] = useBookRange()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['journal-book', company.companyId, range.from, range.to],
     queryFn: () => api.journalBook(company.companyId, range.from, range.to),
   })
@@ -59,7 +59,7 @@ export function JournalPage() {
         <RangePicker range={range} onChange={setRange} />
       </div>
       {isLoading || !data ? (
-        <Loading />
+        <Loading error={error} />
       ) : data.entries.length ? (
         <div className="overflow-x-auto rounded-xl border bg-card p-2">
           <JournalTable book={data} />
@@ -77,7 +77,7 @@ export function LedgerPage() {
   const accountId = params.get('cuenta') ?? ''
   const accounts = useAccounts()
   const [range, setRange] = useBookRange()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     enabled: !!accountId,
     queryKey: ['ledger', company.companyId, accountId, range.from, range.to],
     queryFn: () => api.ledger(company.companyId, accountId, range.from, range.to),
@@ -113,7 +113,7 @@ export function LedgerPage() {
       {!accountId ? (
         <EmptyState icon={BookOpen} title="Elegí una cuenta para ver su mayor" />
       ) : isLoading || !data || !account ? (
-        <Loading />
+        <Loading error={error} />
       ) : (
         <>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
@@ -138,7 +138,7 @@ export function LedgerPage() {
 export function TrialBalancePage() {
   const company = useCompany()
   const [range, setRange] = useBookRange()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['trial-balance', company.companyId, range.from, range.to],
     queryFn: () => api.trialBalance(company.companyId, range.from, range.to),
   })
@@ -155,7 +155,7 @@ export function TrialBalancePage() {
         <RangePicker range={range} onChange={setRange} />
       </div>
       {isLoading || !data ? (
-        <Loading />
+        <Loading error={error} />
       ) : !data.rows.length ? (
         <EmptyState icon={BookOpen} title="No hay movimientos en estas fechas" />
       ) : (

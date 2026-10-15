@@ -31,7 +31,7 @@ const INDENT = ['', 'pl-0', 'pl-3', 'pl-6', 'pl-9']
 
 export function AccountsPage() {
   const company = useCompany()
-  const { data, isLoading } = useAccounts()
+  const { data, isLoading, error } = useAccounts()
   const [term, setTerm] = useState('')
   const [withBalance, setWithBalance] = useState(false)
   const [editing, setEditing] = useState<AccountRow | 'new' | null>(null)
@@ -39,7 +39,7 @@ export function AccountsPage() {
   const canUpdate = company.can('account.update')
   const canLedger = company.can('ledger.read')
   const toggle = useCommand((id: string, active: boolean) => commands.setAccountActive(company.companyId, id, active))
-  if (isLoading || !data) return <Loading />
+  if (isLoading || !data) return <Loading error={error} />
 
   const rows = data.filter(
     (a) => (!term.trim() || matchesSearch(`${a.code} ${a.name}`, term)) && (!withBalance || a.balance !== 0),

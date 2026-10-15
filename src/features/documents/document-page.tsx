@@ -80,11 +80,11 @@ const AREA: Record<DocType, string> = {
 export function DocumentPage({ docType }: { docType: DocType }) {
   const { number = '' } = useParams()
   const company = useCompany()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['document', company.companyId, docType, number],
     queryFn: () => api.document(company.companyId, docType, number),
   })
-  if (isLoading) return <Loading />
+  if (isLoading || error) return <Loading error={error} />
   if (!data) {
     return (
       <div className="py-20 text-center">

@@ -10,7 +10,7 @@ import { AccountSelect, useAccounts } from './shared'
 export function PostingRulesPage() {
   const company = useCompany()
   const accounts = useAccounts()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['posting-rules', company.companyId],
     queryFn: () => api.postingRules(company.companyId),
   })
@@ -19,7 +19,7 @@ export function PostingRulesPage() {
     (rule: PostingRuleRow, accountId: string) => commands.savePostingRule(company.companyId, rule.id, accountId),
     { success: 'Imputación actualizada.' },
   )
-  if (isLoading || !data || !accounts.data) return <Loading />
+  if (isLoading || !data || !accounts.data) return <Loading error={error ?? accounts.error} />
   const events = [...new Set(data.map((r) => r.event))]
   return (
     <>

@@ -159,7 +159,8 @@ export function companyContext(db: DB, userId: string, slug: string): CompanyCon
 }
 
 function assertPerm(db: DB, userId: string, companyId: string, perm: string) {
-  if (!can(effectivePermissions(db, userId, companyId), perm)) throw new Error('Sin permiso de lectura')
+  if (!can(effectivePermissions(db, userId, companyId), perm))
+    throw new Error('Tu rol no tiene acceso a esta información.')
 }
 
 // ============================================================ Maestros

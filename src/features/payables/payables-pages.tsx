@@ -22,12 +22,17 @@ const crumbs = (company: ReturnType<typeof useCompany>, extra: { label: string; 
 export function PayablesPage() {
   const company = useCompany()
   const navigate = useNavigate()
-  const { data = [], isLoading } = useQuery({
+  const {
+    data = [],
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['payables', company.companyId],
     queryFn: () => api.payables(company.companyId),
   })
   const total = data.reduce((s, r) => s + r.balance, 0)
   const overdue = data.reduce((s, r) => s + r.overdue, 0)
+  if (error) return <Loading error={error} />
   return (
     <>
       <PageHeader
@@ -95,12 +100,13 @@ export function SupplierAccountPage() {
     queryFn: () => api.suppliers(company.companyId),
   })
   const supplier = suppliers.data?.find((s) => s.code === code)
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     enabled: !!supplier,
     queryKey: ['supplier-account', company.companyId, supplier?.id],
     queryFn: () => api.supplierAccount(company.companyId, supplier!.id),
   })
-  if (suppliers.isLoading || (supplier && isLoading)) return <Loading />
+  if (suppliers.isLoading || (supplier && isLoading) || error || suppliers.error)
+    return <Loading error={error ?? suppliers.error} />
   if (!supplier || !data) return <EmptyState icon={Wallet} title={`No se encontró el proveedor ${code}`} />
   return (
     <>

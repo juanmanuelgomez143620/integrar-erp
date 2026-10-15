@@ -1,5 +1,6 @@
 import { cloneElement, isValidElement, useId, type ComponentType, type ReactNode } from 'react'
 import { Link } from 'react-router'
+import { CircleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /** Tarjeta de sección con título: base visual de fichas y tableros. */
@@ -167,7 +168,18 @@ export function Field({
   )
 }
 
-export function Loading({ label = 'Cargando…' }: { label?: string }) {
+/**
+ * Mientras llegan los datos. Si la consulta falló (por ejemplo, alguien abrió
+ * el enlace de una pantalla de otro sector), muestra el motivo en vez de
+ * quedarse cargando.
+ */
+export function Loading({ label = 'Cargando…', error }: { label?: string; error?: Error | null }) {
+  if (error)
+    return (
+      <EmptyState icon={CircleAlert} title="No se puede mostrar esta pantalla">
+        {error.message}
+      </EmptyState>
+    )
   return <div className="py-16 text-center text-sm text-muted-foreground">{label}</div>
 }
 

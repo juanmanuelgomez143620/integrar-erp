@@ -14,7 +14,7 @@ import { useCompany } from '@/app/company'
 
 export function FiscalYearsPage() {
   const company = useCompany()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['fiscal-years', company.companyId],
     queryFn: () => api.fiscalYears(company.companyId),
   })
@@ -36,7 +36,7 @@ export function FiscalYearsPage() {
     success: `Ejercicio ${nextYear} abierto.`,
     onSuccess: () => setOpening(false),
   })
-  if (isLoading || !data) return <Loading />
+  if (isLoading || !data) return <Loading error={error} />
   const closing = pending?.status === 'ABIERTO'
 
   return (

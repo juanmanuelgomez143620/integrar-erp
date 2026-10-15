@@ -37,7 +37,7 @@ export function EntryFormPage() {
     queryKey: ['document', company.companyId, 'JOURNAL_ENTRY', number],
     queryFn: () => api.document(company.companyId, 'JOURNAL_ENTRY', number!),
   })
-  if (!accounts.data || (number && existing.isLoading)) return <Loading />
+  if (!accounts.data || (number && existing.isLoading)) return <Loading error={accounts.error} />
   if (number && (!existing.data || existing.data.doc.status !== 'BORRADOR')) {
     return (
       <div className="py-20 text-center">

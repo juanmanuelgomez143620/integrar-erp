@@ -16,11 +16,11 @@ import { useCompany } from '@/app/company'
 
 export function ReceiptFormPage() {
   const company = useCompany()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['receivable-orders', company.companyId],
     queryFn: () => api.receivableOrders(company.companyId),
   })
-  if (isLoading || !data) return <Loading />
+  if (isLoading || !data) return <Loading error={error} />
   return <ReceiptForm orders={data} />
 }
 

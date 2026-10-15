@@ -33,7 +33,7 @@ export function RequisitionFormPage() {
   const { number } = useParams()
   const company = useCompany()
   const editing = !!number
-  const { data: products = [] } = useQuery({
+  const { data: products = [], error } = useQuery({
     queryKey: ['products', company.companyId],
     queryFn: () => api.products(company.companyId),
   })
@@ -42,7 +42,7 @@ export function RequisitionFormPage() {
     queryFn: () => api.document(company.companyId, 'PURCHASE_REQUISITION', number!),
     enabled: editing,
   })
-  if (!products.length || (editing && isLoading)) return <Loading />
+  if (!products.length || (editing && isLoading)) return <Loading error={error} />
   return <RequisitionForm products={products} existing={editing ? (existing ?? null) : null} />
 }
 

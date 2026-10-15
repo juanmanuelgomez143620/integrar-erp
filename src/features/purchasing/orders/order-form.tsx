@@ -63,7 +63,8 @@ export function OrderFormPage() {
     queryFn: () => api.document(company.companyId, 'PURCHASE_ORDER', number!),
     enabled: editing,
   })
-  if (!products.data || !suppliers.data || !pending.data || (editing && !existing.data)) return <Loading />
+  if (!products.data || !suppliers.data || !pending.data || (editing && !existing.data))
+    return <Loading error={products.error ?? suppliers.error ?? pending.error ?? existing.error} />
   return (
     <OrderForm
       products={products.data}

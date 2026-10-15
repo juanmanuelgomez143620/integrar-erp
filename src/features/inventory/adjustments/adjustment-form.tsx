@@ -30,7 +30,7 @@ export function AdjustmentFormPage() {
     queryFn: () => api.products(company.companyId),
   })
   const stock = useQuery({ queryKey: ['stock', company.companyId], queryFn: () => api.stock(company.companyId) })
-  if (!products.data || !stock.data) return <Loading />
+  if (!products.data || !stock.data) return <Loading error={products.error ?? stock.error} />
   return <AdjustmentForm products={products.data.filter((p) => p.is_stockable && p.is_active)} stock={stock.data} />
 }
 

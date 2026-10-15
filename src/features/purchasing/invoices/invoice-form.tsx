@@ -27,7 +27,7 @@ export function InvoiceFormPage() {
     queryKey: ['suppliers', company.companyId],
     queryFn: () => api.suppliers(company.companyId),
   })
-  if (!orders.data || !suppliers.data) return <Loading />
+  if (!orders.data || !suppliers.data) return <Loading error={orders.error ?? suppliers.error} />
   return <InvoiceForm orders={orders.data} suppliers={suppliers.data} />
 }
 
