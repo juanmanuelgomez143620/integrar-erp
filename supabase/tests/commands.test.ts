@@ -100,6 +100,13 @@ async function step<M, P>(
   return m.ok && p.ok ? { mock: m.value as M, pg: p.value as P } : null
 }
 
+/** Un paso que tiene que salir bien: si fallara igual en los dos lados, step() no lo notaría. */
+async function ok<M, P>(label: string, username: string, onMock: (ctx: E.Ctx) => M, onPg: (b: Backend) => Promise<P>) {
+  const result = await step(label, username, onMock, onPg)
+  expect(result, `${label}: tenía que salir bien`).not.toBeNull()
+  return result!
+}
+
 /** Vincula un documento nuevo y sus líneas (por número de línea). */
 async function linkDocument(mockDocId: string, pgDocId: string) {
   loaded.link(mockDocId, pgDocId)
@@ -312,7 +319,7 @@ describe('paridad de comandos', () => {
       (c) => E.cmdCreateRequisition(c, company, requisition([['IN-002', 4]]), false),
       (b) => b.commands.createRequisition(companyPg, pgRequisition(requisition([['IN-002', 4]])), false),
     )
-    await step(
+    await ok(
       'modificar SC',
       'produccion',
       (c) => E.cmdUpdateRequisition(c, sc2, requisition([['IN-002', 6]], 'Barniz para la línea nueva')),
@@ -323,7 +330,7 @@ describe('paridad de comandos', () => {
         ),
     )
     await linkDocument(sc2, pg(sc2))
-    await step(
+    await ok(
       'enviar SC',
       'produccion',
       (c) => E.cmdSubmitRequisition(c, sc2),
@@ -337,7 +344,7 @@ describe('paridad de comandos', () => {
         (b) => b.commands.rejectRequisition(pg(sc2), ''),
       ),
     ).toBeNull()
-    await step(
+    await ok(
       'rechazar SC',
       'compras1',
       (c) => E.cmdRejectRequisition(c, sc2, 'Usen el barniz que sobró'),
@@ -353,7 +360,7 @@ describe('paridad de comandos', () => {
       (c) => E.cmdCreatePurchaseOrder(c, company, oc1Input.input),
       (b) => b.commands.createPurchaseOrder(companyPg, oc1Input.pgInput),
     )
-    await step(
+    await ok(
       'enviar OC a aprobación',
       'compras1',
       (c) => E.cmdSubmitPurchaseOrder(c, oc1),
@@ -367,13 +374,13 @@ describe('paridad de comandos', () => {
         (b) => b.commands.approvePurchaseOrder(pg(oc1), 'ok'),
       ),
     ).toBeNull()
-    await step(
+    await ok(
       'aprobar OC',
       'compras2',
       (c) => E.cmdApprovePurchaseOrder(c, oc1, 'Precio de lista'),
       (b) => b.commands.approvePurchaseOrder(pg(oc1), 'Precio de lista'),
     )
-    await step(
+    await ok(
       'enviar OC al proveedor',
       'compras1',
       (c) => E.cmdSendPurchaseOrder(c, oc1),
@@ -426,7 +433,7 @@ describe('paridad de comandos', () => {
       (c) => E.cmdCreateGoodsReceipt(c, company, receipt(5, 'R-0001-00000101').input, false),
       (b) => b.commands.createGoodsReceipt(companyPg, receipt(5, 'R-0001-00000101').pgInput, false),
     )
-    await step(
+    await ok(
       'confirmar recepción',
       'deposito',
       (c) => E.cmdConfirmGoodsReceipt(c, rec2),
@@ -440,19 +447,19 @@ describe('paridad de comandos', () => {
         (b) => b.commands.cancelGoodsReceipt(pg(rec1), 'Se contó mal'),
       ),
     ).toBeNull()
-    await step(
+    await ok(
       'Gerencia anula la recepción',
       'gerencia',
       (c) => E.cmdCancelGoodsReceipt(c, rec1, 'Se contó mal'),
       (b) => b.commands.cancelGoodsReceipt(pg(rec1), 'Se contó mal'),
     )
-    await step(
+    await ok(
       'cerrar el saldo de la OC',
       'compras1',
       (c) => E.cmdClosePurchaseOrder(c, oc1, 'El proveedor no tiene más'),
       (b) => b.commands.closePurchaseOrder(pg(oc1), 'El proveedor no tiene más'),
     )
-    await step(
+    await ok(
       'cerrar el saldo de la SC',
       'compras1',
       (c) => E.cmdCloseRequisition(c, sc1, 'Se compra el mes que viene'),
@@ -467,7 +474,7 @@ describe('paridad de comandos', () => {
       (c) => E.cmdCreatePurchaseOrder(c, company, bigInput.input),
       (b) => b.commands.createPurchaseOrder(companyPg, bigInput.pgInput),
     )
-    await step(
+    await ok(
       'enviar OC grande',
       'compras2',
       (c) => E.cmdSubmitPurchaseOrder(c, big),
@@ -481,7 +488,7 @@ describe('paridad de comandos', () => {
         (b) => b.commands.approvePurchaseOrder(pg(big), ''),
       ),
     ).toBeNull()
-    await step(
+    await ok(
       'Gerencia aprueba la OC grande',
       'gerencia',
       (c) => E.cmdApprovePurchaseOrder(c, big, 'Inversión prevista'),
@@ -534,7 +541,7 @@ describe('paridad de comandos', () => {
         (b: Backend) => b.commands.cancelPurchaseOrder(pg(ocx), 'Se compra a otro proveedor'),
       ],
     ] as const)
-      await step(`OC a corregir: ${label}`, user, onMock, onPg)
+      await ok(`OC a corregir: ${label}`, user, onMock, onPg)
 
     // Ajustes de stock: una rotura confirmada y un borrador anulado.
     const adjustment = (reason: 'ROTURA' | 'CONTEO_FISICO', code: string, delta: number) => ({
@@ -563,7 +570,7 @@ describe('paridad de comandos', () => {
       (c) => E.cmdCreateStockAdjustment(c, company, adjustment('CONTEO_FISICO', 'IN-001', 2).input, false),
       (b) => b.commands.createStockAdjustment(companyPg, adjustment('CONTEO_FISICO', 'IN-001', 2).pgInput, false),
     )
-    await step(
+    await ok(
       'anular el conteo',
       'deposito',
       (c) => E.cmdCancelStockAdjustment(c, draft, 'Se repite el conteo'),
@@ -697,14 +704,14 @@ describe('paridad de comandos', () => {
       ],
       'Pago del servicio de internet del mes.',
     )
-    await step(
+    await ok(
       'corregir el borrador',
       'contabilidad',
       (c) => E.cmdUpdateJournalEntry(c, draft, fixed.input),
       (b) => b.commands.updateJournalEntry(pg(draft), fixed.pgInput),
     )
     await linkDocument(draft, pg(draft))
-    await step(
+    await ok(
       'registrar el borrador',
       'contabilidad',
       (c) => E.cmdConfirmJournalEntry(c, draft),
@@ -741,7 +748,7 @@ describe('paridad de comandos', () => {
         (b) => b.commands.cancelJournalEntry(pg(ad), ''),
       ),
     ).toBeNull()
-    await step(
+    await ok(
       'anular con contraasiento',
       'contabilidad',
       (c) => E.cmdCancelJournalEntry(c, ad, 'Era un gasto de otro mes'),
@@ -792,7 +799,7 @@ describe('paridad de comandos', () => {
         ),
         label,
       ).toBeNull()
-    await step(
+    await ok(
       'renombrar la cuenta',
       'contabilidad',
       (c) =>
@@ -812,7 +819,7 @@ describe('paridad de comandos', () => {
         (b) => b.commands.setAccountActive(companyPg, pg(account('1.1.01.01')), false),
       ),
     ).toBeNull()
-    await step(
+    await ok(
       'desactivar una cuenta sin saldo',
       'contabilidad',
       (c) => E.cmdSetAccountActive(c, company, account('1.1.01.02'), false),
@@ -830,7 +837,7 @@ describe('paridad de comandos', () => {
         (c) => E.cmdSetPeriodStatus(c, company, month.id, status, reason),
         (b) => b.commands.setPeriodStatus(companyPg, pg(month.id), status, reason),
       )
-    await period('cerrar el mes', 'contabilidad', 'CERRADO', '')
+    expect(await period('cerrar el mes', 'contabilidad', 'CERRADO', '')).not.toBeNull()
     expect(
       await create(
         'asiento en un mes cerrado',
@@ -844,7 +851,7 @@ describe('paridad de comandos', () => {
     ).toBeNull()
     expect(await period('Contabilidad no reabre', 'contabilidad', 'ABIERTO', 'Falta un gasto')).toBeNull()
     expect(await period('reabrir sin motivo', 'docente', 'ABIERTO', '')).toBeNull()
-    await period('el docente reabre', 'docente', 'ABIERTO', 'Falta registrar un gasto')
+    expect(await period('el docente reabre', 'docente', 'ABIERTO', 'Falta registrar un gasto')).not.toBeNull()
     const nextYear = Number(today.slice(0, 4)) + 1
     const opened = await step(
       'abrir el ejercicio siguiente',
@@ -951,7 +958,7 @@ describe('paridad de comandos', () => {
     const draft = await createdInvoice('factura en borrador', 'compras1', draftInput, false)
     expect(await create('el mismo comprobante otra vez', 'compras2', draftInput, false)).toBeNull()
     expect(await confirm('Depósito no registra la factura', 'deposito', draft)).toBeNull()
-    await confirm('registrar la factura', 'compras2', draft)
+    expect(await confirm('registrar la factura', 'compras2', draft)).not.toBeNull()
     expect(await confirm('registrarla otra vez', 'compras1', draft)).toBeNull()
 
     // Otra factura completa lo recibido; después no queda nada por facturar.
@@ -966,7 +973,9 @@ describe('paridad de comandos', () => {
     // La anulación libera lo facturado y deja el contraasiento del asiento de compra.
     expect(await cancel('anular sin motivo', 'compras1', second, '')).toBeNull()
     expect(await cancel('Contabilidad no anula facturas', 'contabilidad', second, 'Precio mal')).toBeNull()
-    await cancel('anular la factura y su asiento', 'compras1', second, 'El precio no es el pactado')
+    expect(
+      await cancel('anular la factura y su asiento', 'compras1', second, 'El precio no es el pactado'),
+    ).not.toBeNull()
     expect(await cancel('anular una factura anulada', 'compras1', second, 'Otra vez')).toBeNull()
 
     // Contabilidad cambia la imputación de las materias primas y la factura siguiente la usa.
@@ -983,7 +992,7 @@ describe('paridad de comandos', () => {
         ),
         label,
       ).toBeNull()
-    await step(
+    await ok(
       'cambiar la imputación',
       'contabilidad',
       (c) => E.cmdSavePostingRule(c, company, rule('MATERIA_PRIMA'), account('1.1.05.02')),
@@ -1020,19 +1029,19 @@ describe('paridad de comandos', () => {
           lines: serviceOrder.lines.map((l) => ({ ...l, product_id: pg(l.product_id) })),
         }),
     )
-    await step(
+    await ok(
       'enviar la OC del servicio',
       'compras2',
       (c) => E.cmdSubmitPurchaseOrder(c, service),
       (b) => b.commands.submitPurchaseOrder(pg(service)),
     )
-    await step(
+    await ok(
       'aprobar la OC del servicio',
       'compras1',
       (c) => E.cmdApprovePurchaseOrder(c, service, 'Servicio necesario'),
       (b) => b.commands.approvePurchaseOrder(pg(service), 'Servicio necesario'),
     )
-    await step(
+    await ok(
       'mandar la OC al proveedor',
       'compras2',
       (c) => E.cmdSendPurchaseOrder(c, service),
@@ -1050,7 +1059,7 @@ describe('paridad de comandos', () => {
       notes: 'Servicio prestado.',
       lines: [{ po_line_id: serviceLine, quantity: 2 }],
     }
-    await created(
+    const serviceReceipt = await created(
       'servicio prestado',
       'deposito',
       (c) => E.cmdCreateGoodsReceipt(c, company, delivered, true),
@@ -1067,6 +1076,14 @@ describe('paridad de comandos', () => {
         ),
     )
     await createdInvoice('factura C', 'compras2', invoice(service, serviceLine, '77', 2, 21000, { pos: '2' }), true)
+    expect(
+      await step(
+        'anular una recepción ya facturada',
+        'gerencia',
+        (c) => E.cmdCancelGoodsReceipt(c, serviceReceipt, 'Se cargó dos veces'),
+        (b) => b.commands.cancelGoodsReceipt(pg(serviceReceipt), 'Se cargó dos veces'),
+      ),
+    ).toBeNull()
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {

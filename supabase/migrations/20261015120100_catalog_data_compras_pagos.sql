@@ -108,6 +108,7 @@ insert into public.role_permissions (role_code, permission_code) values
   ('GERENCIA', 'purchase_order.cancel'),
   ('GERENCIA', 'purchase_order.export'),
   ('GERENCIA', 'goods_receipt.read'),
+  ('GERENCIA', 'goods_receipt.cancel'),
   ('GERENCIA', 'dashboard.read'),
   ('GERENCIA', 'task.read'),
   ('GERENCIA', 'audit.read'),

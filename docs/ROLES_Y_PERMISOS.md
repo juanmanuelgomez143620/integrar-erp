@@ -80,7 +80,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Ajuste de stock | L A | — | — | L C X | — | L | — | — | — | — | L | Todo |
 | Solicitud de compra | L | L A X¹ | — | L C M X | L C M X | — | — | — | — | — | L | Todo |
 | Orden de compra | L A X E | L C M A² X E | — | L | L | L | L | — | L | L | L E | Todo |
-| Recepción | L | L | — | L C X | L | L | — | — | — | L | L E | Todo |
+| Recepción | L X⁵ | L | — | L C X | L | L | — | — | — | L | L E | Todo |
 | Tablero ejecutivo | L | — | — | — | — | — | — | — | — | — | L | Todo |
 | Todas las tareas | L | — | — | — | — | — | — | — | — | — | L | Todo |
 | Auditoría completa | L E | — | — | — | — | — | — | — | — | — | L E | Todo |
@@ -96,6 +96,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
 ³ Sólo el docente reabre un mes cerrado (con motivo) y abre un ejercicio nuevo.
 ⁴ Compras registra la factura contra lo recibido (nunca más de lo que llegó) y la anula sólo si no tiene pagos; el asiento de compra se genera solo, con las reglas de imputación de Contabilidad.
+⁵ Gerencia anula recepciones que registró Depósito (SoD-3); no se anula una recepción ya facturada.
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros.
 

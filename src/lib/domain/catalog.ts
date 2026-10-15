@@ -114,7 +114,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'stock.read', 'stock.export', 'stock_adjustment.read', 'stock_adjustment.approve',
     'purchase_requisition.read',
     'purchase_order.read', 'purchase_order.approve', 'purchase_order.cancel', 'purchase_order.export',
-    'goods_receipt.read', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
+    // Anula recepciones registradas por Depósito (separación de funciones, SoD-3).
+    'goods_receipt.read', 'goods_receipt.cancel', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read',
   ],

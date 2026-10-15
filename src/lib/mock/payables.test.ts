@@ -6,6 +6,7 @@ import type { DB } from './db'
 import {
   BusinessError,
   cmdApprovePurchaseOrder,
+  cmdCancelGoodsReceipt,
   cmdCancelSupplierInvoice,
   cmdConfirmSupplierInvoice,
   cmdCreateCompanyFromTemplate,
@@ -200,6 +201,19 @@ describe('factura de proveedor', () => {
     expect(listPayables(db, userId('compras1'), companyId()).map((p) => p.supplier.code)).not.toContain('PRV-002')
     const again = cmdCreateSupplierInvoice(ctx('compras1'), companyId(), invoice(order, line, 6, '200'), true)
     expect(doc(again.id).status).toBe('REGISTRADA')
+  })
+
+  it('no se anula una recepción ya facturada: primero se anula la factura', () => {
+    const { order, line } = receivedOrder()
+    const receipt = db.documents.find((d) => d.doc_type === 'GOODS_RECEIPT' && d.gr?.purchase_order_id === order)!
+    const fp = cmdCreateSupplierInvoice(ctx('compras1'), companyId(), invoice(order, line, 2), true)
+    expectBusinessError(
+      () => cmdCancelGoodsReceipt(ctx('gerencia'), receipt.id, 'Se cargó dos veces'),
+      'TRANSICION_INVALIDA',
+    )
+    cmdCancelSupplierInvoice(ctx('compras1'), fp.id, 'Hay que anular la recepción')
+    cmdCancelGoodsReceipt(ctx('gerencia'), receipt.id, 'Se cargó dos veces')
+    expect(doc(receipt.id).status).toBe('ANULADO')
   })
 
   it('respeta los permisos, el período cerrado y las reglas de imputación', () => {

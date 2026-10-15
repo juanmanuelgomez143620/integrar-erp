@@ -590,6 +590,62 @@ begin
 end;
 $$;
 
+-- Igual que antes, y además no se anula una recepción ya facturada: lo
+-- facturado nunca queda por encima de lo recibido (cmdCancelGoodsReceipt).
+create or replace function public.gr_cancel(p_document_id uuid, p_reason text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_doc public.documents := private.get_document(p_document_id, 'GOODS_RECEIPT');
+  v_gr public.goods_receipts;
+  v_po public.documents;
+  v_line public.goods_receipt_lines;
+  v_product public.products;
+  v_invoiced numeric;
+begin
+  perform private.require_active_user();
+  if v_doc.status <> 'CONFIRMADO' then
+    perform private.transition_document(v_doc.id, 'CANCEL', p_reason);
+    return;
+  end if;
+  if coalesce((select (c.settings ->> 'sod_enabled')::boolean from public.companies c where c.id = v_doc.company_id), true)
+     and not private.is_supervisor(v_doc.company_id)
+     and not exists (select 1 from private.my_role_codes(v_doc.company_id) as rc (code) where rc.code = 'GERENCIA')
+     and v_doc.created_by = (select auth.uid()) then
+    perform private.raise_business_error('SEPARACION_FUNCIONES', 'No podés anular una recepción que registraste vos.',
+      'Otro integrante de Depósito o Gerencia debe revisar y anular.');
+  end if;
+  select * into v_gr from public.goods_receipts g where g.document_id = v_doc.id;
+  v_po := private.get_document(v_gr.purchase_order_id, 'PURCHASE_ORDER');
+  if v_po.status = 'CERRADO' then
+    perform private.raise_business_error('TRANSICION_INVALIDA',
+      format('%s está cerrada: la recepción ya no puede anularse.', v_po.display_number));
+  end if;
+  for v_line in select * from public.goods_receipt_lines l where l.document_id = v_doc.id order by l.line_no loop
+    v_invoiced := private.invoiced_quantity(v_line.po_line_id);
+    if v_invoiced > (select round(pl.qty_received - v_line.quantity, 3) from public.purchase_order_lines pl
+                      where pl.id = v_line.po_line_id) + 0.000000001 then
+      select * into v_product from public.products p where p.id = v_line.product_id;
+      perform private.raise_business_error('TRANSICION_INVALIDA',
+        format('No se puede anular %s: de %s ya se facturaron %s. Primero hay que anular la factura del proveedor.',
+               v_doc.display_number, v_product.code, private.format_qty(v_invoiced, v_product.uom_code)),
+        'Lo facturado nunca puede superar lo recibido (control por oposición).');
+    end if;
+  end loop;
+  perform private.transition_document(v_doc.id, 'CANCEL', p_reason,
+    p_summary => format('Anuló %s con contramovimiento — %s', v_doc.display_number, trim(coalesce(p_reason, ''))));
+  for v_line in select * from public.goods_receipt_lines l where l.document_id = v_doc.id order by l.line_no loop
+    update public.purchase_order_lines set qty_received = round(qty_received - v_line.quantity, 3) where id = v_line.po_line_id;
+    perform private.post_stock_movement(v_doc.company_id, v_line.product_id, v_gr.warehouse_id, 'ANULACION_RECEPCION',
+      -v_line.quantity, null, v_doc.id, v_line.id, private.business_date(v_doc.company_id));
+  end loop;
+  perform private.recompute_purchase_order(v_po.id);
+end;
+$$;
+
 grant execute on function public.posting_rule_save(uuid, uuid, uuid) to authenticated;
 grant execute on function public.si_create(uuid, jsonb, boolean) to authenticated;
 grant execute on function public.si_confirm(uuid) to authenticated;

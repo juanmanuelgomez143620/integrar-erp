@@ -1446,6 +1446,19 @@ export function cmdCancelGoodsReceipt(ctx: Ctx, docId: string, reason: string) {
     const po = getDoc(db, doc.gr!.purchase_order_id, 'PURCHASE_ORDER')
     if (po.status === 'CERRADO')
       fail('TRANSICION_INVALIDA', `${po.display_number} está cerrada: la recepción ya no puede anularse.`)
+    // Lo facturado nunca queda por encima de lo recibido.
+    for (const line of db.grLines.filter((l) => l.document_id === doc.id)) {
+      const pl = db.poLines.find((x) => x.id === line.po_line_id)!
+      const invoiced = invoicedQuantity(db, pl.id)
+      if (invoiced > round3(pl.qty_received - line.quantity) + EPS) {
+        const p = getProduct(db, doc.company_id, line.product_id)
+        fail(
+          'TRANSICION_INVALIDA',
+          `No se puede anular ${doc.display_number}: de ${p.code} ya se facturaron ${fmtQty(invoiced, p.uom_code)}. Primero hay que anular la factura del proveedor.`,
+          'Lo facturado nunca puede superar lo recibido (control por oposición).',
+        )
+      }
+    }
     transition(ctx, doc, 'CANCEL', {
       comment: reason,
       summary: `Anuló ${doc.display_number} con contramovimiento — ${reason.trim()}`,
