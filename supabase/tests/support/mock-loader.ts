@@ -106,25 +106,28 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('suppliers', mock.suppliers as unknown as Row[])
     await insert('products', mock.products as unknown as Row[])
     await insert('accounts', mock.accounts as unknown as Row[])
+    await insert('posting_rules', mock.postingRules as unknown as Row[])
     await insert('fiscal_years', mock.fiscalYears as unknown as Row[])
     await insert('fiscal_periods', mock.fiscalPeriods as unknown as Row[])
     await insert('document_sequences', mock.documentSequences as unknown as Row[])
     await insert(
       'documents',
-      mock.documents.map(({ pr: _pr, po: _po, gr: _gr, sa: _sa, je: _je, ...d }) => d),
+      mock.documents.map(({ pr: _pr, po: _po, gr: _gr, sa: _sa, je: _je, si: _si, ...d }) => d),
     )
-    const sub = (key: 'pr' | 'po' | 'gr' | 'sa' | 'je') =>
+    const sub = (key: 'pr' | 'po' | 'gr' | 'sa' | 'je' | 'si') =>
       mock.documents.filter((d) => d[key]).map((d) => ({ ...d[key], document_id: d.id, company_id: d.company_id }))
     await insert('purchase_requisitions', sub('pr'))
     await insert('purchase_orders', sub('po'))
     await insert('goods_receipts', sub('gr'))
     await insert('stock_adjustments', sub('sa'))
     await insert('journal_entries', sub('je'))
+    await insert('supplier_invoices', sub('si'))
     await insert('purchase_requisition_lines', mock.prLines as unknown as Row[])
     await insert('purchase_order_lines', mock.poLines as unknown as Row[])
     await insert('goods_receipt_lines', mock.grLines as unknown as Row[])
     await insert('stock_adjustment_lines', mock.saLines as unknown as Row[])
     await insert('journal_entry_lines', mock.jeLines as unknown as Row[])
+    await insert('supplier_invoice_lines', mock.siLines as unknown as Row[])
     await insert('document_links', mock.docLinks as unknown as Row[])
     await insert('stock_movements', mock.stockMovements as unknown as Row[], true)
     await insert('stock_balances', mock.stockBalances as unknown as Row[])

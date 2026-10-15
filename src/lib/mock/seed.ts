@@ -14,6 +14,7 @@ import {
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
   cmdCreateStockAdjustment,
+  cmdCreateSupplierInvoice,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
   scanStockAlerts,
@@ -73,6 +74,8 @@ export function buildSeed(): DB {
     grLines: [],
     saLines: [],
     jeLines: [],
+    siLines: [],
+    postingRules: [],
     accounts: [],
     fiscalYears: [],
     fiscalPeriods: [],
@@ -442,6 +445,23 @@ export function buildSeed(): DB {
       carrier_name: 'Transportes Ruta 12 SRL',
       notes: 'Mercadería en buen estado.',
       lines: db.poLines.filter((l) => l.document_id === oc.id).map((l) => ({ po_line_id: l.id, quantity: l.quantity })),
+    },
+    true,
+  )
+
+  // La factura del proveedor por lo recibido: genera el asiento de compra y la deuda.
+  cmdCreateSupplierInvoice(
+    ctx(users.compras1, 55),
+    companyId,
+    {
+      purchase_order_id: oc.id,
+      point_of_sale: '3',
+      invoice_number: '12874',
+      document_date: todayAR(),
+      notes: '',
+      lines: db.poLines
+        .filter((l) => l.document_id === oc.id)
+        .map((l) => ({ po_line_id: l.id, quantity: l.quantity, unit_price: l.unit_price })),
     },
     true,
   )

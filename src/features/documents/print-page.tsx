@@ -123,6 +123,26 @@ export function PrintPage() {
               </div>
             </>
           )}
+          {doc.doc_type === 'SUPPLIER_INVOICE' && doc.si && (
+            <>
+              <div className="col-span-2 rounded border border-slate-300 p-2">
+                <div className="text-[11px] font-semibold text-slate-600 uppercase">Proveedor</div>
+                <div className="font-semibold">{supplier?.legal_name}</div>
+                <div>
+                  CUIT {supplier?.tax_id} (simulado) · {supplier ? VAT_CONDITIONS[supplier.vat_condition] : ''}
+                </div>
+              </div>
+              <div>
+                <b>Comprobante del proveedor:</b> Factura {doc.si.letter} {doc.si.point_of_sale}-{doc.si.invoice_number}
+              </div>
+              <div>
+                <b>Vencimiento:</b> {date(doc.si.due_date)}
+              </div>
+              <div>
+                <b>Orden de compra:</b> {data.related_order?.display_number}
+              </div>
+            </>
+          )}
           {doc.doc_type === 'STOCK_ADJUSTMENT' && doc.sa && (
             <>
               <div>
@@ -210,7 +230,7 @@ export function PrintPage() {
                       ? 'Ajuste'
                       : 'Cantidad'}
                 </th>
-                {doc.doc_type === 'PURCHASE_ORDER' && (
+                {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
                   <>
                     <th className={`${th} text-right`}>Precio unit.</th>
                     <th className={`${th} text-right`}>IVA</th>
@@ -229,7 +249,7 @@ export function PrintPage() {
                     <td className={`${td} text-right`}>{qty(l.qty_ordered_po, l.product.uom_code)}</td>
                   )}
                   <td className={`${td} text-right`}>{qty(l.quantity, l.product.uom_code)}</td>
-                  {doc.doc_type === 'PURCHASE_ORDER' && (
+                  {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
                     <>
                       <td className={`${td} text-right`}>{money(l.unit_price)}</td>
                       <td className={`${td} text-right`}>{String(l.vat_rate).replace('.', ',')} %</td>
@@ -242,7 +262,7 @@ export function PrintPage() {
           </table>
         )}
 
-        {doc.doc_type === 'PURCHASE_ORDER' && (
+        {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
           <div className="mt-3 ml-auto w-64">
             <div className="flex justify-between">
               <span>Subtotal neto</span>

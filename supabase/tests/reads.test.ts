@@ -40,6 +40,7 @@ const DOC_TYPES: DocType[] = [
   'GOODS_RECEIPT',
   'STOCK_ADJUSTMENT',
   'JOURNAL_ENTRY',
+  'SUPPLIER_INVOICE',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -179,11 +180,35 @@ describe('documentos', () => {
         await same(u, () => Q.documentDetailById(mock, userId(u), d.id), 'document_detail_by_id', [loaded.pg(d.id)])
   })
 
-  it('insumos para armar una OC y una recepción', async () => {
+  it('insumos para armar una OC, una recepción y una factura', async () => {
     for (const u of USERS) {
       await same(u, () => Q.pendingRequisitionLines(mock, userId(u), company), 'requisition_lines_pending', [companyPg])
       await same(u, () => Q.receivableOrders(mock, userId(u), company), 'orders_receivable', [companyPg])
+      await same(u, () => Q.invoiceableOrders(mock, userId(u), company), 'orders_invoiceable', [companyPg])
     }
+  })
+})
+
+describe('cuentas corrientes de proveedores e imputación automática', () => {
+  it('saldos por proveedor', async () => {
+    for (const u of USERS) await same(u, () => Q.listPayables(mock, userId(u), company), 'payables_list', [companyPg])
+  })
+
+  it('cuenta corriente de proveedores con facturas, sin facturas y de otra empresa', async () => {
+    const suppliers = ['PRV-001', 'PRV-009', 'PRV-010', 'PRV-003'].map(
+      (code) => mock.suppliers.find((s) => s.company_id === company && s.code === code)!.id,
+    )
+    for (const u of ['docente', 'contabilidad', 'gerencia', 'compras1', 'deposito', 'auditor'])
+      for (const id of [...suppliers, crypto.randomUUID()])
+        await same(u, () => Q.supplierAccount(mock, userId(u), company, id), 'supplier_account', [
+          companyPg,
+          mock.suppliers.some((s) => s.id === id) ? loaded.pg(id) : id,
+        ])
+  })
+
+  it('reglas de imputación', async () => {
+    for (const u of USERS)
+      await same(u, () => Q.listPostingRules(mock, userId(u), company), 'posting_rules_list', [companyPg])
   })
 })
 
@@ -212,7 +237,9 @@ describe('contabilidad', () => {
   })
 
   it('libro mayor de cuentas con y sin movimientos, de un rubro y de una cuenta ajena', async () => {
-    const accounts = ['1.1.01.01', '1.1.01.03', '5.2.02.06', '1.1.05.01', '1.1.01.05', '1.1.01'].map(accountId)
+    const accounts = ['1.1.01.01', '1.1.01.03', '5.2.02.06', '1.1.05.01', '1.1.01.05', '1.1.01', '2.1.01.01'].map(
+      accountId,
+    )
     for (const u of ['docente', 'contabilidad', 'gerencia', 'compras1'])
       for (const id of [...accounts, crypto.randomUUID()])
         for (const [from, to] of ranges)

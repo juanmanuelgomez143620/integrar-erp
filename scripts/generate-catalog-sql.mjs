@@ -1,10 +1,11 @@
 // Genera los datos de los catálogos del sistema para Supabase a partir de
 // src/lib/domain/catalog.ts, la misma fuente que usa la interfaz: roles,
 // permisos, matriz rol → permiso, módulos, tipos y estados de documento,
-// transiciones, reglas de tareas, unidades y tipos de movimiento de stock.
+// transiciones, reglas de tareas, unidades, tipos de movimiento de stock y
+// claves de la imputación automática (posting_keys, desde la Fase 3).
 //
 // Uso: npm run db:catalog [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de catálogos (la de la Fase 2).
+// Sin argumento reescribe la última migración de catálogos (la de la Fase 3).
 // Una migración ya aplicada en alguna instancia no se reescribe: si cambian
 // los catálogos después, se genera una nueva con otro nombre (el script es
 // idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias).
@@ -14,7 +15,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261014120000_catalog_data_contabilidad.sql'
+const target = process.argv[2] ?? '20261015120100_catalog_data_compras_pagos.sql'
 
 const server = await createServer({
   root,
@@ -144,9 +145,18 @@ try {
     if (!m.direction) throw new Error(`Falta la dirección del tipo de movimiento ${m.code}`)
   }
   const auditActions = Object.entries(c.ACTION_VERBS).map(([code, verb]) => ({ code, verb }))
+  const postingKeys = Object.entries(c.POSTING_EVENTS).flatMap(([event, e], i) =>
+    Object.entries(e.keys).map(([key, label], j) => ({
+      event,
+      key,
+      event_label: e.label,
+      key_label: label,
+      sort: i * 100 + j,
+    })),
+  )
 
   const out = [
-    '-- Datos de los catálogos del sistema (con los de Contabilidad, Fase 2).',
+    '-- Datos de los catálogos del sistema (con los de Compras completo y Pagos, Fase 3).',
     '-- GENERADO por scripts/generate-catalog-sql.mjs desde src/lib/domain/catalog.ts: no editar a mano.',
     '-- Idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias.',
     '',
@@ -161,6 +171,7 @@ try {
     replaceAll('task_rules', taskRules),
     upsert('stock_movement_types', ['code'], movementTypes),
     upsert('audit_actions', ['code'], auditActions),
+    upsert('posting_keys', ['event', 'key'], postingKeys),
   ].join('\n')
 
   const file = join(root, 'supabase', 'migrations', target)

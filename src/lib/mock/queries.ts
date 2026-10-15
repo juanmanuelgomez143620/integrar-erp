@@ -1,9 +1,17 @@
 // Modelos de lectura. Con Supabase serán consultas con RLS y vistas
 // `security_invoker`; la forma de los datos devueltos se mantiene.
 
-import { DOC_STATUSES, DOC_TYPES, MODULES, ROLES, TRANSITIONS, type StatusInfo } from '../domain/catalog'
+import {
+  DOC_STATUSES,
+  DOC_TYPES,
+  MODULES,
+  POSTING_EVENTS,
+  ROLES,
+  TRANSITIONS,
+  type StatusInfo,
+} from '../domain/catalog'
 import type * as T from '../domain/types'
-import { money, todayAR } from '../format'
+import { date, money, todayAR } from '../format'
 import type { DB } from './db'
 import {
   can,
@@ -14,6 +22,8 @@ import {
   getMember,
   getMemberRoles,
   getProfile,
+  INVOICED_STATUSES,
+  invoicedQuantity,
   isInstanceAdmin,
   isPosted,
   isSchoolAdmin,
@@ -317,6 +327,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.saLines.filter((l) => l.document_id === doc.id).length
     case 'JOURNAL_ENTRY':
       return db.jeLines.filter((l) => l.document_id === doc.id).length
+    case 'SUPPLIER_INVOICE':
+      return db.siLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -332,6 +344,8 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return db.saLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'JOURNAL_ENTRY':
       return []
+    case 'SUPPLIER_INVOICE':
+      return db.siLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
   }
 }
 
@@ -399,6 +413,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'PURCHASE_REQUISITION',
     'PURCHASE_ORDER',
     'GOODS_RECEIPT',
+    'SUPPLIER_INVOICE',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -560,6 +575,17 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       return { who: 'Depósito', text: 'Revisar y confirmar el ajuste.' }
     case 'STOCK_ADJUSTMENT:CONFIRMADO':
       return { who: '—', text: 'El ajuste impactó en el stock y quedó documentado.' }
+    case 'SUPPLIER_INVOICE:BORRADOR':
+      return {
+        who: 'Compras',
+        text: 'Controlar el comprobante del proveedor contra la orden de compra y lo recibido, y registrar la factura.',
+      }
+    case 'SUPPLIER_INVOICE:REGISTRADA':
+    case 'SUPPLIER_INVOICE:PAGADA_PARCIAL':
+      return {
+        who: 'Contabilidad y Tesorería',
+        text: `La deuda está en la cuenta corriente del proveedor y vence el ${date(doc.si?.due_date)}. Se cancela con una orden de pago.`,
+      }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -598,6 +624,8 @@ export interface DetailLine {
   po_line_id?: string
   qty_ordered_po?: number
   unit_cost?: number
+  // FP: precio pactado en la OC, para mostrar la diferencia
+  order_unit_price?: number
 }
 
 export interface ApprovalView extends T.ApprovalRequest {
@@ -750,8 +778,33 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
         unit_cost: l.unit_cost,
       }))
   }
+  if (doc.doc_type === 'SUPPLIER_INVOICE') {
+    lines = db.siLines
+      .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
+      .map((l) => {
+        const pl = db.poLines.find((x) => x.id === l.po_line_id)
+        return {
+          id: l.id,
+          line_no: l.line_no,
+          product: product(l.product_id),
+          quantity: l.quantity,
+          notes: '',
+          po_line_id: l.po_line_id,
+          qty_ordered_po: pl?.quantity,
+          qty_received: pl?.qty_received,
+          unit_price: l.unit_price,
+          order_unit_price: pl?.unit_price,
+          vat_rate: l.vat_rate,
+          line_subtotal: l.line_subtotal,
+          line_tax: l.line_tax,
+          line_total: l.line_total,
+        }
+      })
+  }
   const warehouseId = doc.po?.warehouse_id ?? doc.gr?.warehouse_id ?? doc.sa?.warehouse_id
-  const relatedOrder = doc.gr ? db.documents.find((d) => d.id === doc.gr!.purchase_order_id) : undefined
+  const orderId = doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id
+  const relatedOrder = orderId ? db.documents.find((d) => d.id === orderId) : undefined
   const history = db.audit.filter((e) => e.document_id === doc.id).sort((a, b) => a.id - b.id)
   const firstBy = (actions: string[]) => {
     const e = [...history].reverse().find((h) => actions.includes(h.action))
@@ -768,10 +821,10 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
             { label: 'Emitió', ...firstBy(['SUBMIT', 'CREATE']) },
             { label: 'Autorizó', ...firstBy(['APPROVE']) },
           ]
-        : doc.doc_type === 'JOURNAL_ENTRY'
+        : doc.doc_type === 'JOURNAL_ENTRY' || doc.doc_type === 'SUPPLIER_INVOICE'
           ? [
               { label: 'Registró', ...firstBy(['CONFIRM', 'CREATE']) },
-              { label: 'Revisó', name: '', sector: '', at: '' },
+              { label: doc.doc_type === 'JOURNAL_ENTRY' ? 'Revisó' : 'Controló', name: '', sector: '', at: '' },
             ]
           : [
               { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
@@ -1169,6 +1222,203 @@ export function receivableOrders(db: DB, userId: string, companyId: string): Rec
         }))
         .filter((x) => x.pending > 1e-9),
     }))
+}
+
+export interface InvoiceableOrder {
+  order: DocumentListItem
+  lines: {
+    line: T.PurchaseOrderLine
+    product: T.Product
+    invoiced: number
+    /** Recibido menos facturado: lo que todavía se puede facturar. */
+    pending: number
+  }[]
+}
+
+/** OC enviadas con mercadería recibida y todavía sin facturar (para registrar la factura del proveedor). */
+export function invoiceableOrders(db: DB, userId: string, companyId: string): InvoiceableOrder[] {
+  assertPerm(db, userId, companyId, 'supplier_invoice.create')
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PURCHASE_ORDER' &&
+        ['ENVIADO', 'RECIBIDO_PARCIAL', 'RECIBIDO', 'CERRADO'].includes(d.status),
+    )
+    .sort((a, b) => a.number - b.number)
+    .map((d) => ({
+      order: listItem(db, d),
+      lines: db.poLines
+        .filter((l) => l.document_id === d.id)
+        .sort(byLineNo)
+        .map((l) => {
+          const invoiced = invoicedQuantity(db, l.id)
+          return {
+            line: l,
+            product: db.products.find((p) => p.id === l.product_id)!,
+            invoiced,
+            pending: round3(l.qty_received - invoiced),
+          }
+        })
+        .filter((x) => x.pending > 1e-9),
+    }))
+    .filter((o) => o.lines.length)
+}
+
+// ============================================================ Cuentas corrientes de proveedores
+
+export interface PayableInvoice {
+  id: string
+  display_number: string
+  path: string
+  /** Comprobante del proveedor: "A 00003-00012874". */
+  invoice_label: string
+  document_date: string
+  due_date: string
+  total: number
+  paid: number
+  pending: number
+  overdue: boolean
+}
+
+export interface PayableRow {
+  supplier: { id: string; code: string; legal_name: string; tax_id: string; payment_terms_days: number }
+  balance: number
+  invoices: number
+  overdue: number
+  next_due: string | null
+}
+
+/** Facturas registradas (que generaron deuda) de una empresa. */
+function registeredInvoices(db: DB, companyId: string) {
+  return db.documents.filter(
+    (d) => d.company_id === companyId && d.doc_type === 'SUPPLIER_INVOICE' && INVOICED_STATUSES.includes(d.status),
+  )
+}
+
+/** Lo pagado de una factura (desde la Fase 3b, por las órdenes de pago pagadas). */
+const paidAmount = (_db: DB, _invoiceId: string) => 0
+
+function payableInvoice(db: DB, doc: T.Document, today: string): PayableInvoice {
+  const paid = paidAmount(db, doc.id)
+  return {
+    id: doc.id,
+    display_number: doc.display_number,
+    path: docPath(db, doc),
+    invoice_label: `${doc.si!.letter} ${doc.si!.point_of_sale}-${doc.si!.invoice_number}`,
+    document_date: doc.document_date,
+    due_date: doc.si!.due_date,
+    total: doc.total,
+    paid,
+    pending: round2(doc.total - paid),
+    overdue: doc.si!.due_date < today && round2(doc.total - paid) > 0,
+  }
+}
+
+/** Saldo con cada proveedor que tiene facturas registradas, por código. */
+export function listPayables(db: DB, userId: string, companyId: string): PayableRow[] {
+  assertPerm(db, userId, companyId, 'payable.read')
+  const today = todayAR()
+  const invoices = registeredInvoices(db, companyId)
+  return db.suppliers
+    .filter((s) => s.company_id === companyId && invoices.some((d) => d.supplier_id === s.id))
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((s) => {
+      const pending = invoices
+        .filter((d) => d.supplier_id === s.id)
+        .map((d) => payableInvoice(db, d, today))
+        .filter((i) => i.pending > 0)
+      const dues = pending.map((i) => i.due_date).sort(compareCodes)
+      return {
+        supplier: {
+          id: s.id,
+          code: s.code,
+          legal_name: s.legal_name,
+          tax_id: s.tax_id,
+          payment_terms_days: s.payment_terms_days,
+        },
+        balance: round2(pending.reduce((sum, i) => sum + i.pending, 0)),
+        invoices: pending.length,
+        overdue: round2(pending.filter((i) => i.overdue).reduce((sum, i) => sum + i.pending, 0)),
+        next_due: dues[0] ?? null,
+      }
+    })
+}
+
+export interface SupplierAccountMovement {
+  document_id: string
+  display_number: string
+  path: string
+  date: string
+  description: string
+  /** Debe: lo que se le pagó. Haber: lo que facturó (aumenta la deuda). */
+  debit: number
+  credit: number
+  balance: number
+}
+
+export interface SupplierAccount {
+  supplier: T.Supplier
+  movements: SupplierAccountMovement[]
+  pending: PayableInvoice[]
+  balance: number
+}
+
+/** Cuenta corriente de un proveedor: facturas y pagos con saldo acumulado, y las facturas pendientes. */
+export function supplierAccount(db: DB, userId: string, companyId: string, supplierId: string): SupplierAccount | null {
+  assertPerm(db, userId, companyId, 'payable.read')
+  const supplier = db.suppliers.find((s) => s.id === supplierId && s.company_id === companyId)
+  if (!supplier) return null
+  const today = todayAR()
+  const invoices = registeredInvoices(db, companyId)
+    .filter((d) => d.supplier_id === supplier.id)
+    .sort((a, b) => compareCodes(a.document_date, b.document_date) || a.number - b.number)
+  let balance = 0
+  const movements = invoices.map((d) => {
+    balance = round2(balance + d.total)
+    return {
+      document_id: d.id,
+      display_number: d.display_number,
+      path: docPath(db, d),
+      date: d.document_date,
+      description: `Factura ${d.si!.letter} ${d.si!.point_of_sale}-${d.si!.invoice_number}`,
+      debit: 0,
+      credit: d.total,
+      balance,
+    }
+  })
+  const pending = invoices.map((d) => payableInvoice(db, d, today)).filter((i) => i.pending > 0)
+  return { supplier, movements, pending, balance }
+}
+
+// ============================================================ Imputación automática
+
+export interface PostingRuleRow extends T.PostingRule {
+  event_label: string
+  key_label: string
+  account: { id: string; code: string; name: string }
+}
+
+/** Reglas de imputación de la empresa, en el orden del catálogo de eventos. */
+export function listPostingRules(db: DB, userId: string, companyId: string): PostingRuleRow[] {
+  assertPerm(db, userId, companyId, 'posting_rule.read')
+  const events = Object.keys(POSTING_EVENTS)
+  const keyOrder = (event: string, key: string) => Object.keys(POSTING_EVENTS[event]?.keys ?? {}).indexOf(key)
+  return db.postingRules
+    .filter((r) => r.company_id === companyId)
+    .sort(
+      (a, b) =>
+        events.indexOf(a.event) - events.indexOf(b.event) || keyOrder(a.event, a.key) - keyOrder(b.event, b.key),
+    )
+    .map((r) => {
+      const a = db.accounts.find((x) => x.id === r.account_id)!
+      return {
+        ...r,
+        event_label: POSTING_EVENTS[r.event]?.label ?? r.event,
+        key_label: POSTING_EVENTS[r.event]?.keys[r.key] ?? r.key,
+        account: { id: a.id, code: a.code, name: a.name },
+      }
+    })
 }
 
 // ============================================================ Tareas y notificaciones

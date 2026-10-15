@@ -24,6 +24,7 @@ export type {
   DocumentListItem,
   FiscalYearView,
   FlowNode,
+  InvoiceableOrder,
   JournalBook,
   JournalBookEntry,
   JournalView,
@@ -31,12 +32,17 @@ export type {
   LedgerRow,
   MeContext,
   MemberView,
+  PayableInvoice,
+  PayableRow,
   PendingRequisitionLine,
   PeriodView,
+  PostingRuleRow,
   ProductDetail,
   ProductRow,
   ReceivableOrder,
   StockRow,
+  SupplierAccount,
+  SupplierAccountMovement,
   TaskItem,
   TrialBalance,
   TrialBalanceRow,
@@ -51,6 +57,7 @@ export type {
   RequisitionInput,
   SchoolSettingsInput,
   StockAdjustmentInput,
+  SupplierInvoiceInput,
   StudentCredential,
   StudentInput,
   TeacherInput,
@@ -143,6 +150,11 @@ const mockApi = {
   documentById: (docId: string) => query((db, u) => Q.documentDetailById(db, u, docId)),
   pendingRequisitionLines: (companyId: string) => query((db, u) => Q.pendingRequisitionLines(db, u, companyId)),
   receivableOrders: (companyId: string) => query((db, u) => Q.receivableOrders(db, u, companyId)),
+  invoiceableOrders: (companyId: string) => query((db, u) => Q.invoiceableOrders(db, u, companyId)),
+  payables: (companyId: string) => query((db, u) => Q.listPayables(db, u, companyId)),
+  supplierAccount: (companyId: string, supplierId: string) =>
+    query((db, u) => Q.supplierAccount(db, u, companyId, supplierId)),
+  postingRules: (companyId: string) => query((db, u) => Q.listPostingRules(db, u, companyId)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -206,6 +218,14 @@ const mockCommands = {
   confirmStockAdjustment: (docId: string) => command((c) => E.cmdConfirmStockAdjustment(c, docId)),
   cancelStockAdjustment: (docId: string, reason: string) =>
     command((c) => E.cmdCancelStockAdjustment(c, docId, reason)),
+
+  createSupplierInvoice: (companyId: string, input: E.SupplierInvoiceInput, register: boolean) =>
+    command((c) => E.cmdCreateSupplierInvoice(c, companyId, input, register)),
+  confirmSupplierInvoice: (docId: string) => command((c) => E.cmdConfirmSupplierInvoice(c, docId)),
+  cancelSupplierInvoice: (docId: string, reason: string) =>
+    command((c) => E.cmdCancelSupplierInvoice(c, docId, reason)),
+  savePostingRule: (companyId: string, ruleId: string, accountId: string) =>
+    command((c) => E.cmdSavePostingRule(c, companyId, ruleId, accountId)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

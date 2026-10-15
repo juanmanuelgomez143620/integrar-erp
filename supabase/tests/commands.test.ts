@@ -109,6 +109,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['goods_receipt_lines', mock.grLines],
     ['stock_adjustment_lines', mock.saLines],
     ['journal_entry_lines', mock.jeLines],
+    ['supplier_invoice_lines', mock.siLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -868,6 +869,206 @@ describe('paridad de comandos', () => {
       ).toBeNull()
   })
 
+  it('facturas de proveedor: control por oposición, asiento automático, anulación e imputación', async () => {
+    const companyPg = pg(company)
+    const today = todayAR()
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const rule = (key: string) =>
+      mock.postingRules.find((r) => r.company_id === company && r.event === 'COMPRA' && r.key === key)!.id
+    // La OC cerrada de la primera prueba, con parte de lo pedido recibido.
+    const oc = mock.documents.find(
+      (d) => d.doc_type === 'PURCHASE_ORDER' && d.created_at > cutoff && d.status === 'CERRADO',
+    )!.id
+    const { id: ocLine, qty_received: received } = mock.poLines.find((l) => l.document_id === oc)!
+    expect(received).toBeGreaterThan(3)
+    const invoice = (
+      orderId: string,
+      lineId: string,
+      number: string,
+      quantity: number,
+      price: number,
+      { pos = '4', date = today } = {},
+    ) => {
+      const input: E.SupplierInvoiceInput = {
+        purchase_order_id: orderId,
+        point_of_sale: pos,
+        invoice_number: number,
+        document_date: date,
+        notes: '',
+        lines: [{ po_line_id: lineId, quantity, unit_price: price }],
+      }
+      const pgInput = {
+        ...input,
+        purchase_order_id: pg(orderId),
+        lines: input.lines.map((l) => ({ ...l, po_line_id: pg(l.po_line_id) })),
+      }
+      return { input, pgInput }
+    }
+    const create = (label: string, username: string, i: ReturnType<typeof invoice>, register: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateSupplierInvoice(c, company, i.input, register),
+        (b) => b.commands.createSupplierInvoice(companyPg, i.pgInput, register),
+      )
+    const createdInvoice = (label: string, username: string, i: ReturnType<typeof invoice>, register: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateSupplierInvoice(c, company, i.input, register),
+        (b) => b.commands.createSupplierInvoice(companyPg, i.pgInput, register),
+      )
+    const confirm = (label: string, username: string, id: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdConfirmSupplierInvoice(c, id),
+        (b) => b.commands.confirmSupplierInvoice(pg(id)),
+      )
+    const cancel = (label: string, username: string, id: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelSupplierInvoice(c, id, reason),
+        (b) => b.commands.cancelSupplierInvoice(pg(id), reason),
+      )
+
+    // Controles: lo recibido, el comprobante, la fecha y los permisos.
+    for (const [label, username, i] of [
+      ['facturar más de lo recibido', 'compras1', invoice(oc, ocLine, '1001', received + 1, 1600)],
+      ['factura sin cantidades', 'compras1', invoice(oc, ocLine, '1001', 0, 1600)],
+      ['cantidad con cuatro decimales', 'compras1', invoice(oc, ocLine, '1001', 1.0005, 1600)],
+      ['precio negativo', 'compras1', invoice(oc, ocLine, '1001', 1, -5)],
+      ['punto de venta con letras', 'compras1', invoice(oc, ocLine, '1001', 1, 1600, { pos: 'A1' })],
+      ['número de nueve cifras', 'compras1', invoice(oc, ocLine, '123456789', 1, 1600)],
+      ['fecha futura', 'compras1', invoice(oc, ocLine, '1001', 1, 1600, { date: addDays(today, 1) })],
+      ['Depósito no registra facturas', 'deposito', invoice(oc, ocLine, '1001', 1, 1600)],
+    ] as const)
+      expect(await create(label, username, i, true), label).toBeNull()
+
+    // Un borrador que se registra (con su asiento automático) una sola vez.
+    const draftInput = invoice(oc, ocLine, '1001', 3, 1600)
+    const draft = await createdInvoice('factura en borrador', 'compras1', draftInput, false)
+    expect(await create('el mismo comprobante otra vez', 'compras2', draftInput, false)).toBeNull()
+    expect(await confirm('Depósito no registra la factura', 'deposito', draft)).toBeNull()
+    await confirm('registrar la factura', 'compras2', draft)
+    expect(await confirm('registrarla otra vez', 'compras1', draft)).toBeNull()
+
+    // Otra factura completa lo recibido; después no queda nada por facturar.
+    const second = await createdInvoice(
+      'factura con otro precio',
+      'compras1',
+      invoice(oc, ocLine, '1002', received - 3, 1650),
+      true,
+    )
+    expect(await create('facturar lo ya facturado', 'compras1', invoice(oc, ocLine, '1003', 1, 1600), true)).toBeNull()
+
+    // La anulación libera lo facturado y deja el contraasiento del asiento de compra.
+    expect(await cancel('anular sin motivo', 'compras1', second, '')).toBeNull()
+    expect(await cancel('Contabilidad no anula facturas', 'contabilidad', second, 'Precio mal')).toBeNull()
+    await cancel('anular la factura y su asiento', 'compras1', second, 'El precio no es el pactado')
+    expect(await cancel('anular una factura anulada', 'compras1', second, 'Otra vez')).toBeNull()
+
+    // Contabilidad cambia la imputación de las materias primas y la factura siguiente la usa.
+    for (const [label, username, code] of [
+      ['imputar a un rubro', 'contabilidad', '1.1.05'],
+      ['Compras no cambia la imputación', 'compras1', '1.1.05.02'],
+    ] as const)
+      expect(
+        await step(
+          label,
+          username,
+          (c) => E.cmdSavePostingRule(c, company, rule('MATERIA_PRIMA'), account(code)),
+          (b) => b.commands.savePostingRule(companyPg, pg(rule('MATERIA_PRIMA')), pg(account(code))),
+        ),
+        label,
+      ).toBeNull()
+    await step(
+      'cambiar la imputación',
+      'contabilidad',
+      (c) => E.cmdSavePostingRule(c, company, rule('MATERIA_PRIMA'), account('1.1.05.02')),
+      (b) => b.commands.savePostingRule(companyPg, pg(rule('MATERIA_PRIMA')), pg(account('1.1.05.02'))),
+    )
+    await createdInvoice(
+      'factura con la imputación nueva',
+      'compras1',
+      invoice(oc, ocLine, '1003', received - 3, 1600),
+      true,
+    )
+
+    // Un servicio de un monotributista: factura C, sin IVA discriminado (todo es costo).
+    const serviceOrder: E.PurchaseOrderInput = {
+      supplier_id: supplier('PRV-010'),
+      expected_date: null,
+      warehouse_id: warehouse('DEP-MP'),
+      payment_terms_days: 0,
+      delivery_terms: 'Puesto en planta',
+      notes: '',
+      lines: [
+        { product_id: product('SV-001').id, requisition_line_id: null, quantity: 2, unit_price: 21000, vat_rate: 21 },
+      ],
+    }
+    const service = await created(
+      'OC de un servicio',
+      'compras2',
+      (c) => E.cmdCreatePurchaseOrder(c, company, serviceOrder),
+      (b) =>
+        b.commands.createPurchaseOrder(companyPg, {
+          ...serviceOrder,
+          supplier_id: pg(serviceOrder.supplier_id),
+          warehouse_id: pg(serviceOrder.warehouse_id),
+          lines: serviceOrder.lines.map((l) => ({ ...l, product_id: pg(l.product_id) })),
+        }),
+    )
+    await step(
+      'enviar la OC del servicio',
+      'compras2',
+      (c) => E.cmdSubmitPurchaseOrder(c, service),
+      (b) => b.commands.submitPurchaseOrder(pg(service)),
+    )
+    await step(
+      'aprobar la OC del servicio',
+      'compras1',
+      (c) => E.cmdApprovePurchaseOrder(c, service, 'Servicio necesario'),
+      (b) => b.commands.approvePurchaseOrder(pg(service), 'Servicio necesario'),
+    )
+    await step(
+      'mandar la OC al proveedor',
+      'compras2',
+      (c) => E.cmdSendPurchaseOrder(c, service),
+      (b) => b.commands.sendPurchaseOrder(pg(service)),
+    )
+    const serviceLine = mock.poLines.find((l) => l.document_id === service)!.id
+    expect(
+      await create('facturar un servicio no prestado', 'compras2', invoice(service, serviceLine, '77', 2, 21000), true),
+    ).toBeNull()
+    const delivered = {
+      purchase_order_id: service,
+      warehouse_id: warehouse('DEP-MP'),
+      supplier_delivery_note: 'R-0002-00000077',
+      carrier_name: '',
+      notes: 'Servicio prestado.',
+      lines: [{ po_line_id: serviceLine, quantity: 2 }],
+    }
+    await created(
+      'servicio prestado',
+      'deposito',
+      (c) => E.cmdCreateGoodsReceipt(c, company, delivered, true),
+      (b) =>
+        b.commands.createGoodsReceipt(
+          companyPg,
+          {
+            ...delivered,
+            purchase_order_id: pg(service),
+            warehouse_id: pg(delivered.warehouse_id),
+            lines: [{ po_line_id: pg(serviceLine), quantity: 2 }],
+          },
+          true,
+        ),
+    )
+    await createdInvoice('factura C', 'compras2', invoice(service, serviceLine, '77', 2, 21000, { pos: '2' }), true)
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -876,6 +1077,7 @@ describe('paridad de comandos', () => {
       'GOODS_RECEIPT',
       'STOCK_ADJUSTMENT',
       'JOURNAL_ENTRY',
+      'SUPPLIER_INVOICE',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`
@@ -886,7 +1088,8 @@ describe('paridad de comandos', () => {
       (b) => b.api.members(companyPg),
       (u) => Q.listMembers(mock, u, company),
     )
-    for (const username of ['docente', 'compras1', 'compras2', 'deposito', 'produccion', 'gerencia', 'auditor']) {
+    const users = ['docente', 'compras1', 'compras2', 'deposito', 'produccion', 'gerencia', 'auditor', 'contabilidad']
+    for (const username of users) {
       for (const type of types)
         await sameRead(
           `documentos ${type} (${username})`,
@@ -965,12 +1168,39 @@ describe('paridad de comandos', () => {
         (b) => b.api.trialBalance(companyPg, from, to),
         (u) => Q.trialBalance(mock, u, company, from, to),
       )
-      const bank = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
+      for (const code of ['1.1.01.03', '2.1.01.01', '1.1.05.02']) {
+        const id = mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+        await sameRead(
+          `mayor de ${code} (${username})`,
+          username,
+          (b) => b.api.ledger(companyPg, pg(id), from, to),
+          (u) => Q.ledger(mock, u, company, id, from, to),
+        )
+      }
       await sameRead(
-        `mayor de Banco (${username})`,
+        `por facturar (${username})`,
         username,
-        (b) => b.api.ledger(companyPg, pg(bank), from, to),
-        (u) => Q.ledger(mock, u, company, bank, from, to),
+        (b) => b.api.invoiceableOrders(companyPg),
+        (u) => Q.invoiceableOrders(mock, u, company),
+      )
+      await sameRead(
+        `cuentas corrientes (${username})`,
+        username,
+        (b) => b.api.payables(companyPg),
+        (u) => Q.listPayables(mock, u, company),
+      )
+      for (const code of ['PRV-001', 'PRV-010'])
+        await sameRead(
+          `cuenta corriente de ${code} (${username})`,
+          username,
+          (b) => b.api.supplierAccount(companyPg, pg(supplier(code))),
+          (u) => Q.supplierAccount(mock, u, company, supplier(code)),
+        )
+      await sameRead(
+        `imputación automática (${username})`,
+        username,
+        (b) => b.api.postingRules(companyPg),
+        (u) => Q.listPostingRules(mock, u, company),
       )
     }
   })

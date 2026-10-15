@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261014120200_demo_template_contabilidad.sql'
+const target = process.argv[2] ?? '20261015120200_demo_template_compras_pagos.sql'
 
 const server = await createServer({
   root,
@@ -151,6 +151,26 @@ language sql
 immutable
 set search_path = ''
 as $$ select ${sql(chart.OPENING_BALANCING_ACCOUNT)}::text $$;
+
+-- Reglas base de la imputación automática, sin pisar las que la empresa ya tiene.
+create or replace function private.insert_base_posting_rules(p_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.posting_rules (company_id, event, key, account_id)
+  select p_company, r.event, r.key, a.id
+    from (values
+${values(chart.BASE_POSTING_RULES, ['event', 'key', 'code'])}
+    ) as r (event, key, code)
+    join public.accounts a on a.company_id = p_company and a.code = r.code
+   where not exists (
+     select 1 from public.posting_rules x where x.company_id = p_company and x.event = r.event and x.key = r.key
+   );
+end;
+$$;
 
 -- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()

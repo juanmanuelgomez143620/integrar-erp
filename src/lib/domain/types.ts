@@ -17,7 +17,8 @@ export type RoleCode =
   | 'AUDITOR'
   | 'DOCENTE'
 
-export type ModuleCode = 'core' | 'masters' | 'purchasing' | 'inventory' | 'accounting' | 'management' | 'audit'
+export type ModuleCode =
+  'core' | 'masters' | 'purchasing' | 'inventory' | 'payables' | 'accounting' | 'management' | 'audit'
 
 export type PermissionAction = 'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export'
 
@@ -25,7 +26,13 @@ export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 
 
 export type ProductType = 'MATERIA_PRIMA' | 'INSUMO' | 'PRODUCTO_TERMINADO' | 'MERCADERIA_REVENTA' | 'SERVICIO'
 
-export type DocType = 'PURCHASE_REQUISITION' | 'PURCHASE_ORDER' | 'GOODS_RECEIPT' | 'STOCK_ADJUSTMENT' | 'JOURNAL_ENTRY'
+export type DocType =
+  | 'PURCHASE_REQUISITION'
+  | 'PURCHASE_ORDER'
+  | 'GOODS_RECEIPT'
+  | 'STOCK_ADJUSTMENT'
+  | 'JOURNAL_ENTRY'
+  | 'SUPPLIER_INVOICE'
 
 export type TransitionAction =
   'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW' | 'REOPEN' | 'SEND' | 'CONFIRM' | 'CANCEL' | 'CLOSE' | 'SYSTEM'
@@ -243,6 +250,17 @@ export interface JournalEntryHeader {
   reverses_id: string | null
 }
 
+/** Factura de proveedor (tabla supplier_invoices, 1 a 1 con documents): el comprobante que emitió el proveedor. */
+export interface SupplierInvoiceHeader {
+  purchase_order_id: string
+  /** A si el proveedor es responsable inscripto (IVA discriminado); C si no. */
+  letter: 'A' | 'C'
+  point_of_sale: string
+  invoice_number: string
+  due_date: string
+  registered_at: string | null
+}
+
 /** Cabecera común de todo comprobante (tabla `documents`) + detalle por tipo. */
 export interface Document extends Audited {
   id: string
@@ -265,6 +283,7 @@ export interface Document extends Audited {
   gr?: GoodsReceiptHeader
   sa?: StockAdjustmentHeader
   je?: JournalEntryHeader
+  si?: SupplierInvoiceHeader
 }
 
 export interface RequisitionLine {
@@ -315,6 +334,30 @@ export interface StockAdjustmentLine {
   quantity_delta: number
   unit_cost: number
   notes: string
+}
+
+export interface SupplierInvoiceLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  po_line_id: string
+  product_id: string
+  quantity: number
+  unit_price: number
+  vat_rate: number
+  line_subtotal: number
+  line_tax: number
+  line_total: number
+}
+
+/** Regla de imputación automática: a qué cuenta va cada importe de un evento contable. */
+export interface PostingRule {
+  id: string
+  company_id: string
+  event: string
+  key: string
+  account_id: string
 }
 
 export interface JournalEntryLine {

@@ -5,7 +5,7 @@
 // pestañas con el evento `storage`, simulando el tiempo real.
 
 import type * as T from '../domain/types'
-import { startAccounting } from './engine'
+import { insertBasePostingRules, startAccounting } from './engine'
 import { buildSeed } from './seed'
 
 export interface DocumentSequence {
@@ -38,6 +38,8 @@ export interface DB {
   grLines: T.GoodsReceiptLine[]
   saLines: T.StockAdjustmentLine[]
   jeLines: T.JournalEntryLine[]
+  siLines: T.SupplierInvoiceLine[]
+  postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
   fiscalPeriods: T.FiscalPeriod[]
@@ -51,7 +53,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 3
+export const DB_VERSION = 4
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -88,6 +90,8 @@ const COLLECTIONS = [
   'grLines',
   'saLines',
   'jeLines',
+  'siLines',
+  'postingRules',
   'accounts',
   'fiscalYears',
   'fiscalPeriods',
@@ -107,6 +111,8 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   accounts: 3,
   fiscalYears: 3,
   fiscalPeriods: 3,
+  siLines: 4,
+  postingRules: 4,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -147,8 +153,17 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.accounts ??= []
     db.fiscalYears ??= []
     db.fiscalPeriods ??= []
+    db.siLines ??= []
+    db.postingRules ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) startAccounting(ctx, company.id)
+  },
+  // v3 → v4: facturas de proveedor y reglas de imputación automática (Fase 3).
+  3: (db) => {
+    db.siLines ??= []
+    db.postingRules ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
   },
 }
 

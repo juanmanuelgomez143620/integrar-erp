@@ -20,6 +20,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   GOODS_RECEIPT: { area: 'Depósito', newLabel: 'Registrar recepción', createPerm: 'goods_receipt.create' },
   STOCK_ADJUSTMENT: { area: 'Depósito', newLabel: 'Nuevo ajuste', createPerm: 'stock_adjustment.create' },
   JOURNAL_ENTRY: { area: 'Contabilidad', newLabel: 'Nuevo asiento', createPerm: 'journal_entry.create' },
+  SUPPLIER_INVOICE: { area: 'Compras', newLabel: 'Registrar factura', createPerm: 'supplier_invoice.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -112,6 +113,33 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       {
         key: 'total',
         header: 'Valor',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
+  if (docType === 'SUPPLIER_INVOICE') {
+    columns.push(
+      { key: 'supplier', header: 'Proveedor', sort: (d) => d.supplier_name, cell: (d) => d.supplier_name },
+      {
+        key: 'voucher',
+        header: 'Comprobante',
+        cell: (d) => (
+          <span className="font-mono text-xs">
+            {d.si!.letter} {d.si!.point_of_sale}-{d.si!.invoice_number}
+          </span>
+        ),
+      },
+      {
+        key: 'ref',
+        header: 'Orden de compra',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      { key: 'due', header: 'Vence', sort: (d) => d.si!.due_date, cell: (d) => date(d.si!.due_date) },
+      {
+        key: 'total',
+        header: 'Total',
         align: 'right',
         sort: (d) => d.total,
         cell: (d) => <span className="tabular">{money(d.total)}</span>,

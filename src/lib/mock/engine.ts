@@ -9,6 +9,7 @@ import {
   DOC_STATUSES,
   DOC_TYPES,
   MODULES,
+  POSTING_EVENTS,
   PRODUCT_TYPES,
   ROLES,
   ROLE_ORDER,
@@ -24,6 +25,7 @@ import {
 import {
   ACCOUNT_CODE_PATTERN,
   BASE_CHART,
+  BASE_POSTING_RULES,
   IMPUTABLE_LEVEL,
   INVENTORY_ACCOUNTS,
   OPENING_BALANCES,
@@ -35,7 +37,7 @@ import {
 } from '../domain/chart-of-accounts'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
-import { date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
+import { addDays, date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
 import type { DB } from './db'
 
 // ============================================================ Infraestructura
@@ -510,7 +512,8 @@ export function transition(ctx: Ctx, doc: T.Document, action: T.TransitionAction
   const from = doc.status
   doc.status = tr.to
   doc.updated_at = ctx.now
-  doc.updated_by = actor.user_id
+  // Quien hizo la operación, aunque el cambio sea automático (como el disparador set_updated de la base).
+  doc.updated_by = ctx.userId
   if (comment && (action === 'REJECT' || action === 'CANCEL' || action === 'CLOSE')) doc.status_reason = comment
 
   closeTasksForStatus(ctx, doc.id, from, actor.user_id)
@@ -1994,7 +1997,7 @@ function requireTransition(doc: T.Document, action: T.TransitionAction) {
  * doble, cuentas activas, período abierto y fecha correlativa; le asigna el
  * número de asiento del ejercicio.
  */
-function postEntry(ctx: Ctx, doc: T.Document, summary?: (entryNumber: number) => string) {
+function postEntry(ctx: Ctx, doc: T.Document, summary?: (entryNumber: number) => string, actor?: Actor) {
   const { db } = ctx
   requireTransition(doc, 'CONFIRM')
   const lines = db.jeLines.filter((l) => l.document_id === doc.id).sort((a, b) => a.line_no - b.line_no)
@@ -2046,6 +2049,7 @@ function postEntry(ctx: Ctx, doc: T.Document, summary?: (entryNumber: number) =>
     )
   const number = (last?.je!.entry_number ?? 0) + 1
   transition(ctx, doc, 'CONFIRM', {
+    actor,
     summary: summary?.(number) ?? `Registró ${doc.display_number} como asiento N.º ${number} del libro diario`,
   })
   doc.je = { ...doc.je!, fiscal_year_id: period.fiscal_year_id, entry_number: number, posted_at: ctx.now }
@@ -2123,7 +2127,16 @@ export function cmdCancelJournalEntry(ctx: Ctx, docId: string, reason: string) {
   if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
   if (doc.je!.origin === 'CONTRAASIENTO')
     fail('DATO_INVALIDO', 'Un contraasiento no se anula. Si hubo un error, registrá el asiento correcto.')
-  const company = getCompany(db, doc.company_id)
+  reverseEntry(ctx, doc, actor, comment)
+}
+
+/**
+ * Contraasiento de un asiento registrado: las mismas cuentas con el debe y el
+ * haber invertidos, con fecha de hoy; el original queda anulado. Con un actor
+ * dado (anulación de una factura) no exige los permisos de Contabilidad.
+ */
+function reverseEntry(ctx: Ctx, doc: T.Document, actor: Actor, comment: string, withActor = false) {
+  const { db } = ctx
   const lines = db.jeLines
     .filter((l) => l.document_id === doc.id)
     .sort((a, b) => a.line_no - b.line_no)
@@ -2132,7 +2145,7 @@ export function cmdCancelJournalEntry(ctx: Ctx, docId: string, reason: string) {
     ctx,
     doc.company_id,
     actor,
-    businessDate(company),
+    businessDate(getCompany(db, doc.company_id)),
     {
       description: `Anulación del asiento N.º ${doc.je!.entry_number} (${doc.display_number}): ${comment}`,
       origin: 'CONTRAASIENTO',
@@ -2144,6 +2157,7 @@ export function cmdCancelJournalEntry(ctx: Ctx, docId: string, reason: string) {
     ctx,
     reversal,
     (n) => `Registró ${reversal.display_number}, contraasiento de ${doc.display_number}, como asiento N.º ${n}`,
+    withActor ? actor : undefined,
   )
   link(ctx, doc.company_id, doc.id, reversal.id)
   transition(ctx, doc, 'CANCEL', {
@@ -2151,6 +2165,7 @@ export function cmdCancelJournalEntry(ctx: Ctx, docId: string, reason: string) {
     actor,
     summary: `Anuló ${doc.display_number} con el contraasiento ${reversal.display_number} — ${comment}`,
   })
+  return reversal
 }
 
 export interface AccountInput {
@@ -2320,6 +2335,7 @@ export function startAccounting(ctx: Ctx, companyId: string) {
   const { db } = ctx
   const company = getCompany(db, companyId)
   if (!db.accounts.some((a) => a.company_id === companyId)) insertBaseChart(ctx, companyId)
+  insertBasePostingRules(ctx, companyId)
   const year = Number(businessDate(company).slice(0, 4))
   const fiscalYear =
     db.fiscalYears.find((y) => y.company_id === companyId && y.start_date === `${year}-01-01`) ??
@@ -2364,6 +2380,332 @@ export function startAccounting(ctx: Ctx, companyId: string) {
     lines,
   )
   postEntry(ctx, doc, (n) => `Registró ${doc.display_number}, asiento N.º ${n} de apertura del ejercicio`)
+}
+
+// ============================================================ Imputación automática (docs/FASE_3_COMPRAS_Y_TESORERIA.md §2)
+
+/** Reglas base de una empresa, sin pisar las que ya tiene (idempotente). */
+export function insertBasePostingRules(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  for (const rule of BASE_POSTING_RULES) {
+    if (db.postingRules.some((r) => r.company_id === companyId && r.event === rule.event && r.key === rule.key))
+      continue
+    const account = db.accounts.find((a) => a.company_id === companyId && a.code === rule.code)
+    if (!account) continue
+    db.postingRules.push({ id: uid(), company_id: companyId, event: rule.event, key: rule.key, account_id: account.id })
+  }
+}
+
+const postingLabel = (event: string, key: string) =>
+  `${POSTING_EVENTS[event]?.label ?? event}: ${POSTING_EVENTS[event]?.keys[key]?.toLowerCase() ?? key}`
+
+function ruleAccount(db: DB, companyId: string, event: string, key: string) {
+  const rule = db.postingRules.find((r) => r.company_id === companyId && r.event === event && r.key === key)
+  const account = rule && db.accounts.find((a) => a.id === rule.account_id)
+  if (!account)
+    fail(
+      'FALTA_IMPUTACION',
+      `Falta definir la cuenta de "${postingLabel(event, key)}" en la imputación automática.`,
+      'Contabilidad la define en Contabilidad → Imputación automática.',
+    )
+  if (!account.is_active || !account.is_imputable)
+    fail(
+      'FALTA_IMPUTACION',
+      `La cuenta ${accountLabel(account)} de "${postingLabel(event, key)}" no admite movimientos.`,
+      'Contabilidad la corrige en Contabilidad → Imputación automática.',
+    )
+  return account
+}
+
+/**
+ * Asiento automático de un evento (private.post_event): cada importe va a la
+ * cuenta de su regla; se registra con fecha de hoy (la de registración) con las
+ * validaciones de siempre y queda vinculado al documento que lo originó.
+ */
+function postEvent(
+  ctx: Ctx,
+  actor: Actor,
+  source: T.Document,
+  event: string,
+  description: string,
+  amounts: { key: string; debit: number; credit: number }[],
+) {
+  const { db } = ctx
+  const lines: EntryLine[] = []
+  for (const a of amounts) {
+    const debit = round2(a.debit)
+    const credit = round2(a.credit)
+    if (!debit && !credit) continue
+    const account = ruleAccount(db, source.company_id, event, a.key)
+    const same = lines.find((l) => l.account_id === account.id && l.debit > 0 === debit > 0)
+    if (same) {
+      same.debit = round2(same.debit + debit)
+      same.credit = round2(same.credit + credit)
+    } else lines.push({ account_id: account.id, debit, credit, notes: '' })
+  }
+  const entry = newEntry(
+    ctx,
+    source.company_id,
+    actor,
+    businessDate(getCompany(db, source.company_id)),
+    { description, origin: 'AUTOMATICO', reverses_id: null },
+    lines,
+  )
+  postEntry(
+    ctx,
+    entry,
+    (n) => `Registró ${entry.display_number}, asiento automático N.º ${n} de ${source.display_number}`,
+    actor,
+  )
+  link(ctx, source.company_id, source.id, entry.id)
+  return entry
+}
+
+/** El asiento automático vigente de un documento (registrado, no anulado). */
+function automaticEntryOf(db: DB, docId: string) {
+  const ids = new Set(db.docLinks.filter((l) => l.from_document_id === docId).map((l) => l.to_document_id))
+  return db.documents.find(
+    (d) =>
+      ids.has(d.id) && d.doc_type === 'JOURNAL_ENTRY' && d.je?.origin === 'AUTOMATICO' && d.status === 'CONFIRMADO',
+  )
+}
+
+/** Contabilidad cambia la cuenta de una regla de imputación. */
+export function cmdSavePostingRule(ctx: Ctx, companyId: string, ruleId: string, accountId: string) {
+  const actor = requirePermission(ctx, companyId, 'posting_rule.update')
+  const rule = ctx.db.postingRules.find((r) => r.id === ruleId && r.company_id === companyId)
+  if (!rule) fail('DATO_INVALIDO', 'La regla de imputación no existe en esta empresa.')
+  const account = getAccount(ctx.db, companyId, accountId)
+  if (!account.is_imputable || !account.is_active)
+    fail('DATO_INVALIDO', `Elegí una cuenta imputable y activa: ${accountLabel(account)} no admite movimientos.`)
+  if (rule.account_id === account.id) return
+  const before = accountLabel(ctx.db.accounts.find((a) => a.id === rule.account_id)!)
+  rule.account_id = account.id
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'posting_rule',
+    entity_id: rule.id,
+    entity_label: postingLabel(rule.event, rule.key),
+    summary: `Cambió la imputación de "${postingLabel(rule.event, rule.key)}" a ${accountLabel(account)}`,
+    changes: { account: { from: before, to: accountLabel(account) } },
+  })
+}
+
+// ============================================================ Facturas de proveedor (docs/FASE_3_COMPRAS_Y_TESORERIA.md §3)
+
+export interface SupplierInvoiceInput {
+  purchase_order_id: string
+  point_of_sale: string
+  invoice_number: string
+  document_date: string
+  notes: string
+  lines: { po_line_id: string; quantity: number; unit_price: number }[]
+}
+
+/** Estados de una factura que generó deuda (registrada, con o sin pagos). */
+export const INVOICED_STATUSES = ['REGISTRADA', 'PAGADA_PARCIAL', 'PAGADA']
+
+/** Cantidad de una línea de OC ya facturada en facturas registradas (salvo una). */
+export function invoicedQuantity(db: DB, poLineId: string, exceptDocId?: string) {
+  const docs = new Set(
+    db.documents
+      .filter((d) => d.doc_type === 'SUPPLIER_INVOICE' && INVOICED_STATUSES.includes(d.status) && d.id !== exceptDocId)
+      .map((d) => d.id),
+  )
+  return round3(
+    db.siLines.filter((l) => l.po_line_id === poLineId && docs.has(l.document_id)).reduce((s, l) => s + l.quantity, 0),
+  )
+}
+
+const invoiceLabel = (si: T.SupplierInvoiceHeader) => `${si.letter} ${si.point_of_sale}-${si.invoice_number}`
+
+/** Control por oposición: no se factura más de lo recibido menos lo ya facturado. */
+function assertInvoiceable(db: DB, poLine: T.PurchaseOrderLine, quantity: number, exceptDocId?: string) {
+  const invoiced = invoicedQuantity(db, poLine.id, exceptDocId)
+  const available = round3(poLine.qty_received - invoiced)
+  if (quantity > available + EPS) {
+    const p = db.products.find((x) => x.id === poLine.product_id)!
+    fail(
+      'CANTIDAD_EXCEDIDA',
+      `${p.code}: se recibieron ${fmtQty(poLine.qty_received, p.uom_code)} y ya se facturaron ${fmtQty(invoiced, p.uom_code)}; como mucho se pueden facturar ${fmtQty(Math.max(available, 0), p.uom_code)}.`,
+      'Se paga lo que efectivamente llegó: la factura se controla contra la orden de compra y la recepción.',
+    )
+  }
+}
+
+export function cmdCreateSupplierInvoice(ctx: Ctx, companyId: string, input: SupplierInvoiceInput, register: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'supplier_invoice.create')
+  const order = db.documents.find(
+    (d) => d.id === input.purchase_order_id && d.company_id === companyId && d.doc_type === 'PURCHASE_ORDER',
+  )
+  if (!order) fail('DATO_INVALIDO', 'Elegí la orden de compra que factura el proveedor.')
+  if (!['ENVIADO', 'RECIBIDO_PARCIAL', 'RECIBIDO', 'CERRADO'].includes(order.status))
+    fail(
+      'DATO_INVALIDO',
+      `${order.display_number} está en estado "${statusLabel(order.doc_type, order.status)}": se factura una orden enviada al proveedor.`,
+    )
+  const supplier = db.suppliers.find((s) => s.id === order.supplier_id)!
+  const pos = input.point_of_sale.trim()
+  const number = input.invoice_number.trim()
+  if (!/^\d{1,5}$/.test(pos)) fail('DATO_INVALIDO', 'El punto de venta tiene hasta 5 números (por ejemplo, 00003).')
+  if (!/^\d{1,8}$/.test(number))
+    fail('DATO_INVALIDO', 'El número de la factura tiene hasta 8 números (por ejemplo, 00004521).')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.document_date) || Number.isNaN(Date.parse(input.document_date)))
+    fail('DATO_INVALIDO', 'Indicá la fecha de la factura.')
+  if (input.document_date > businessDate(getCompany(db, companyId)))
+    fail('DATO_INVALIDO', 'La fecha de la factura no puede ser posterior a hoy.')
+  const letter: T.SupplierInvoiceHeader['letter'] = supplier.vat_condition === 'RESPONSABLE_INSCRIPTO' ? 'A' : 'C'
+  const header: T.SupplierInvoiceHeader = {
+    purchase_order_id: order.id,
+    letter,
+    point_of_sale: pos.padStart(5, '0'),
+    invoice_number: number.padStart(8, '0'),
+    // Vence según el plazo de pago pactado en la orden de compra.
+    due_date: addDays(input.document_date, order.po!.payment_terms_days),
+    registered_at: null,
+  }
+  const duplicate = db.documents.find(
+    (d) =>
+      d.company_id === companyId &&
+      d.doc_type === 'SUPPLIER_INVOICE' &&
+      d.status !== 'ANULADA' &&
+      d.supplier_id === supplier.id &&
+      d.si!.letter === letter &&
+      d.si!.point_of_sale === header.point_of_sale &&
+      d.si!.invoice_number === header.invoice_number,
+  )
+  if (duplicate)
+    fail(
+      'DATO_INVALIDO',
+      `Ya está cargada la factura ${invoiceLabel(header)} de ${supplier.legal_name} (${duplicate.display_number}).`,
+    )
+  const lines = input.lines
+    .filter((l) => l.po_line_id && l.quantity)
+    .map((l) => {
+      const poLine = db.poLines.find((x) => x.id === l.po_line_id && x.document_id === order.id)
+      if (!poLine) fail('DATO_INVALIDO', 'Una de las líneas no pertenece a la orden de compra.')
+      if (!Number.isFinite(l.quantity) || !(l.quantity > 0) || round3(l.quantity) !== l.quantity)
+        fail('DATO_INVALIDO', 'Las cantidades deben ser mayores que cero y tener hasta 3 decimales.')
+      if (!Number.isFinite(l.unit_price) || l.unit_price < 0 || round4(l.unit_price) !== l.unit_price)
+        fail('DATO_INVALIDO', 'Los precios deben ser positivos y tener hasta 4 decimales.')
+      assertInvoiceable(db, poLine, l.quantity)
+      const subtotal = round2(l.quantity * l.unit_price)
+      const tax = letter === 'A' ? round2((subtotal * poLine.vat_rate) / 100) : 0
+      return { poLine, quantity: l.quantity, unit_price: l.unit_price, subtotal, tax }
+    })
+  if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué cantidades factura el proveedor.')
+  const doc = newDocument(ctx, companyId, 'SUPPLIER_INVOICE', actor, {
+    document_date: input.document_date,
+    supplier_id: supplier.id,
+    notes: input.notes.trim(),
+    si: header,
+  })
+  lines.forEach((l, i) => {
+    db.siLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      po_line_id: l.poLine.id,
+      product_id: l.poLine.product_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+      vat_rate: l.poLine.vat_rate,
+      line_subtotal: l.subtotal,
+      line_tax: l.tax,
+      line_total: round2(l.subtotal + l.tax),
+    })
+  })
+  doc.subtotal = round2(lines.reduce((s, l) => s + l.subtotal, 0))
+  doc.tax_total = round2(lines.reduce((s, l) => s + l.tax, 0))
+  doc.total = round2(doc.subtotal + doc.tax_total)
+  link(ctx, companyId, order.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'supplier_invoice',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: factura ${invoiceLabel(header)} de ${supplier.legal_name} contra ${order.display_number}`,
+  })
+  if (register) registerInvoice(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Registra la factura: controla otra vez las cantidades, genera el asiento de compra y la deuda. */
+function registerInvoice(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'CONFIRM')
+  const lines = db.siLines.filter((l) => l.document_id === doc.id).sort((a, b) => a.line_no - b.line_no)
+  for (const l of lines)
+    assertInvoiceable(
+      db,
+      db.poLines.find((x) => x.id === l.po_line_id)!,
+      l.quantity,
+      doc.id,
+    )
+  const supplier = db.suppliers.find((s) => s.id === doc.supplier_id)!
+  const si = doc.si!
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    summary: `Registró ${doc.display_number}: factura ${invoiceLabel(si)} de ${supplier.legal_name} por ${money(doc.total)}`,
+  })
+  doc.si = { ...si, registered_at: ctx.now }
+  // Con letra A el IVA va a crédito fiscal; con letra C es parte del costo.
+  const byType = new Map<string, number>()
+  for (const l of lines) {
+    const type = db.products.find((p) => p.id === l.product_id)!.product_type
+    byType.set(type, (byType.get(type) ?? 0) + (si.letter === 'A' ? l.line_subtotal : l.line_total))
+  }
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    'COMPRA',
+    `Compra según ${doc.display_number}: factura ${invoiceLabel(si)} de ${supplier.legal_name}.`,
+    [
+      ...Object.keys(PRODUCT_TYPES)
+        .filter((type) => byType.has(type))
+        .map((type) => ({ key: type, debit: byType.get(type)!, credit: 0 })),
+      { key: 'IVA_CREDITO', debit: si.letter === 'A' ? doc.tax_total : 0, credit: 0 },
+      { key: 'PROVEEDORES', debit: 0, credit: doc.total },
+    ],
+  )
+}
+
+export function cmdConfirmSupplierInvoice(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'SUPPLIER_INVOICE')
+  requirePermission(ctx, doc.company_id, 'supplier_invoice.create')
+  registerInvoice(ctx, doc)
+}
+
+/**
+ * El borrador se anula sin más. Una factura registrada y sin pagos se anula con
+ * el contraasiento de su asiento de compra, y deja de figurar en la deuda.
+ */
+export function cmdCancelSupplierInvoice(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'SUPPLIER_INVOICE')
+  if (doc.status !== 'REGISTRADA') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'supplier_invoice.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? ` y su asiento con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
+  })
 }
 
 // ============================================================ Tareas y notificaciones
@@ -2892,7 +3234,8 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
     default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,
     default_warehouse_id: p.default_warehouse_id ? (warehouseIds.get(p.default_warehouse_id) ?? null) : null,
   }))
-  copy(db.accounts, () => audited)
+  const accountIds = copy(db.accounts, () => audited)
+  copy(db.postingRules, (r) => ({ account_id: accountIds.get(r.account_id)! }))
 
   const member: T.Member = {
     id: uid(),

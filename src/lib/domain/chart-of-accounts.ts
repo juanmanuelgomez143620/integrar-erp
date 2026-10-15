@@ -161,7 +161,23 @@ export const OPENING_BALANCES: { code: string; debit: number; credit: number }[]
 /** La diferencia del asiento de apertura: lo que los socios acumularon en ejercicios anteriores. */
 export const OPENING_BALANCING_ACCOUNT = '3.2.02.01'
 
-/** Cuenta de bienes de cambio de cada tipo de producto (apertura y, desde la Fase 3, compras). */
+/**
+ * Reglas base de la imputación automática (a validar): a qué cuenta va cada
+ * importe de cada evento (catalog.ts, POSTING_EVENTS). Contabilidad las cambia
+ * por empresa en "Imputación automática".
+ */
+// prettier-ignore
+export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] = [
+  { event: 'COMPRA', key: 'MATERIA_PRIMA', code: '1.1.05.01' },
+  { event: 'COMPRA', key: 'INSUMO', code: '1.1.05.02' },
+  { event: 'COMPRA', key: 'PRODUCTO_TERMINADO', code: '1.1.05.04' },
+  { event: 'COMPRA', key: 'MERCADERIA_REVENTA', code: '1.1.05.05' },
+  { event: 'COMPRA', key: 'SERVICIO', code: '5.2.02.04' },
+  { event: 'COMPRA', key: 'IVA_CREDITO', code: '1.1.04.01' },
+  { event: 'COMPRA', key: 'PROVEEDORES', code: '2.1.01.01' },
+]
+
+/** Cuenta de bienes de cambio de cada tipo de producto (asiento de apertura). */
 export const INVENTORY_ACCOUNTS: Record<ProductType, string | null> = {
   MATERIA_PRIMA: '1.1.05.01',
   INSUMO: '1.1.05.02',

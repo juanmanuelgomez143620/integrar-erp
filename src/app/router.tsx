@@ -59,6 +59,16 @@ const LedgerPage = lazyPage(() => import('@/features/accounting/book-pages').the
 const TrialBalancePage = lazyPage(() => import('@/features/accounting/book-pages').then((m) => m.TrialBalancePage))
 const FiscalYearsPage = lazyPage(() => import('@/features/accounting/fiscal-years-page').then((m) => m.FiscalYearsPage))
 const BookPrintPage = lazyPage(() => import('@/features/accounting/book-print-page').then((m) => m.BookPrintPage))
+const PostingRulesPage = lazyPage(() =>
+  import('@/features/accounting/posting-rules-page').then((m) => m.PostingRulesPage),
+)
+const InvoiceFormPage = lazyPage(() =>
+  import('@/features/purchasing/invoices/invoice-form').then((m) => m.InvoiceFormPage),
+)
+const PayablesPage = lazyPage(() => import('@/features/payables/payables-pages').then((m) => m.PayablesPage))
+const SupplierAccountPage = lazyPage(() =>
+  import('@/features/payables/payables-pages').then((m) => m.SupplierAccountPage),
+)
 
 function NotFound() {
   return (
@@ -106,6 +116,12 @@ export const router = createBrowserRouter([
               { path: 'compras/ordenes/nueva', element: <OrderFormPage /> },
               { path: 'compras/ordenes/:number', element: <DocumentPage key="po" docType="PURCHASE_ORDER" /> },
               { path: 'compras/ordenes/:number/editar', element: <OrderFormPage /> },
+              { path: 'compras/facturas', element: <DocumentListPage key="si" docType="SUPPLIER_INVOICE" /> },
+              { path: 'compras/facturas/nueva', element: <InvoiceFormPage /> },
+              { path: 'compras/facturas/:number', element: <DocumentPage key="si" docType="SUPPLIER_INVOICE" /> },
+              { path: 'pagos/proveedores', element: <PayablesPage /> },
+              { path: 'pagos/proveedores/:code', element: <SupplierAccountPage /> },
+              { path: 'contabilidad/imputacion', element: <PostingRulesPage /> },
               { path: 'deposito/recepciones', element: <DocumentListPage key="gr" docType="GOODS_RECEIPT" /> },
               { path: 'deposito/recepciones/nueva', element: <ReceiptFormPage /> },
               { path: 'deposito/recepciones/:number', element: <DocumentPage key="gr" docType="GOODS_RECEIPT" /> },

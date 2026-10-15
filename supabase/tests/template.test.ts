@@ -54,6 +54,14 @@ const mockOpening = (() => {
     .map((l) => ({ code: code[l.account_id], debit: l.debit, credit: l.credit }))
 })()
 
+/** Reglas de la imputación automática de la demo: "evento/clave → cuenta". */
+const mockRules = (() => {
+  const code = Object.fromEntries(ofTemplate(seed.accounts).map((a) => [a.id, a.code]))
+  return ofTemplate(seed.postingRules)
+    .map((r) => `${r.event}/${r.key} → ${code[r.account_id]}`)
+    .sort()
+})()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -99,6 +107,18 @@ const opening = async (company: string) =>
       order by l.line_no`,
     [company],
   )
+
+const rules = async (company: string) =>
+  (
+    await db.admin<{ rule: string }>(
+      `select r.event || '/' || r.key || ' → ' || a.code as rule
+         from public.posting_rules r join public.accounts a on a.id = r.account_id
+        where r.company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.rule)
+    .sort()
 
 const createFor = async (user: string, courseId: string) =>
   (
@@ -268,6 +288,11 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await opening(template)).toEqual(mockOpening)
   })
 
+  it('tiene las mismas reglas de imputación automática que la demo', async () => {
+    expect(mockRules.length).toBeGreaterThan(0)
+    expect(await rules(template)).toEqual(mockRules)
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -329,6 +354,7 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await alerts(created.id)).toEqual(belowMinimum)
     expect(await count('accounts', created.id)).toBe(await count('accounts', template))
     expect(await opening(created.id)).toEqual(mockOpening)
+    expect(await rules(created.id)).toEqual(mockRules)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

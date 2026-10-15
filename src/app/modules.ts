@@ -18,11 +18,14 @@ import {
   NotebookPen,
   Package,
   PackageCheck,
+  ReceiptText,
   Scale,
   ShoppingCart,
   SlidersHorizontal,
   Truck,
   Users,
+  Wallet,
+  Workflow,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -58,7 +61,17 @@ export const NAV: NavGroup[] = [
         permission: 'purchase_requisition.read',
       },
       { label: 'Órdenes de compra', path: 'compras/ordenes', icon: ShoppingCart, permission: 'purchase_order.read' },
+      {
+        label: 'Facturas de proveedores',
+        path: 'compras/facturas',
+        icon: ReceiptText,
+        permission: 'supplier_invoice.read',
+      },
     ],
+  },
+  {
+    label: 'Pagos y tesorería',
+    items: [{ label: 'Cuentas corrientes', path: 'pagos/proveedores', icon: Wallet, permission: 'payable.read' }],
   },
   {
     label: 'Depósito',
@@ -86,6 +99,12 @@ export const NAV: NavGroup[] = [
         path: 'contabilidad/ejercicios',
         icon: CalendarRange,
         permission: 'ledger.read',
+      },
+      {
+        label: 'Imputación automática',
+        path: 'contabilidad/imputacion',
+        icon: Workflow,
+        permission: 'posting_rule.read',
       },
     ],
   },

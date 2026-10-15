@@ -24,6 +24,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   masters: { name: 'Maestros (clientes, proveedores, productos)', lockable: true },
   purchasing: { name: 'Compras', lockable: true },
   inventory: { name: 'Depósito y stock', lockable: true },
+  payables: { name: 'Pagos y tesorería', lockable: true },
   accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
   audit: { name: 'Auditoría', lockable: true },
@@ -41,7 +42,10 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   goods_receipt: 'inventory',
   stock: 'inventory',
   stock_adjustment: 'inventory',
+  supplier_invoice: 'purchasing',
+  payable: 'payables',
   account: 'accounting',
+  posting_rule: 'accounting',
   journal_entry: 'accounting',
   ledger: 'accounting',
   fiscal_period: 'accounting',
@@ -112,6 +116,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.read', 'purchase_order.approve', 'purchase_order.cancel', 'purchase_order.export',
     'goods_receipt.read', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
+    'supplier_invoice.read', 'payable.read', 'posting_rule.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -121,6 +126,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.read', 'purchase_order.create', 'purchase_order.update', 'purchase_order.approve',
     'purchase_order.cancel', 'purchase_order.export',
     'goods_receipt.read',
+    'supplier_invoice.read', 'supplier_invoice.create', 'supplier_invoice.cancel', 'payable.read',
   ],
   VENTAS: [...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read'],
   DEPOSITO: [
@@ -143,10 +149,14 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...LEDGER_READ, 'account.create', 'account.update',
     'journal_entry.create', 'journal_entry.update', 'journal_entry.cancel', 'journal_entry.export',
     'ledger.export', 'fiscal_period.update',
+    'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
   ],
-  TESORERIA: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ],
+  TESORERIA: [
+    ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
+    'supplier_invoice.read', 'payable.read',
+  ],
   RRHH: [...CORE_READ],
-  IMPUESTOS: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ],
+  IMPUESTOS: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read'],
   LOGISTICA: [...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read'],
   AUDITOR: [
     ...CORE_READ,
@@ -155,6 +165,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.read', 'purchase_order.export', 'goods_receipt.read',
     'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
+    'supplier_invoice.read', 'payable.read', 'posting_rule.read',
   ],
   DOCENTE: [],
 }
@@ -198,6 +209,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'JOURNAL_ENTRY', prefix: 'AS', name: 'Asiento contable', plural: 'Asientos', resource: 'journal_entry',
     module: 'accounting', path: 'contabilidad/asientos',
     description: 'Registro de un hecho económico por partida doble: las cuentas que se debitan y las que se acreditan, por el mismo importe.',
+  },
+  SUPPLIER_INVOICE: {
+    code: 'SUPPLIER_INVOICE', prefix: 'FP', name: 'Factura de proveedor', plural: 'Facturas de proveedores',
+    resource: 'supplier_invoice', module: 'purchasing', path: 'compras/facturas',
+    description: 'Registro de la factura que emitió el proveedor, controlada contra la orden de compra y lo recibido. Genera el asiento de compra y la deuda con el proveedor.',
   },
 }
 
@@ -244,6 +260,13 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Todavía no está en el libro diario: se puede corregir.' },
     CONFIRMADO: { label: 'Registrado', badge: 'success', final: true, description: 'Está en el libro diario con su número de asiento. Ya no se modifica.' },
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba registrado, un contraasiento lo compensa y los dos quedan en el libro diario.' },
+  },
+  SUPPLIER_INVOICE: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Compras la está cargando: todavía no generó deuda ni asiento.' },
+    REGISTRADA: { label: 'Registrada', badge: 'info', final: false, description: 'Está en la cuenta corriente del proveedor y en el libro diario. Falta pagarla.' },
+    PAGADA_PARCIAL: { label: 'Pagada parcialmente', badge: 'warning', final: false, description: 'Se pagó una parte; queda saldo pendiente.' },
+    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagó completa: la deuda con el proveedor quedó cancelada.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba registrada, un contraasiento revirtió la compra.' },
   },
 }
 
@@ -318,6 +341,17 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('JOURNAL_ENTRY', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'journal_entry.create', 'Registrar en el libro diario', 'Controla la partida doble y el período, y le asigna el número de asiento.'),
   t('JOURNAL_ENTRY', 'BORRADOR', 'CANCEL', 'ANULADO', 'journal_entry.cancel', 'Anular', 'El borrador queda sin efecto; nunca estuvo en el libro diario.', true, 'destructive'),
   t('JOURNAL_ENTRY', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'journal_entry.cancel', 'Anular con contraasiento', 'Registra con fecha de hoy un asiento con el debe y el haber invertidos. Los dos quedan en el libro diario.', true, 'destructive'),
+
+  // Factura de proveedor
+  t('SUPPLIER_INVOICE', 'BORRADOR', 'CONFIRM', 'REGISTRADA', 'supplier_invoice.create', 'Registrar factura', 'Controla las cantidades contra lo recibido y genera el asiento de compra y la deuda con el proveedor.'),
+  t('SUPPLIER_INVOICE', 'BORRADOR', 'CANCEL', 'ANULADA', 'supplier_invoice.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('SUPPLIER_INVOICE', 'REGISTRADA', 'CANCEL', 'ANULADA', 'supplier_invoice.cancel', 'Anular con contraasiento', 'Revierte el asiento de compra y la deuda. Sólo si todavía no tiene pagos.', true, 'destructive'),
+  t('SUPPLIER_INVOICE', 'REGISTRADA', 'SYSTEM', 'PAGADA_PARCIAL', null, '', ''),
+  t('SUPPLIER_INVOICE', 'REGISTRADA', 'SYSTEM', 'PAGADA', null, '', ''),
+  t('SUPPLIER_INVOICE', 'PAGADA_PARCIAL', 'SYSTEM', 'PAGADA', null, '', ''),
+  t('SUPPLIER_INVOICE', 'PAGADA_PARCIAL', 'SYSTEM', 'REGISTRADA', null, '', ''),
+  t('SUPPLIER_INVOICE', 'PAGADA', 'SYSTEM', 'PAGADA_PARCIAL', null, '', ''),
+  t('SUPPLIER_INVOICE', 'PAGADA', 'SYSTEM', 'REGISTRADA', null, '', ''),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -371,6 +405,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'GOODS_RECEIPT', status: 'BORRADOR', taskType: 'CONFIRMAR_RECEPCION', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar cantidades y confirmar para que ingrese al stock.' },
   { docType: 'STOCK_ADJUSTMENT', status: 'BORRADOR', taskType: 'CONFIRMAR_AJUSTE', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar el ajuste y confirmarlo.' },
   { docType: 'JOURNAL_ENTRY', status: 'BORRADOR', taskType: 'REGISTRAR_ASIENTO', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar que el debe y el haber sumen lo mismo y registrar el asiento en el libro diario.' },
+  { docType: 'SUPPLIER_INVOICE', status: 'BORRADOR', taskType: 'REGISTRAR_FACTURA', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar los datos del comprobante y las cantidades contra lo recibido, y registrar la factura.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -382,6 +417,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CONFIRMAR_RECEPCION: 'Confirmar recepción',
   CONFIRMAR_AJUSTE: 'Confirmar ajuste',
   REGISTRAR_ASIENTO: 'Registrar asiento',
+  REGISTRAR_FACTURA: 'Registrar factura',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -457,6 +493,22 @@ export const ACCOUNT_TYPES: Record<AccountType, string> = {
   PATRIMONIO_NETO: 'Patrimonio neto',
   RESULTADO_POSITIVO: 'Resultado positivo',
   RESULTADO_NEGATIVO: 'Resultado negativo',
+}
+
+/** Eventos contables que se imputan solos y los importes de cada uno (docs/FASE_3_COMPRAS_Y_TESORERIA.md §2). */
+export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string, string> }> = {
+  COMPRA: {
+    label: 'Compra (factura de proveedor registrada)',
+    keys: {
+      MATERIA_PRIMA: 'Materias primas compradas',
+      INSUMO: 'Insumos comprados',
+      PRODUCTO_TERMINADO: 'Productos terminados comprados',
+      MERCADERIA_REVENTA: 'Mercaderías de reventa compradas',
+      SERVICIO: 'Servicios comprados',
+      IVA_CREDITO: 'IVA de la factura (letra A)',
+      PROVEEDORES: 'Deuda con el proveedor',
+    },
+  },
 }
 
 export const JOURNAL_ORIGINS: Record<JournalEntryOrigin, string> = {

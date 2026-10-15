@@ -2,7 +2,7 @@
 // hechas con el motor simulado que dejan documentos en (casi) todos los
 // estados, tareas tomadas, avisos leídos y movimientos de stock de cada tipo.
 
-import { todayAR } from '../../../src/lib/format'
+import { addDays, todayAR } from '../../../src/lib/format'
 import type { DB } from '../../../src/lib/mock/db'
 import * as E from '../../../src/lib/mock/engine'
 import { buildSeed } from '../../../src/lib/mock/seed'
@@ -69,6 +69,66 @@ export function buildScenario(): DB {
   })
   E.cmdCreateGoodsReceipt(as('deposito'), company, receipt(30, 'R-0001-00000451'), true)
   E.cmdCreateGoodsReceipt(as('deposito'), company, receipt(10, 'R-0001-00000478'), false)
+
+  // Facturas de esa OC: una vencida (de hace 40 días, a 30 días), una en
+  // borrador y una registrada y anulada con el contraasiento de su asiento.
+  const invoice = (
+    orderId: string,
+    pos: string,
+    number: string,
+    lines: [string, number, number][],
+    date = todayAR(),
+  ): E.SupplierInvoiceInput => ({
+    purchase_order_id: orderId,
+    point_of_sale: pos,
+    invoice_number: number,
+    document_date: date,
+    notes: '',
+    lines: lines.map(([po_line_id, quantity, unit_price]) => ({ po_line_id, quantity, unit_price })),
+  })
+  E.cmdCreateSupplierInvoice(
+    as('compras1'),
+    company,
+    invoice(oc2.id, '7', '2201', [[oc2Line.id, 20, 1300]], addDays(todayAR(), -40)),
+    true,
+  )
+  E.cmdCreateSupplierInvoice(as('compras2'), company, invoice(oc2.id, '7', '2202', [[oc2Line.id, 5, 1300]]), false)
+  const wrongInvoice = E.cmdCreateSupplierInvoice(
+    as('compras1'),
+    company,
+    invoice(oc2.id, '7', '2203', [[oc2Line.id, 5, 1350]]),
+    true,
+  )
+  E.cmdCancelSupplierInvoice(as('compras1'), wrongInvoice.id, 'El precio no es el de la orden de compra')
+
+  // Un servicio de un monotributista, al contado: factura C (el IVA es parte del costo).
+  const service = E.cmdCreatePurchaseOrder(as('compras2'), company, {
+    ...order('PRV-010', [['SV-001', 1, 38000, null]]),
+    payment_terms_days: 0,
+  })
+  E.cmdSubmitPurchaseOrder(as('compras2'), service.id)
+  E.cmdApprovePurchaseOrder(as('compras1'), service.id, 'Flete urgente')
+  E.cmdSendPurchaseOrder(as('compras2'), service.id)
+  const serviceLine = db.poLines.find((l) => l.document_id === service.id)!
+  E.cmdCreateGoodsReceipt(
+    as('deposito'),
+    company,
+    {
+      purchase_order_id: service.id,
+      warehouse_id: warehouse('DEP-MP'),
+      supplier_delivery_note: 'R-0002-00000033',
+      carrier_name: '',
+      notes: 'Servicio prestado.',
+      lines: [{ po_line_id: serviceLine.id, quantity: 1 }],
+    },
+    true,
+  )
+  E.cmdCreateSupplierInvoice(
+    as('compras2'),
+    company,
+    invoice(service.id, '2', '845', [[serviceLine.id, 1, 38000]]),
+    true,
+  )
 
   // SC en borrador y SC rechazada por Compras.
   E.cmdCreateRequisition(as('produccion'), company, requisition([['IN-001', 5]]), false)

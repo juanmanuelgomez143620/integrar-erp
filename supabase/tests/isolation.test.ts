@@ -73,6 +73,9 @@ async function snapshot(company: string) {
     'fiscal_periods',
     'journal_entries',
     'journal_entry_lines',
+    'posting_rules',
+    'supplier_invoices',
+    'supplier_invoice_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -96,7 +99,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
           ? B.adjustment
           : fn.startsWith('je_')
             ? B.journal
-            : B.order
+            : fn.startsWith('si_')
+              ? B.invoice
+              : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -105,6 +110,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     warehouse_id: B.warehouse,
     purchase_order_id: B.order,
     supplier_delivery_note: 'R-9999',
+    point_of_sale: '1',
+    invoice_number: '99',
     reason_code: 'CONTEO_FISICO',
     payment_terms_days: 0,
     lines: [
@@ -161,6 +168,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_scope: 'all',
     p_limit: null,
     p_account_id: B.account,
+    p_supplier_id: B.supplier,
+    p_rule_id: B.rule,
     p_period_id: B.period,
     p_status: 'CERRADO',
     p_year: 2028,
@@ -278,6 +287,20 @@ beforeAll(async () => {
       p_confirm: true,
     })
   ).id
+  B.invoice = (
+    await rpc<{ id: string }>('alumnoB', 'si_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        purchase_order_id: B.order,
+        point_of_sale: '3',
+        invoice_number: '1234',
+        document_date: (await one<{ d: string }>(`select private.business_date($1)::text as d`, [B.id])).d,
+        lines: [{ po_line_id: B.orderLine, quantity: 20, unit_price: 1300 }],
+      }),
+      p_register: true,
+    })
+  ).id
+  B.rule = (await one(`select id from public.posting_rules where company_id = $1 limit 1`, [B.id])).id
   B.adjustment = (
     await one(`select id from public.documents where company_id = $1 and doc_type = 'STOCK_ADJUSTMENT' limit 1`, [B.id])
   ).id
@@ -312,6 +335,8 @@ beforeAll(async () => {
          union select id::text from public.fiscal_years where company_id = $1
          union select id::text from public.fiscal_periods where company_id = $1
          union select id::text from public.journal_entry_lines where company_id = $1
+         union select id::text from public.supplier_invoice_lines where company_id = $1
+         union select id::text from public.posting_rules where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

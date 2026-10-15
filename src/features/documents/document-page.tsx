@@ -8,6 +8,7 @@ import {
   Lightbulb,
   Pencil,
   Printer,
+  ReceiptText,
   ShoppingCart,
   PackageCheck,
   ShieldAlert,
@@ -61,6 +62,10 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmJournalEntry(id),
     CANCEL: (id, t) => commands.cancelJournalEntry(id, t),
   },
+  SUPPLIER_INVOICE: {
+    CONFIRM: (id) => commands.confirmSupplierInvoice(id),
+    CANCEL: (id, t) => commands.cancelSupplierInvoice(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -69,6 +74,7 @@ const AREA: Record<DocType, string> = {
   GOODS_RECEIPT: 'Depósito',
   STOCK_ADJUSTMENT: 'Depósito',
   JOURNAL_ENTRY: 'Contabilidad',
+  SUPPLIER_INVOICE: 'Compras',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -118,6 +124,10 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
     doc.doc_type === 'PURCHASE_ORDER' &&
     ['ENVIADO', 'RECIBIDO_PARCIAL'].includes(doc.status) &&
     company.can('goods_receipt.create')
+  const canInvoice =
+    doc.doc_type === 'PURCHASE_ORDER' &&
+    ['RECIBIDO_PARCIAL', 'RECIBIDO', 'CERRADO'].includes(doc.status) &&
+    company.can('supplier_invoice.create')
 
   const primary = detail.actions.filter((a) => a.tone === 'default')
   const secondary = detail.actions.filter((a) => a.tone !== 'default')
@@ -188,6 +198,13 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               <Button asChild>
                 <Link to={`${company.docPath('GOODS_RECEIPT', 'nueva')}?oc=${doc.display_number}`}>
                   <PackageCheck /> Registrar recepción
+                </Link>
+              </Button>
+            )}
+            {canInvoice && (
+              <Button variant="outline" asChild>
+                <Link to={`${company.docPath('SUPPLIER_INVOICE', 'nueva')}?oc=${doc.display_number}`}>
+                  <ReceiptText /> Registrar factura
                 </Link>
               </Button>
             )}
@@ -408,6 +425,34 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
       </>
     )
   }
+  if (doc.doc_type === 'SUPPLIER_INVOICE' && doc.si) {
+    return (
+      <dl className={grid}>
+        <InfoRow label="Proveedor">{supplier?.legal_name}</InfoRow>
+        <InfoRow label="CUIT (simulado)">
+          {supplier?.tax_id} · {supplier ? VAT_CONDITIONS[supplier.vat_condition] : ''}
+        </InfoRow>
+        <InfoRow label="Comprobante">
+          Factura {doc.si.letter} {doc.si.point_of_sale}-{doc.si.invoice_number}
+        </InfoRow>
+        <InfoRow label="Fecha de emisión">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Vencimiento">{date(doc.si.due_date)}</InfoRow>
+        <InfoRow label="Orden de compra">
+          {detail.related_order ? (
+            <Link className="font-mono hover:underline" to={detail.related_order.path}>
+              {detail.related_order.display_number}
+            </Link>
+          ) : (
+            '—'
+          )}
+        </InfoRow>
+        <InfoRow label="Cargó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
   if (doc.doc_type === 'PURCHASE_ORDER' && doc.po) {
     return (
       <dl className={grid}>
@@ -575,6 +620,15 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 <TableHead className={cn(head, 'text-right')}>Importe</TableHead>
               </>
             )}
+            {doc.doc_type === 'SUPPLIER_INVOICE' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Recibido (OC)</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Facturado</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Precio unit.</TableHead>
+                <TableHead className={cn(head, 'text-right')}>IVA</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
+              </>
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -638,14 +692,38 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                   <TableCell className="tabular text-right">{money(l.quantity * (l.unit_cost ?? 0))}</TableCell>
                 </>
               )}
+              {doc.doc_type === 'SUPPLIER_INVOICE' && (
+                <>
+                  <TableCell className="tabular text-right">{qty(l.qty_received, l.product.uom_code)}</TableCell>
+                  <TableCell className="tabular text-right font-semibold">
+                    {qty(l.quantity, l.product.uom_code)}
+                  </TableCell>
+                  <TableCell className="tabular text-right">
+                    {money(l.unit_price)}
+                    {l.order_unit_price != null && l.order_unit_price !== l.unit_price && (
+                      <div className="text-xs text-amber-700">OC: {money(l.order_unit_price)}</div>
+                    )}
+                  </TableCell>
+                  <TableCell className="tabular text-right">
+                    {doc.si?.letter === 'A' ? `${l.vat_rate}%` : '—'}
+                  </TableCell>
+                  <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
+                </>
+              )}
             </TableRow>
           ))}
         </TableBody>
-        {doc.doc_type === 'PURCHASE_ORDER' && (
+        {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
           <TableFooter>
-            <TotalRow label="Subtotal neto" value={doc.subtotal} span={6} />
-            <TotalRow label="IVA" value={doc.tax_total} span={6} />
-            <TotalRow label="Total" value={doc.total} span={6} strong />
+            {/* En la OC queda una columna más a la derecha (lo recibido). */}
+            <TotalRow
+              label="Subtotal neto"
+              value={doc.subtotal}
+              span={6}
+              trailing={doc.doc_type === 'PURCHASE_ORDER'}
+            />
+            <TotalRow label="IVA" value={doc.tax_total} span={6} trailing={doc.doc_type === 'PURCHASE_ORDER'} />
+            <TotalRow label="Total" value={doc.total} span={6} strong trailing={doc.doc_type === 'PURCHASE_ORDER'} />
           </TableFooter>
         )}
         {(doc.doc_type === 'GOODS_RECEIPT' || doc.doc_type === 'STOCK_ADJUSTMENT') && (
@@ -663,7 +741,19 @@ function Lines({ detail }: { detail: DocumentDetail }) {
   )
 }
 
-function TotalRow({ label, value, span, strong }: { label: string; value: number; span: number; strong?: boolean }) {
+function TotalRow({
+  label,
+  value,
+  span,
+  strong,
+  trailing,
+}: {
+  label: string
+  value: number
+  span: number
+  strong?: boolean
+  trailing?: boolean
+}) {
   return (
     <TableRow>
       <TableCell
@@ -673,7 +763,7 @@ function TotalRow({ label, value, span, strong }: { label: string; value: number
         {label}
       </TableCell>
       <TableCell className={cn('tabular text-right', strong && 'font-semibold text-navy')}>{money(value)}</TableCell>
-      {span === 6 && <TableCell />}
+      {trailing && <TableCell />}
     </TableRow>
   )
 }

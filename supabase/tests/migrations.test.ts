@@ -3,7 +3,15 @@
 // usa la interfaz): si alguien cambia uno sin regenerar el otro, esta prueba falla.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { DOC_STATUSES, DOC_TYPES, ROLE_PERMISSIONS, ROLES, TASK_RULES, TRANSITIONS } from '../../src/lib/domain/catalog'
+import {
+  DOC_STATUSES,
+  DOC_TYPES,
+  POSTING_EVENTS,
+  ROLE_PERMISSIONS,
+  ROLES,
+  TASK_RULES,
+  TRANSITIONS,
+} from '../../src/lib/domain/catalog'
 import { createTestDb, type TestDb } from './support/db'
 
 let db: TestDb
@@ -44,5 +52,16 @@ describe('catálogos del sistema', () => {
     expect(transitions[0].n).toBe(TRANSITIONS.length)
     const rules = await db.admin<{ n: number }>('select count(*)::int as n from public.task_rules')
     expect(rules[0].n).toBe(TASK_RULES.length)
+  })
+
+  it('eventos y claves de la imputación automática iguales a catalog.ts, en el mismo orden', async () => {
+    const keys = await db.admin<{ event: string; key: string; key_label: string }>(
+      'select event, key, key_label from public.posting_keys order by sort',
+    )
+    expect(keys.map((k) => `${k.event}/${k.key}: ${k.key_label}`)).toEqual(
+      Object.entries(POSTING_EVENTS).flatMap(([event, e]) =>
+        Object.entries(e.keys).map(([key, label]) => `${event}/${key}: ${label}`),
+      ),
+    )
   })
 })

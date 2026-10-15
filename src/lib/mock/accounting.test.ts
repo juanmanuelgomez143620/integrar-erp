@@ -101,10 +101,8 @@ describe('empresa plantilla', () => {
     expect(sides.join('')).toMatch(/^D+H+$/)
   })
 
-  it('el mayor de bienes de cambio coincide con el valor del inventario inicial', () => {
-    const stockValue = db.stockMovements
-      .filter((m) => m.movement_type === 'STOCK_INICIAL')
-      .reduce((sum, m) => sum + m.total_cost, 0)
+  it('el mayor de bienes de cambio coincide con el stock: lo recibido de ejemplo ya está facturado', () => {
+    const stockValue = db.stockMovements.reduce((sum, m) => sum + m.total_cost, 0)
     const inventory = listAccounts(db, userId('contabilidad'), companyId()).find((a) => a.code === '1.1.05')!
     expect(inventory.balance).toBe(stockValue)
   })
@@ -122,12 +120,13 @@ describe('asientos', () => {
   it('se registran con número correlativo y la tarea del borrador se resuelve', () => {
     const draft = db.documents.find((d) => d.je?.origin === 'MANUAL' && d.status === 'BORRADOR')!
     expect(db.tasks.some((t) => t.document_id === draft.id && t.status === 'PENDIENTE')).toBe(true)
+    // Apertura (1), compra de la factura de ejemplo (2) y depósito (3).
     cmdConfirmJournalEntry(ctx('contabilidad'), draft.id)
     expect(doc(draft.id)).toMatchObject({ status: 'CONFIRMADO' })
-    expect(doc(draft.id).je!.entry_number).toBe(3)
+    expect(doc(draft.id).je!.entry_number).toBe(4)
     expect(db.tasks.find((t) => t.document_id === draft.id)!.status).toBe('RESUELTA')
     const created = cmdCreateJournalEntry(ctx('contabilidad'), companyId(), entry(), true)
-    expect(doc(created.id).je!.entry_number).toBe(4)
+    expect(doc(created.id).je!.entry_number).toBe(5)
     expect(doc(created.id).total).toBe(50000)
   })
 

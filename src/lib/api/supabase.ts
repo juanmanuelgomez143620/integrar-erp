@@ -248,6 +248,11 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     documentById: (docId) => rpc('document_detail_by_id', { p_document_id: docId }),
     pendingRequisitionLines: (companyId) => rpc('requisition_lines_pending', company(companyId)),
     receivableOrders: (companyId) => rpc('orders_receivable', company(companyId)),
+    invoiceableOrders: (companyId) => rpc('orders_invoiceable', company(companyId)),
+    payables: (companyId) => rpc('payables_list', company(companyId)),
+    supplierAccount: (companyId, supplierId) =>
+      rpc('supplier_account', { ...company(companyId), p_supplier_id: supplierId }),
+    postingRules: (companyId) => rpc('posting_rules_list', company(companyId)),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
     fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
     journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
@@ -304,6 +309,13 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('sa_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
     confirmStockAdjustment: (docId) => rpc('sa_confirm', doc(docId)),
     cancelStockAdjustment: (docId, reason) => rpc('sa_cancel', { ...doc(docId), p_reason: reason }),
+
+    createSupplierInvoice: (companyId, input, register) =>
+      rpc('si_create', { ...company(companyId), p_input: input, p_register: register }),
+    confirmSupplierInvoice: (docId) => rpc('si_confirm', doc(docId)),
+    cancelSupplierInvoice: (docId, reason) => rpc('si_cancel', { ...doc(docId), p_reason: reason }),
+    savePostingRule: (companyId, ruleId, accountId) =>
+      rpc('posting_rule_save', { ...company(companyId), p_rule_id: ruleId, p_account_id: accountId }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
