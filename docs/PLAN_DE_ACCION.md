@@ -27,11 +27,17 @@ Objetivo: que INTEGR-AR tenga todos sus módulos desarrollados y funcionando, so
 | C2 | Simulador: plan de cuentas, ejercicios y períodos, asientos con partida doble (borrador → registrado; la anulación genera un contraasiento), libro diario, mayor y balance de sumas y saldos, con pruebas | Hecho |
 | C3 | Interfaz: menú Contabilidad con plan de cuentas, asientos, diario, mayor, sumas y saldos y ejercicios; impresión con la leyenda de simulación | Hecho |
 | C4 | Supabase: tablas, permisos (RLS), RPC y lecturas, con las pruebas de paridad ampliadas | Hecho (sin aplicar al proyecto real) |
-| C5 | Motor de imputación (`posting_rules`) listo para que la Fase 3 genere asientos automáticos | Pendiente |
+| C5 | Motor de imputación (`posting_rules`) listo para que la Fase 3 genere asientos automáticos | Hecho (en la Fase 3a) |
 
 ## Etapa D — Módulos siguientes (roadmap 2027)
 
 Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 producción y costos → Fase 6 RRHH y sueldos → Fase 7 impuestos (fisco simulado), logística y control → Fase 8 escenarios y entorno vivo (banco de casos con plantillas, aprobación del docente, IA sólo por fuera de la app).
+
+| Paso | Qué | Estado |
+|---|---|---|
+| D1 | Fase 3a (`docs/FASE_3_COMPRAS_Y_TESORERIA.md`): imputación automática, factura de proveedor contra lo recibido con su asiento, cuentas corrientes de proveedores | Hecho (sin aplicar en Supabase); falta que el docente valide las reglas de imputación |
+| D2 | Fase 3b: cajas y bancos, orden de pago con aprobación de Gerencia y pago (asiento `PAGO`, SoD-5) | Pendiente |
+| D3 | Fase 3c y 3d: cotizaciones y cuadro comparativo; transferencias, cheques, conciliación y flujo de fondos | Pendiente |
 
 ## Reglas para quien ejecute el plan
 

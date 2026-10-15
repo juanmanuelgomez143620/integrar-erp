@@ -57,9 +57,10 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 |---|---|
 | core | `company.read`, `company.update`, `member.read`, `sector.read` |
 | masters | `customer.read/create/update/export`, `supplier.read/create/update/export`, `product.read/create/update/export` |
-| purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export` |
+| purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export`; desde la Fase 3, `supplier_invoice.read/create/cancel` (facturas de proveedor) |
+| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores) |
 | inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel` |
-| accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses) |
+| accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
 | audit | `audit.read`, `audit.export` |
 
@@ -87,10 +88,14 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Asientos (Fase 2) | L E | — | — | — | — | L C M X E | L | — | L | — | L E | Todo |
 | Libro diario, mayor y sumas y saldos (Fase 2) | L E | — | — | — | — | L E | L | — | L | — | L E | Todo |
 | Ejercicios y períodos (Fase 2) | L | — | — | — | — | L, cierra meses | L | — | L | — | L | Todo³ |
+| Factura de proveedor (Fase 3) | L | L C X⁴ | — | — | — | L | L | — | L | — | L | Todo |
+| Cuenta corriente de proveedores (Fase 3) | L | L | — | — | — | L | L | — | — | — | L | Todo |
+| Imputación automática (Fase 3) | L | — | — | — | — | L M | — | — | — | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
 ³ Sólo el docente reabre un mes cerrado (con motivo) y abre un ejercicio nuevo.
+⁴ Compras registra la factura contra lo recibido (nunca más de lo que llegó) y la anula sólo si no tiene pagos; el asiento de compra se genera solo, con las reglas de imputación de Contabilidad.
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros.
 
