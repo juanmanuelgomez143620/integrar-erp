@@ -7,9 +7,10 @@ Objetivo: que INTEGR-AR tenga todos sus módulos desarrollados y funcionando, so
 | Paso | Qué | Estado |
 |---|---|---|
 | A1 | Corregir el alta de usuarios (el rol sólo sale de los datos del servidor) | Hecho (`70981b8`) |
-| A2 | Aplicar en Supabase esa corrección y las migraciones de Contabilidad, revisar los perfiles creados antes y hacer la prueba de humo con `VITE_BACKEND=supabase` | Con el usuario presente |
-| A3 | Subir las ramas a GitHub (respaldo) | Necesita autorización |
-| A4 | Llevar `mejoras/integracion` a `main` después de la prueba de humo | Necesita autorización |
+| A2 | Aplicar en Supabase esa corrección y las migraciones de Contabilidad, revisar los perfiles creados antes y hacer la prueba de humo con `VITE_BACKEND=supabase` | Migraciones aplicadas y perfiles revisados (16/10); falta la prueba de humo con cuentas reales (la hace el usuario) |
+| A3 | Subir las ramas a GitHub (respaldo) | Hecho (16/10; el repo es público) |
+| A4 | Llevar `mejoras/integracion` a `main` | Hecho (16/10): `main` se publica en GitHub Pages contra Supabase |
+| A6 | Revocar el token personal de Supabase usado el 16/10 y rotar las claves del proyecto | Lo hace el usuario |
 | A5 | Decidir la rama del módulo "Seguimiento y Evaluación" (sin commitear en la carpeta principal) | Decide el usuario |
 
 ## Etapa B — Datos de demostración más ricos
