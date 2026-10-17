@@ -37,7 +37,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 | `VENTAS` | Ventas | 3 | Ventas | Clientes (MVP); presupuestos, pedidos y facturación (Fase 4) |
 | `CONTABILIDAD` | Contabilidad | 4 | Contabilidad | Plan de cuentas, asientos, libros y cierre de los meses (Fase 2); balances (fases siguientes) |
 | `IMPUESTOS` | Impuestos | 4 | Impuestos | Libros IVA, obligaciones y vencimientos (Fase 7) |
-| `TESORERIA` | Tesorería y Finanzas | 5 | Tesorería | Pagos, cobros, cajas y bancos (Fase 3+) |
+| `TESORERIA` | Tesorería y Finanzas | 5 | Tesorería | Prepara y ejecuta los pagos a proveedores y controla cajas y bancos (Fase 3b); cobros desde la Fase 4 |
 | `RRHH` | Recursos Humanos y Sueldos | 6 | RRHH | Legajos, novedades y liquidación (Fase 6) |
 | `PRODUCCION` | Producción | 7 | Producción | Detecta necesidades (SC en MVP); órdenes de producción (Fase 5) |
 | `COSTOS` *(Fase 5)* | Costos | 7 | Costos | Costeo de órdenes, previsto vs. real |
@@ -49,7 +49,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 
 ## 3. Permisos
 
-Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar), `update` (modificar/avanzar), `approve` (aprobar/rechazar), `cancel` (anular/cerrar), `delete` (borrar — reservado), `export` (exportar/imprimir listados).
+Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar), `update` (modificar/avanzar), `approve` (aprobar/rechazar), `cancel` (anular/cerrar), `delete` (borrar — reservado), `export` (exportar/imprimir listados) y, desde la Fase 3b, `pay` (pagar).
 
 ### 3.1 Catálogo del MVP
 
@@ -58,7 +58,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | core | `company.read`, `company.update`, `member.read`, `sector.read` |
 | masters | `customer.read/create/update/export`, `supplier.read/create/update/export`, `product.read/create/update/export` |
 | purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export`; desde la Fase 3, `supplier_invoice.read/create/cancel` (facturas de proveedor) |
-| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores) |
+| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos) |
 | inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel` |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
@@ -68,7 +68,7 @@ Implícitos para cualquier miembro: ver y tomar sus tareas, sus notificaciones, 
 
 ## 4. Matriz del MVP
 
-Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar · **X** anular/cerrar · **E** exportar · — sin acceso.
+Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar · **X** anular/cerrar · **E** exportar · **P** pagar · — sin acceso.
 
 | Recurso | GER | COM | VEN | DEP | PRO | CON | TES | RRHH | IMP | LOG | AUD | DOC |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -91,14 +91,17 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Factura de proveedor (Fase 3) | L | L C X⁴ | — | — | — | L | L | — | L | — | L | Todo |
 | Cuenta corriente de proveedores (Fase 3) | L | L | — | — | — | L | L | — | — | — | L | Todo |
 | Imputación automática (Fase 3) | L | — | — | — | — | L M | — | — | — | — | L | Todo |
+| Orden de pago (Fase 3b) | L A⁶ | — | — | — | — | L C X | L C P X | — | — | — | L | Todo |
+| Cajas y bancos (Fase 3b) | L | — | — | — | — | L | L | — | — | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
 ³ Sólo el docente reabre un mes cerrado (con motivo) y abre un ejercicio nuevo.
 ⁴ Compras registra la factura contra lo recibido (nunca más de lo que llegó) y la anula sólo si no tiene pagos; el asiento de compra se genera solo, con las reglas de imputación de Contabilidad.
 ⁵ Gerencia anula recepciones que registró Depósito (SoD-3); no se anula una recepción ya facturada.
+⁶ Gerencia autoriza (o rechaza) cada orden de pago; quien la preparó no la aprueba. Tesorería la paga si alcanza el saldo de la caja o el banco, y no paga facturas que registró (SoD-5).
 
-En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros.
+En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
 ## 5. Reglas de aprobación del MVP
 
@@ -122,7 +125,8 @@ Se implementa como regla explícita porque es **contenido a enseñar**, no sólo
 | SoD-2 | Compras no registra recepciones; Depósito no emite OC | Matriz de permisos | MVP |
 | SoD-3 | Quien confirmó una recepción no la anula (otro usuario de Depósito o Gerencia) | Validación en `gr_cancel` | MVP (P1) |
 | SoD-4 | Quien carga un ajuste negativo relevante no lo aprueba | Regla de aprobación | 2 |
-| SoD-5 | Quien registra la factura del proveedor no emite el pago | Matriz + validación | 3 |
+| SoD-5 | Quien registra la factura del proveedor no la paga | Matriz + validación en `op_pay` | 3b |
+| SoD-7 | Quien prepara una orden de pago no la aprueba ni la rechaza | Validación en `op_approve` y `op_reject` | 3b |
 | SoD-6 | Quien liquida sueldos no aprueba la liquidación | Regla de aprobación | 6 |
 
 - Configuración por empresa: `settings.sod_enabled` (por defecto **activado**). Si una isla tiene un solo estudiante, el docente puede desactivarla o aprobar como supervisor.

@@ -1,6 +1,6 @@
 # Base de datos (Supabase)
 
-Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTEGR-AR. En el proyecto de desarrollo están aplicadas hasta la del logo de la escuela; faltan la del alta segura de usuarios (`20261013120000`), las de Contabilidad (`20261014120000` a `20261014120300`; la última le agrega la contabilidad a las empresas que ya existían) y las de la Fase 3a (`20261015120000` a `20261015120400`: factura de proveedor, cuentas corrientes e imputación automática; la `…120300` le carga las reglas de imputación a las empresas que ya existían y la `…120400` aclara el mensaje de una lectura sin permiso). La interfaz usa el backend simulado (`src/lib/mock`, la especificación ejecutable de estas reglas) salvo que se compile con `VITE_BACKEND=supabase`: entonces usa este backend a través de `src/lib/api/supabase.ts`, con el mismo contrato.
+Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTEGR-AR. En el proyecto de desarrollo están aplicadas hasta la del logo de la escuela; faltan la del alta segura de usuarios (`20261013120000`), las de Contabilidad (`20261014120000` a `20261014120300`; la última le agrega la contabilidad a las empresas que ya existían) y las de la Fase 3a (`20261015120000` a `20261015120400`: factura de proveedor, cuentas corrientes e imputación automática; la `…120300` le carga las reglas de imputación a las empresas que ya existían y la `…120400` aclara el mensaje de una lectura sin permiso) y las de la Fase 3b (`20261016120000` a `20261016120300`: cajas y bancos y órdenes de pago; la última le agrega la regla de imputación de los pagos a las empresas que ya existían). La interfaz usa el backend simulado (`src/lib/mock`, la especificación ejecutable de estas reglas) salvo que se compile con `VITE_BACKEND=supabase`: entonces usa este backend a través de `src/lib/api/supabase.ts`, con el mismo contrato.
 
 ## Estructura
 
@@ -38,7 +38,7 @@ Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTE
 | Cuentas: altas de estudiantes y docentes, restablecer contraseña (Edge Function `admin-users`) | Listo |
 | Contabilidad (Fase 2): plan de cuentas, ejercicios y períodos, asientos con contraasiento, libro diario, mayor, sumas y saldos y apertura de cada empresa | Listo (sin aplicar) |
 | Fase 3a: motor de imputación (`posting_rules`), factura de proveedor con control contra lo recibido y asiento automático, cuentas corrientes de proveedores | Listo (sin aplicar) |
-| Fase 3b: tesorería (cajas y bancos, órdenes de pago) | Pendiente |
+| Fase 3b: cajas y bancos (cuentas del rubro Caja y bancos) y órdenes de pago con aprobación, pago con su asiento y anulación con contraasiento | Listo (sin aplicar) |
 | Adaptador de la interfaz (`src/lib/api/supabase.ts`): sesión con Auth, RPC, cuentas, sondeo cada 20 s | Listo |
 | Logo de la escuela (Storage), Realtime opcional | Pendiente |
 

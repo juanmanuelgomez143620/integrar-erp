@@ -7,7 +7,7 @@ Diseño corto. Sigue [ROADMAP.md §3](../ROADMAP.md) (Fase 3), [DATABASE.md §15
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
 | 3a | Motor de imputación, factura de proveedor y cuenta corriente | La compra termina en un asiento automático y en la deuda con el proveedor | Hecho (simulador, pantallas y Supabase con paridad) |
-| 3b | Tesorería: cajas y bancos, orden de pago con aprobación y pago | La deuda se cancela; el pago mueve el banco o la caja y genera su asiento | Pendiente |
+| 3b | Tesorería: cajas y bancos, orden de pago con aprobación y pago | La deuda se cancela; el pago mueve el banco o la caja y genera su asiento | Hecho (simulador, pantallas y Supabase con paridad) |
 | 3c | Solicitud de cotización, cotizaciones y cuadro comparativo | La OC nace de la mejor cotización | Pendiente |
 | 3d | Transferencias entre cuentas, cheques, conciliación simplificada y flujo de fondos | Tesorería completa | Pendiente |
 
@@ -36,9 +36,12 @@ Se calcula, nunca se edita: por proveedor, las facturas registradas (aumentan la
 
 ## 5. Tesorería (3b)
 
-- **Cajas y bancos** de la empresa, cada una con su cuenta contable (Caja → 1.1.01.01, Banco cuenta corriente → 1.1.01.03). El saldo sale del libro mayor: no hay saldos editables.
-- **Orden de pago (`OP-00001`)**: la prepara Contabilidad o Tesorería para un proveedor, con las facturas que cancela y el importe de cada una, y desde qué caja o banco se paga. **Borrador → Pendiente de aprobación** (la aprueba Gerencia) **→ Aprobada → Pagada** (Tesorería la ejecuta: asiento `PAGO` y la factura pasa a pagada). Separación de funciones (SoD-5): quien registró una factura no la paga.
-- Los movimientos de cada caja y banco son su libro mayor.
+- **Cajas y bancos** son las cuentas imputables del rubro 1.1.01 "Caja y bancos" del plan de cuentas (Caja, Fondo fijo, Banco cuenta corriente, Valores a depositar y las que agregue Contabilidad): no hay un maestro aparte ni saldos editables. La pantalla "Cajas y bancos" muestra el saldo de cada una, que sale del libro mayor, y lleva a sus movimientos (su mayor).
+- **Orden de pago (`OP-00001`)**: la prepara Contabilidad o Tesorería para **un** proveedor: qué facturas cancela, cuánto de cada una (pago total o parcial) y desde qué caja o banco. Por factura, como mucho su saldo menos lo que ya está en otras órdenes en curso (lo reservado no se paga dos veces). No se modifica: si está mal, se anula y se prepara otra.
+- Estados: **Borrador → Pendiente de aprobación → Aprobada** (Gerencia) **→ Pagada** (Tesorería). Gerencia puede **rechazarla** con motivo (queda Rechazada). Antes de pagarse se anula con motivo; una orden **pagada** se anula con el contraasiento de su pago y las facturas vuelven a tener saldo.
+- **Pagar**: la caja o el banco tiene que tener saldo suficiente; genera el asiento automático `PAGO` (Proveedores al debe, la caja o el banco al haber) con fecha de hoy, y cada factura pasa a **Pagada parcialmente** o **Pagada**. Se puede anotar una referencia (número de transferencia o de cheque).
+- **Separación de funciones**: quien preparó la orden no la aprueba ni la rechaza; quien registró una de sus facturas no la paga (SoD-5).
+- Una factura incluida en una orden en curso no se anula: primero se anula la orden. En la cuenta corriente, los pagos van al debe y bajan el saldo.
 
 ## 6. Permisos (a validar)
 
@@ -48,4 +51,7 @@ Se calcula, nunca se edita: por proveedor, las facturas registradas (aumentan la
 | `supplier_invoice.create/cancel` | Compras (un borrador no se modifica: se anula y se carga de nuevo) |
 | `payable.read` (cuenta corriente) | Compras, Contabilidad, Tesorería, Gerencia, Auditoría |
 | `posting_rule.read/update` | Contabilidad (lectura: Gerencia, Auditoría) |
-| `payment_order.*`, `treasury.*` (3b) | Contabilidad y Tesorería operan; Gerencia aprueba |
+| `treasury.read` (cajas y bancos), `payment_order.read` | Contabilidad, Tesorería, Gerencia, Auditoría |
+| `payment_order.create/cancel` | Contabilidad y Tesorería |
+| `payment_order.approve` | Gerencia |
+| `payment_order.pay` | Tesorería |
