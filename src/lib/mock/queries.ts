@@ -10,10 +10,13 @@ import {
   TRANSITIONS,
   type StatusInfo,
 } from '../domain/catalog'
+import { TREASURY_RUBRO } from '../domain/chart-of-accounts'
 import type * as T from '../domain/types'
 import { date, money, todayAR } from '../format'
 import type { DB } from './db'
 import {
+  accountBalance,
+  accountLabel,
   can,
   docPath,
   effectivePermissions,
@@ -23,7 +26,10 @@ import {
   getMemberRoles,
   getProfile,
   INVOICED_STATUSES,
+  invoiceCommitted,
   invoicedQuantity,
+  invoicePaid,
+  invoiceRegistrant,
   isInstanceAdmin,
   isPosted,
   isSchoolAdmin,
@@ -330,6 +336,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.jeLines.filter((l) => l.document_id === doc.id).length
     case 'SUPPLIER_INVOICE':
       return db.siLines.filter((l) => l.document_id === doc.id).length
+    case 'PAYMENT_ORDER':
+      return db.opLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -344,6 +352,7 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     case 'STOCK_ADJUSTMENT':
       return db.saLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'JOURNAL_ENTRY':
+    case 'PAYMENT_ORDER':
       return []
     case 'SUPPLIER_INVOICE':
       return db.siLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
@@ -351,9 +360,17 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
 }
 
 function listItem(db: DB, doc: T.Document): DocumentListItem {
-  const products = docLines(db, doc)
-    .map((l) => db.products.find((p) => p.id === l.product_id)?.code)
-    .filter(Boolean)
+  // Lo que resume cada fila: los productos o, en una orden de pago, las facturas que paga.
+  const products =
+    doc.doc_type === 'PAYMENT_ORDER'
+      ? db.opLines
+          .filter((l) => l.document_id === doc.id)
+          .sort(byLineNo)
+          .map((l) => db.documents.find((d) => d.id === l.invoice_id)?.display_number)
+          .filter(Boolean)
+      : docLines(db, doc)
+          .map((l) => db.products.find((p) => p.id === l.product_id)?.code)
+          .filter(Boolean)
   const pending = db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')
   const origins = db.docLinks
     .filter((l) => l.to_document_id === doc.id)
@@ -415,6 +432,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'PURCHASE_ORDER',
     'GOODS_RECEIPT',
     'SUPPLIER_INVOICE',
+    'PAYMENT_ORDER',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -494,6 +512,25 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     if (doc.doc_type === 'JOURNAL_ENTRY' && tr.action === 'CANCEL' && doc.je?.origin === 'CONTRAASIENTO') {
       reason = 'Un contraasiento no se anula. Si hubo un error, registrá el asiento correcto.'
     }
+    if (
+      doc.doc_type === 'PAYMENT_ORDER' &&
+      (tr.action === 'APPROVE' || tr.action === 'REJECT') &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      doc.created_by === userId
+    ) {
+      reason = 'Separación de funciones: no podés aprobar ni rechazar una orden de pago que preparaste vos.'
+    }
+    if (
+      doc.doc_type === 'PAYMENT_ORDER' &&
+      tr.action === 'PAY' &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      db.opLines.some((l) => l.document_id === doc.id && invoiceRegistrant(db, l.invoice_id) === userId)
+    ) {
+      reason =
+        'Separación de funciones: registraste una de las facturas; tiene que pagarla otro integrante de Tesorería.'
+    }
     result.push({
       action: tr.action,
       label: tr.label,
@@ -559,8 +596,8 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       }
     case 'PURCHASE_ORDER:RECIBIDO':
       return {
-        who: 'Próxima fase',
-        text: 'Circuito de compra completo. En la Fase 3 continuará con la factura del proveedor, el pago y el asiento contable.',
+        who: 'Compras',
+        text: 'Llegó todo lo pedido. Cuando llegue la factura del proveedor, se registra contra esta orden y lo recibido.',
       }
     case 'GOODS_RECEIPT:BORRADOR':
       return {
@@ -586,6 +623,33 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       return {
         who: 'Contabilidad y Tesorería',
         text: `La deuda está en la cuenta corriente del proveedor y vence el ${date(doc.si?.due_date)}. Se cancela con una orden de pago.`,
+      }
+    case 'PAYMENT_ORDER:BORRADOR':
+      return {
+        who: 'Contabilidad o Tesorería',
+        text: 'Revisar las facturas, los importes y la caja o el banco, y enviar la orden a aprobación.',
+      }
+    case 'PAYMENT_ORDER:PENDIENTE_APROBACION':
+      return {
+        who: 'Gerencia',
+        text: 'Autorizar el pago o rechazarlo con motivo. Quien preparó la orden no puede aprobarla: es un control de separación de funciones.',
+      }
+    case 'PAYMENT_ORDER:APROBADA': {
+      const account = db.accounts.find((a) => a.id === doc.op?.treasury_account_id)
+      return {
+        who: 'Tesorería',
+        text: `Pagar desde ${account ? accountLabel(account) : 'la caja o el banco'} y registrar el pago: el asiento se genera solo. Quien registró una de las facturas no puede pagarla.`,
+      }
+    }
+    case 'PAYMENT_ORDER:PAGADA':
+      return {
+        who: '—',
+        text: `Se pagó el ${date(doc.op?.paid_on)}: la deuda bajó en la cuenta corriente del proveedor y el pago está en el libro diario.`,
+      }
+    case 'PAYMENT_ORDER:RECHAZADA':
+      return {
+        who: 'Contabilidad o Tesorería',
+        text: `Motivo del rechazo: "${doc.status_reason}". Si igual hay que pagar, se prepara otra orden.`,
       }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
@@ -659,10 +723,36 @@ export interface JournalView {
   reverses: { display_number: string; path: string } | null
 }
 
+/** Una factura que cancela la orden de pago, y cuánto de ella. */
+export interface PaymentLineView {
+  id: string
+  line_no: number
+  invoice: {
+    id: string
+    display_number: string
+    path: string
+    /** Comprobante del proveedor: "A 00003-00012874". */
+    invoice_label: string
+    document_date: string
+    due_date: string
+    total: number
+    status_info: StatusInfo
+  }
+  amount: number
+}
+
+export interface PaymentView {
+  treasury_account: { id: string; code: string; name: string }
+  payment_reference: string
+  paid_on: string | null
+  lines: PaymentLineView[]
+}
+
 export interface DocumentDetail {
   doc: DocumentListItem
   lines: DetailLine[]
   journal: JournalView | null
+  payment: PaymentView | null
   supplier: T.Supplier | null
   warehouse: T.Warehouse | null
   related_order: DocumentListItem | null
@@ -827,14 +917,21 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
               { label: 'Registró', ...firstBy(['CONFIRM', 'CREATE']) },
               { label: doc.doc_type === 'JOURNAL_ENTRY' ? 'Revisó' : 'Controló', name: '', sector: '', at: '' },
             ]
-          : [
-              { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-              { label: 'Controló', name: '', sector: '', at: '' },
-            ]
+          : doc.doc_type === 'PAYMENT_ORDER'
+            ? [
+                { label: 'Preparó', ...firstBy(['SUBMIT', 'CREATE']) },
+                { label: 'Autorizó', ...firstBy(['APPROVE']) },
+                { label: 'Pagó', ...firstBy(['PAY']) },
+              ]
+            : [
+                { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                { label: 'Controló', name: '', sector: '', at: '' },
+              ]
   return {
     doc: listItem(db, doc),
     lines,
     journal: doc.je ? journalView(db, doc) : null,
+    payment: doc.op ? paymentView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     warehouse: db.warehouses.find((w) => w.id === warehouseId) ?? null,
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
@@ -852,6 +949,37 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     actions: availableActions(db, userId, doc),
     next_step: nextStep(db, doc),
     signatures,
+  }
+}
+
+function paymentView(db: DB, doc: T.Document): PaymentView {
+  const op = doc.op!
+  const account = db.accounts.find((a) => a.id === op.treasury_account_id)!
+  return {
+    treasury_account: { id: account.id, code: account.code, name: account.name },
+    payment_reference: op.payment_reference,
+    paid_on: op.paid_on,
+    lines: db.opLines
+      .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
+      .map((l) => {
+        const invoice = db.documents.find((d) => d.id === l.invoice_id)!
+        return {
+          id: l.id,
+          line_no: l.line_no,
+          invoice: {
+            id: invoice.id,
+            display_number: invoice.display_number,
+            path: docPath(db, invoice),
+            invoice_label: `${invoice.si!.letter} ${invoice.si!.point_of_sale}-${invoice.si!.invoice_number}`,
+            document_date: invoice.document_date,
+            due_date: invoice.si!.due_date,
+            total: invoice.total,
+            status_info: DOC_STATUSES[invoice.doc_type][invoice.status],
+          },
+          amount: l.amount,
+        }
+      }),
   }
 }
 
@@ -1297,11 +1425,8 @@ function registeredInvoices(db: DB, companyId: string) {
   )
 }
 
-/** Lo pagado de una factura (desde la Fase 3b, por las órdenes de pago pagadas). */
-const paidAmount = (_db: DB, _invoiceId: string) => 0
-
 function payableInvoice(db: DB, doc: T.Document, today: string): PayableInvoice {
-  const paid = paidAmount(db, doc.id)
+  const paid = invoicePaid(db, doc.id)
   return {
     id: doc.id,
     display_number: doc.display_number,
@@ -1374,22 +1499,85 @@ export function supplierAccount(db: DB, userId: string, companyId: string, suppl
   const invoices = registeredInvoices(db, companyId)
     .filter((d) => d.supplier_id === supplier.id)
     .sort((a, b) => compareCodes(a.document_date, b.document_date) || a.number - b.number)
+  const payments = db.documents.filter(
+    (d) =>
+      d.company_id === companyId &&
+      d.doc_type === 'PAYMENT_ORDER' &&
+      d.status === 'PAGADA' &&
+      d.supplier_id === supplier.id,
+  )
+  // Facturas (haber) y pagos (debe) por fecha; el mismo día, primero las facturas.
+  const entries = [
+    ...invoices.map((doc) => ({ doc, date: doc.document_date, payment: false })),
+    ...payments.map((doc) => ({ doc, date: doc.op!.paid_on!, payment: true })),
+  ].sort((a, b) => compareCodes(a.date, b.date) || Number(a.payment) - Number(b.payment) || a.doc.number - b.doc.number)
   let balance = 0
-  const movements = invoices.map((d) => {
-    balance = round2(balance + d.total)
+  const movements = entries.map(({ doc: d, date: on, payment }) => {
+    balance = round2(balance + (payment ? -d.total : d.total))
+    const account = payment ? db.accounts.find((a) => a.id === d.op!.treasury_account_id) : undefined
     return {
       document_id: d.id,
       display_number: d.display_number,
       path: docPath(db, d),
-      date: d.document_date,
-      description: `Factura ${d.si!.letter} ${d.si!.point_of_sale}-${d.si!.invoice_number}`,
-      debit: 0,
-      credit: d.total,
+      date: on,
+      description: payment
+        ? `Pago desde ${account?.name ?? ''}${d.op!.payment_reference ? ` (${d.op!.payment_reference})` : ''}`
+        : `Factura ${d.si!.letter} ${d.si!.point_of_sale}-${d.si!.invoice_number}`,
+      debit: payment ? d.total : 0,
+      credit: payment ? 0 : d.total,
       balance,
     }
   })
   const pending = invoices.map((d) => payableInvoice(db, d, today)).filter((i) => i.pending > 0)
   return { supplier, movements, pending, balance }
+}
+
+// ============================================================ Tesorería
+
+export interface TreasuryAccountRow {
+  account: { id: string; code: string; name: string; description: string; is_active: boolean }
+  /** Saldo del libro mayor. */
+  balance: number
+}
+
+/** Cajas y bancos: las cuentas imputables del rubro Caja y bancos, con su saldo del libro mayor. */
+export function treasuryAccounts(db: DB, userId: string, companyId: string): TreasuryAccountRow[] {
+  assertPerm(db, userId, companyId, 'treasury.read')
+  return db.accounts
+    .filter((a) => a.company_id === companyId && a.is_imputable && a.code.startsWith(`${TREASURY_RUBRO}.`))
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((a) => ({
+      account: { id: a.id, code: a.code, name: a.name, description: a.description, is_active: a.is_active },
+      balance: accountBalance(db, a.id),
+    }))
+}
+
+export interface PaymentCandidate {
+  invoice: PayableInvoice
+  /** Lo que ya está en otras órdenes de pago en curso. */
+  committed: number
+  /** Lo que todavía se puede incluir en una orden nueva. */
+  available: number
+}
+
+/** Facturas de un proveedor que se pueden pagar, de la que vence primero (para preparar una orden de pago). */
+export function paymentCandidates(db: DB, userId: string, companyId: string, supplierId: string): PaymentCandidate[] {
+  assertPerm(db, userId, companyId, 'payment_order.create')
+  const today = todayAR()
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'SUPPLIER_INVOICE' &&
+        d.supplier_id === supplierId &&
+        ['REGISTRADA', 'PAGADA_PARCIAL'].includes(d.status),
+    )
+    .sort((a, b) => compareCodes(a.si!.due_date, b.si!.due_date) || a.number - b.number)
+    .map((d) => {
+      const invoice = payableInvoice(db, d, today)
+      const committed = invoiceCommitted(db, d.id)
+      return { invoice, committed, available: round2(invoice.pending - committed) }
+    })
 }
 
 // ============================================================ Imputación automática

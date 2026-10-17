@@ -14,10 +14,13 @@ export function PrintPage() {
   const { docId = '' } = useParams()
   const company = useCompany()
   const navigate = useNavigate()
-  const { data, isLoading } = useQuery({ queryKey: ['document-by-id', docId], queryFn: () => api.documentById(docId) })
-  if (isLoading) return <Loading />
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['document-by-id', docId],
+    queryFn: () => api.documentById(docId),
+  })
+  if (isLoading || error) return <Loading error={error} />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
-  const { doc, lines, supplier, warehouse, journal } = data
+  const { doc, lines, supplier, warehouse, journal, payment } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
   const th = 'border-b border-slate-300 px-2 py-1.5 text-left text-[11px] font-semibold uppercase text-slate-600'
@@ -143,6 +146,26 @@ export function PrintPage() {
               </div>
             </>
           )}
+          {payment && (
+            <>
+              <div className="col-span-2 rounded border border-slate-300 p-2">
+                <div className="text-[11px] font-semibold text-slate-600 uppercase">Se paga a</div>
+                <div className="font-semibold">{supplier?.legal_name}</div>
+                <div>
+                  CUIT {supplier?.tax_id} (simulado) · {supplier ? VAT_CONDITIONS[supplier.vat_condition] : ''}
+                </div>
+              </div>
+              <div>
+                <b>Paga desde:</b> {payment.treasury_account.code} {payment.treasury_account.name}
+              </div>
+              <div>
+                <b>Pago:</b>{' '}
+                {payment.paid_on
+                  ? `${date(payment.paid_on)}${payment.payment_reference ? ` · ${payment.payment_reference}` : ''}`
+                  : 'pendiente'}
+              </div>
+            </>
+          )}
           {doc.doc_type === 'STOCK_ADJUSTMENT' && doc.sa && (
             <>
               <div>
@@ -215,7 +238,40 @@ export function PrintPage() {
           </table>
         )}
 
-        {!journal && (
+        {payment && (
+          <table className="mt-4 w-full border-collapse">
+            <thead>
+              <tr>
+                <th className={th}>#</th>
+                <th className={th}>Factura</th>
+                <th className={th}>Comprobante del proveedor</th>
+                <th className={th}>Vence</th>
+                <th className={`${th} text-right`}>Total de la factura</th>
+                <th className={`${th} text-right`}>Se paga</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payment.lines.map((l) => (
+                <tr key={l.id}>
+                  <td className={td}>{l.line_no}</td>
+                  <td className={`${td} font-mono`}>{l.invoice.display_number}</td>
+                  <td className={td}>Factura {l.invoice.invoice_label}</td>
+                  <td className={td}>{date(l.invoice.due_date)}</td>
+                  <td className={`${td} text-right`}>{money(l.invoice.total)}</td>
+                  <td className={`${td} text-right`}>{money(l.amount)}</td>
+                </tr>
+              ))}
+              <tr className="font-bold">
+                <td className={td} colSpan={5}>
+                  TOTAL A PAGAR
+                </td>
+                <td className={`${td} text-right`}>{money(doc.total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
+        {!journal && !payment && (
           <table className="mt-4 w-full border-collapse">
             <thead>
               <tr>
@@ -279,7 +335,7 @@ export function PrintPage() {
           </div>
         )}
 
-        <section className="mt-12 grid grid-cols-2 gap-10">
+        <section className={`mt-12 grid gap-10 ${data.signatures.length > 2 ? 'grid-cols-3' : 'grid-cols-2'}`}>
           {data.signatures.map((s) => (
             <div key={s.label} className="text-center">
               <div className="h-10 text-[11px] text-slate-600">

@@ -3,6 +3,7 @@
 
 import type { ComponentType } from 'react'
 import {
+  Banknote,
   Bell,
   BookMarked,
   BookOpen,
@@ -13,6 +14,7 @@ import {
   GraduationCap,
   History,
   Inbox,
+  Landmark,
   LayoutDashboard,
   ListTree,
   NotebookPen,
@@ -71,7 +73,11 @@ export const NAV: NavGroup[] = [
   },
   {
     label: 'Pagos y tesorería',
-    items: [{ label: 'Cuentas corrientes', path: 'pagos/proveedores', icon: Wallet, permission: 'payable.read' }],
+    items: [
+      { label: 'Cuentas corrientes', path: 'pagos/proveedores', icon: Wallet, permission: 'payable.read' },
+      { label: 'Órdenes de pago', path: 'pagos/ordenes', icon: Banknote, permission: 'payment_order.read' },
+      { label: 'Cajas y bancos', path: 'pagos/cajas-y-bancos', icon: Landmark, permission: 'treasury.read' },
+    ],
   },
   {
     label: 'Depósito',

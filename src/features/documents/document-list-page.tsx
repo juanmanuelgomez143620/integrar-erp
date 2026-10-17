@@ -21,6 +21,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   STOCK_ADJUSTMENT: { area: 'Depósito', newLabel: 'Nuevo ajuste', createPerm: 'stock_adjustment.create' },
   JOURNAL_ENTRY: { area: 'Contabilidad', newLabel: 'Nuevo asiento', createPerm: 'journal_entry.create' },
   SUPPLIER_INVOICE: { area: 'Compras', newLabel: 'Registrar factura', createPerm: 'supplier_invoice.create' },
+  PAYMENT_ORDER: { area: 'Pagos y tesorería', newLabel: 'Nueva orden de pago', createPerm: 'payment_order.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -31,7 +32,11 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
   const info = DOC_TYPES[docType]
   const section = SECTION[docType]
   const [status, setStatus] = useState<string>('ALL')
-  const { data = [], isLoading } = useQuery({
+  const {
+    data = [],
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['documents', company.companyId, docType],
     queryFn: () => api.documents(company.companyId, docType),
   })
@@ -146,6 +151,19 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'PAYMENT_ORDER') {
+    columns.push(
+      { key: 'supplier', header: 'Proveedor', sort: (d) => d.supplier_name, cell: (d) => d.supplier_name },
+      { key: 'invoices', header: 'Facturas', cell: (d) => <span className="font-mono text-xs">{d.summary}</span> },
+      {
+        key: 'total',
+        header: 'Importe',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   if (docType === 'JOURNAL_ENTRY') {
     columns.push(
       {
@@ -219,6 +237,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       <DataTable<DocumentListItem>
         rows={rows}
         loading={isLoading}
+        error={error}
         columns={columns}
         rowKey={(d) => d.id}
         search={(d) =>

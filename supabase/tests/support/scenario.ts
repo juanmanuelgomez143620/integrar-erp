@@ -10,13 +10,16 @@ import { buildSeed } from '../../../src/lib/mock/seed'
 export function buildScenario(): DB {
   const db = buildSeed()
   const company = db.companies.find((c) => c.is_template)!.id
-  // Cada operación un minuto después de la anterior: el orden por fecha no tiene empates.
-  let clock = Date.parse(db.seededAt) + 60_000
-  const as = (username: string): E.Ctx => ({
-    db,
-    userId: db.profiles.find((p) => p.username === username)!.id,
-    now: new Date((clock += 60_000)).toISOString(),
-  })
+  // Cada operación diez segundos después de la anterior (el orden por fecha no
+  // tiene empates), entre lo último del seed (hace 30 minutos) y el momento en
+  // que se arma: así todo queda antes de lo que hagan las pruebas de comandos.
+  let clock = Date.parse(db.seededAt) - 25 * 60_000
+  const as = (username: string): E.Ctx => {
+    clock += 10_000
+    if (clock >= Date.parse(db.seededAt))
+      throw new Error('El escenario tiene demasiadas operaciones para su ventana de tiempo.')
+    return { db, userId: db.profiles.find((p) => p.username === username)!.id, now: new Date(clock).toISOString() }
+  }
   const product = (code: string) => db.products.find((p) => p.code === code)!
   const supplier = (code: string) => db.suppliers.find((s) => s.code === code)!.id
   const warehouse = (code: string) => db.warehouses.find((w) => w.code === code)!.id
@@ -86,7 +89,7 @@ export function buildScenario(): DB {
     notes: '',
     lines: lines.map(([po_line_id, quantity, unit_price]) => ({ po_line_id, quantity, unit_price })),
   })
-  E.cmdCreateSupplierInvoice(
+  const overdue = E.cmdCreateSupplierInvoice(
     as('compras1'),
     company,
     invoice(oc2.id, '7', '2201', [[oc2Line.id, 20, 1300]], addDays(todayAR(), -40)),
@@ -123,12 +126,43 @@ export function buildScenario(): DB {
     },
     true,
   )
-  E.cmdCreateSupplierInvoice(
+  const serviceInvoice = E.cmdCreateSupplierInvoice(
     as('compras2'),
     company,
     invoice(service.id, '2', '845', [[serviceLine.id, 1, 38000]]),
     true,
   )
+
+  // Órdenes de pago en cada estado: la de la demo, aprobada y pagada; un pago
+  // parcial de la factura vencida, un borrador desde la caja, una rechazada y
+  // una pagada y anulada con su contraasiento; y la del servicio, aprobada.
+  const treasury = (code: string) => db.accounts.find((a) => a.company_id === company && a.code === code)!.id
+  const payment = (invoiceId: string, amount: number, from = '1.1.01.03'): E.PaymentOrderInput => ({
+    supplier_id: db.documents.find((d) => d.id === invoiceId)!.supplier_id!,
+    treasury_account_id: treasury(from),
+    notes: '',
+    lines: [{ invoice_id: invoiceId, amount }],
+  })
+  const demoPayment = db.documents.find((d) => d.company_id === company && d.doc_type === 'PAYMENT_ORDER')!
+  E.cmdApprovePaymentOrder(as('gerencia'), demoPayment.id, 'Vence este mes')
+  E.cmdPayPaymentOrder(as('tesoreria'), demoPayment.id, 'Transferencia 000451')
+  const partial = E.cmdCreatePaymentOrder(as('contabilidad'), company, payment(overdue.id, 10000), true)
+  E.cmdApprovePaymentOrder(as('gerencia'), partial.id, '')
+  E.cmdPayPaymentOrder(as('tesoreria'), partial.id, '')
+  E.cmdCreatePaymentOrder(as('tesoreria'), company, payment(overdue.id, 5000, '1.1.01.01'), false)
+  const rejectedPayment = E.cmdCreatePaymentOrder(as('contabilidad'), company, payment(overdue.id, 3000), true)
+  E.cmdRejectPaymentOrder(as('gerencia'), rejectedPayment.id, 'Primero se paga lo vencido de otros proveedores')
+  const reverted = E.cmdCreatePaymentOrder(as('contabilidad'), company, payment(overdue.id, 2000), true)
+  E.cmdApprovePaymentOrder(as('gerencia'), reverted.id, '')
+  E.cmdPayPaymentOrder(as('tesoreria'), reverted.id, 'Cheque 12345')
+  E.cmdCancelPaymentOrder(as('tesoreria'), reverted.id, 'El cheque fue rechazado')
+  const servicePayment = E.cmdCreatePaymentOrder(
+    as('tesoreria'),
+    company,
+    payment(serviceInvoice.id, 38000, '1.1.01.01'),
+    true,
+  )
+  E.cmdApprovePaymentOrder(as('gerencia'), servicePayment.id, '')
 
   // SC en borrador y SC rechazada por Compras.
   E.cmdCreateRequisition(as('produccion'), company, requisition([['IN-001', 5]]), false)

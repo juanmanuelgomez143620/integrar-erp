@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 2).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 3b).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261015120200_demo_template_compras_pagos.sql'
+const target = process.argv[2] ?? '20261016120200_demo_template_tesoreria.sql'
 
 const server = await createServer({
   root,
@@ -171,6 +171,14 @@ ${values(chart.BASE_POSTING_RULES, ['event', 'key', 'code'])}
    );
 end;
 $$;
+
+-- Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga.
+create or replace function private.treasury_rubro()
+returns text
+language sql
+immutable
+set search_path = ''
+as $$ select ${sql(chart.TREASURY_RUBRO)}::text $$;
 
 -- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()

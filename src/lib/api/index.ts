@@ -34,6 +34,9 @@ export type {
   MemberView,
   PayableInvoice,
   PayableRow,
+  PaymentCandidate,
+  PaymentLineView,
+  PaymentView,
   PendingRequisitionLine,
   PeriodView,
   PostingRuleRow,
@@ -44,6 +47,7 @@ export type {
   SupplierAccount,
   SupplierAccountMovement,
   TaskItem,
+  TreasuryAccountRow,
   TrialBalance,
   TrialBalanceRow,
 } from '../mock/queries'
@@ -53,6 +57,7 @@ export type {
   CourseInput,
   GoodsReceiptInput,
   JournalEntryInput,
+  PaymentOrderInput,
   PurchaseOrderInput,
   RequisitionInput,
   SchoolSettingsInput,
@@ -155,6 +160,9 @@ const mockApi = {
   supplierAccount: (companyId: string, supplierId: string) =>
     query((db, u) => Q.supplierAccount(db, u, companyId, supplierId)),
   postingRules: (companyId: string) => query((db, u) => Q.listPostingRules(db, u, companyId)),
+  treasuryAccounts: (companyId: string) => query((db, u) => Q.treasuryAccounts(db, u, companyId)),
+  paymentCandidates: (companyId: string, supplierId: string) =>
+    query((db, u) => Q.paymentCandidates(db, u, companyId, supplierId)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -226,6 +234,14 @@ const mockCommands = {
     command((c) => E.cmdCancelSupplierInvoice(c, docId, reason)),
   savePostingRule: (companyId: string, ruleId: string, accountId: string) =>
     command((c) => E.cmdSavePostingRule(c, companyId, ruleId, accountId)),
+
+  createPaymentOrder: (companyId: string, input: E.PaymentOrderInput, submit: boolean) =>
+    command((c) => E.cmdCreatePaymentOrder(c, companyId, input, submit)),
+  submitPaymentOrder: (docId: string) => command((c) => E.cmdSubmitPaymentOrder(c, docId)),
+  approvePaymentOrder: (docId: string, comment: string) => command((c) => E.cmdApprovePaymentOrder(c, docId, comment)),
+  rejectPaymentOrder: (docId: string, reason: string) => command((c) => E.cmdRejectPaymentOrder(c, docId, reason)),
+  payPaymentOrder: (docId: string, reference: string) => command((c) => E.cmdPayPaymentOrder(c, docId, reference)),
+  cancelPaymentOrder: (docId: string, reason: string) => command((c) => E.cmdCancelPaymentOrder(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

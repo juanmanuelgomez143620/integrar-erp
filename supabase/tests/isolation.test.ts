@@ -76,6 +76,8 @@ async function snapshot(company: string) {
     'posting_rules',
     'supplier_invoices',
     'supplier_invoice_lines',
+    'payment_orders',
+    'payment_order_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -101,7 +103,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
             ? B.journal
             : fn.startsWith('si_')
               ? B.invoice
-              : B.order
+              : fn.startsWith('op_')
+                ? B.paymentOrder
+                : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -112,6 +116,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     supplier_delivery_note: 'R-9999',
     point_of_sale: '1',
     invoice_number: '99',
+    treasury_account_id: B.account,
     reason_code: 'CONTEO_FISICO',
     payment_terms_days: 0,
     lines: [
@@ -126,6 +131,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         account_id: B.account,
         debit: 1,
         credit: 0,
+        invoice_id: B.invoice,
+        amount: 1,
       },
       { account_id: B.account, debit: 0, credit: 1 },
     ],
@@ -165,6 +172,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_username: 'intruso',
     p_reason: 'Intento de un intruso',
     p_comment: 'Intento de un intruso',
+    p_reference: 'Transferencia de un intruso',
     p_scope: 'all',
     p_limit: null,
     p_account_id: B.account,
@@ -301,6 +309,19 @@ beforeAll(async () => {
     })
   ).id
   B.rule = (await one(`select id from public.posting_rules where company_id = $1 limit 1`, [B.id])).id
+  B.paymentOrder = (
+    await rpc<{ id: string }>('docenteB', 'op_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        supplier_id: B.supplier,
+        treasury_account_id: (
+          await one(`select id from public.accounts where company_id = $1 and code = '1.1.01.03'`, [B.id])
+        ).id,
+        lines: [{ invoice_id: B.invoice, amount: 1000 }],
+      }),
+      p_submit: true,
+    })
+  ).id
   B.adjustment = (
     await one(`select id from public.documents where company_id = $1 and doc_type = 'STOCK_ADJUSTMENT' limit 1`, [B.id])
   ).id
@@ -337,6 +358,7 @@ beforeAll(async () => {
          union select id::text from public.journal_entry_lines where company_id = $1
          union select id::text from public.supplier_invoice_lines where company_id = $1
          union select id::text from public.posting_rules where company_id = $1
+         union select id::text from public.payment_order_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

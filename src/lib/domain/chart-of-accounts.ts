@@ -175,7 +175,11 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'COMPRA', key: 'SERVICIO', code: '5.2.02.04' },
   { event: 'COMPRA', key: 'IVA_CREDITO', code: '1.1.04.01' },
   { event: 'COMPRA', key: 'PROVEEDORES', code: '2.1.01.01' },
+  { event: 'PAGO', key: 'PROVEEDORES', code: '2.1.01.01' },
 ]
+
+/** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */
+export const TREASURY_RUBRO = '1.1.01'
 
 /** Cuenta de bienes de cambio de cada tipo de producto (asiento de apertura). */
 export const INVENTORY_ACCOUNTS: Record<ProductType, string | null> = {

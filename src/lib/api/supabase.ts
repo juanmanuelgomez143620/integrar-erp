@@ -253,6 +253,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     supplierAccount: (companyId, supplierId) =>
       rpc('supplier_account', { ...company(companyId), p_supplier_id: supplierId }),
     postingRules: (companyId) => rpc('posting_rules_list', company(companyId)),
+    treasuryAccounts: (companyId) => rpc('treasury_accounts', company(companyId)),
+    paymentCandidates: (companyId, supplierId) =>
+      rpc('payment_candidates', { ...company(companyId), p_supplier_id: supplierId }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
     fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
     journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
@@ -316,6 +319,14 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     cancelSupplierInvoice: (docId, reason) => rpc('si_cancel', { ...doc(docId), p_reason: reason }),
     savePostingRule: (companyId, ruleId, accountId) =>
       rpc('posting_rule_save', { ...company(companyId), p_rule_id: ruleId, p_account_id: accountId }),
+
+    createPaymentOrder: (companyId, input, submit) =>
+      rpc('op_create', { ...company(companyId), p_input: input, p_submit: submit }),
+    submitPaymentOrder: (docId) => rpc('op_submit', doc(docId)),
+    approvePaymentOrder: (docId, comment) => rpc('op_approve', { ...doc(docId), p_comment: comment }),
+    rejectPaymentOrder: (docId, reason) => rpc('op_reject', { ...doc(docId), p_reason: reason }),
+    payPaymentOrder: (docId, reference) => rpc('op_pay', { ...doc(docId), p_reference: reference }),
+    cancelPaymentOrder: (docId, reason) => rpc('op_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

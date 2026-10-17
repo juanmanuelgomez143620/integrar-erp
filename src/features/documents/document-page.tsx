@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
   ArrowRight,
+  Banknote,
   Info,
   Lightbulb,
   Pencil,
@@ -66,6 +67,13 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmSupplierInvoice(id),
     CANCEL: (id, t) => commands.cancelSupplierInvoice(id, t),
   },
+  PAYMENT_ORDER: {
+    SUBMIT: (id) => commands.submitPaymentOrder(id),
+    APPROVE: (id, t) => commands.approvePaymentOrder(id, t),
+    REJECT: (id, t) => commands.rejectPaymentOrder(id, t),
+    PAY: (id, t) => commands.payPaymentOrder(id, t),
+    CANCEL: (id, t) => commands.cancelPaymentOrder(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -75,6 +83,7 @@ const AREA: Record<DocType, string> = {
   STOCK_ADJUSTMENT: 'Depósito',
   JOURNAL_ENTRY: 'Contabilidad',
   SUPPLIER_INVOICE: 'Compras',
+  PAYMENT_ORDER: 'Pagos y tesorería',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -128,6 +137,11 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
     doc.doc_type === 'PURCHASE_ORDER' &&
     ['RECIBIDO_PARCIAL', 'RECIBIDO', 'CERRADO'].includes(doc.status) &&
     company.can('supplier_invoice.create')
+  const canPay =
+    doc.doc_type === 'SUPPLIER_INVOICE' &&
+    ['REGISTRADA', 'PAGADA_PARCIAL'].includes(doc.status) &&
+    !!detail.supplier &&
+    company.can('payment_order.create')
 
   const primary = detail.actions.filter((a) => a.tone === 'default')
   const secondary = detail.actions.filter((a) => a.tone !== 'default')
@@ -208,6 +222,13 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
                 </Link>
               </Button>
             )}
+            {canPay && (
+              <Button variant="outline" asChild>
+                <Link to={`${company.docPath('PAYMENT_ORDER', 'nueva')}?proveedor=${detail.supplier!.code}`}>
+                  <Banknote /> Preparar orden de pago
+                </Link>
+              </Button>
+            )}
             {primary.map(actionButton)}
           </>
         }
@@ -225,7 +246,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
           </div>
         </div>
       )}
-      {doc.status_reason && ['RECHAZADO', 'ANULADO', 'CERRADO'].includes(doc.status) && (
+      {doc.status_reason && ['RECHAZADO', 'RECHAZADA', 'ANULADO', 'ANULADA', 'CERRADO'].includes(doc.status) && (
         <div className="mb-4 flex gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />
           <div>
@@ -354,9 +375,15 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
           description={pending.help}
           confirmLabel={pending.label}
           tone={pending.tone === 'destructive' ? 'destructive' : 'default'}
-          reason={pending.requires_comment || pending.action === 'APPROVE'}
+          reason={pending.requires_comment || pending.action === 'APPROVE' || pending.action === 'PAY'}
           reasonRequired={pending.requires_comment}
-          reasonLabel={pending.action === 'APPROVE' ? 'Comentario' : 'Motivo'}
+          reasonLabel={
+            pending.action === 'APPROVE'
+              ? 'Comentario'
+              : pending.action === 'PAY'
+                ? 'Referencia (número de transferencia o de cheque)'
+                : 'Motivo'
+          }
           busy={run.isPending}
           onConfirm={(text) => run.mutate([pending, text])}
         />
@@ -405,6 +432,49 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
           {journal.description}
         </div>
       </>
+    )
+  }
+  if (doc.doc_type === 'PAYMENT_ORDER' && detail.payment) {
+    const { payment } = detail
+    return (
+      <dl className={grid}>
+        <InfoRow label="Proveedor">
+          {supplier && company.can('payable.read') ? (
+            <Link className="hover:underline" to={company.to(`pagos/proveedores/${supplier.code}`)}>
+              {supplier.legal_name}
+            </Link>
+          ) : (
+            supplier?.legal_name
+          )}
+        </InfoRow>
+        <InfoRow label="CUIT (simulado)">
+          {supplier?.tax_id} · {supplier ? VAT_CONDITIONS[supplier.vat_condition] : ''}
+        </InfoRow>
+        <InfoRow label="Paga desde">
+          {company.can('ledger.read') ? (
+            <Link
+              className="hover:underline"
+              to={company.to(`contabilidad/mayor?cuenta=${payment.treasury_account.id}`)}
+            >
+              {payment.treasury_account.name}
+            </Link>
+          ) : (
+            payment.treasury_account.name
+          )}{' '}
+          <span className="font-mono text-xs text-muted-foreground">{payment.treasury_account.code}</span>
+        </InfoRow>
+        <InfoRow label="Importe">{money(doc.total)}</InfoRow>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Pago">
+          {payment.paid_on
+            ? `${date(payment.paid_on)}${payment.payment_reference ? ` · ${payment.payment_reference}` : ''}`
+            : 'Todavía no se pagó'}
+        </InfoRow>
+        <InfoRow label="Preparó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
     )
   }
   if (doc.doc_type === 'PURCHASE_REQUISITION' && doc.pr) {
@@ -570,10 +640,52 @@ function JournalLines({ journal }: { journal: NonNullable<DocumentDetail['journa
   )
 }
 
+function PaymentLines({ payment, total }: { payment: NonNullable<DocumentDetail['payment']>; total: number }) {
+  const head = 'h-9 text-xs font-semibold text-slate-600'
+  return (
+    <div className="overflow-x-auto rounded-xl border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableHead className={cn(head, 'w-10')}>#</TableHead>
+            <TableHead className={head}>Factura</TableHead>
+            <TableHead className={head}>Vence</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Total de la factura</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Paga esta orden</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {payment.lines.map((l) => (
+            <TableRow key={l.id}>
+              <TableCell className="text-xs text-muted-foreground">{l.line_no}</TableCell>
+              <TableCell className="text-sm">
+                <Link to={l.invoice.path} className="hover:underline">
+                  <span className="font-mono text-xs font-semibold text-navy">{l.invoice.display_number}</span> Factura{' '}
+                  {l.invoice.invoice_label}
+                </Link>
+                <div className="mt-1">
+                  <DocStatus info={l.invoice.status_info} />
+                </div>
+              </TableCell>
+              <TableCell className="text-sm">{date(l.invoice.due_date)}</TableCell>
+              <TableCell className="tabular text-right">{money(l.invoice.total)}</TableCell>
+              <TableCell className="tabular text-right font-semibold">{money(l.amount)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+        <TableFooter>
+          <TotalRow label="Total de la orden" value={total} span={4} strong />
+        </TableFooter>
+      </Table>
+    </div>
+  )
+}
+
 function Lines({ detail }: { detail: DocumentDetail }) {
   const company = useCompany()
   const { doc, lines } = detail
   if (detail.journal) return <JournalLines journal={detail.journal} />
+  if (detail.payment) return <PaymentLines payment={detail.payment} total={doc.total} />
   const product = (l: (typeof lines)[number]) => (
     <Link to={company.to(`productos/${l.product.code}`)} className="hover:underline">
       <span className="font-mono text-xs font-semibold text-navy">{l.product.code}</span> {l.product.name}

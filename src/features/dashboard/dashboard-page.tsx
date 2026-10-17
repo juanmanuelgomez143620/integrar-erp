@@ -190,8 +190,11 @@ export function DashboardPage() {
         ) : (
           <Section title="Tu rol en el circuito">
             <p className="text-sm text-muted-foreground">
-              En esta etapa tu sector consulta la información. Observá cómo avanzan las solicitudes y órdenes de compra:
-              pronto vas a operar tu propio módulo.
+              {company.can('payment_order.pay')
+                ? 'Tesorería paga a los proveedores: las órdenes de pago que autoriza Gerencia te llegan como tareas. Antes de pagar, controlá el saldo en Cajas y bancos.'
+                : company.can('journal_entry.create')
+                  ? 'Contabilidad registra los asientos, revisa los que genera el sistema y lleva los libros. También prepara las órdenes de pago de las facturas de proveedores.'
+                  : 'En esta etapa tu sector consulta la información. Observá cómo avanzan las solicitudes y órdenes de compra: pronto vas a operar tu propio módulo.'}
             </p>
           </Section>
         )}

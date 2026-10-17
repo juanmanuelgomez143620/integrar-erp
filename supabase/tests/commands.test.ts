@@ -97,13 +97,17 @@ async function step<M, P>(
     p = failure(error)
   }
   expect(p.ok ? 'ok' : p.error, label).toBe(m.ok ? 'ok' : m.error)
+  lastFailure = m.ok ? '' : m.error
   return m.ok && p.ok ? { mock: m.value as M, pg: p.value as P } : null
 }
+
+/** El error del último paso que falló en los dos lados (para explicar un paso que tenía que salir bien). */
+let lastFailure = ''
 
 /** Un paso que tiene que salir bien: si fallara igual en los dos lados, step() no lo notaría. */
 async function ok<M, P>(label: string, username: string, onMock: (ctx: E.Ctx) => M, onPg: (b: Backend) => Promise<P>) {
   const result = await step(label, username, onMock, onPg)
-  expect(result, `${label}: tenía que salir bien`).not.toBeNull()
+  expect(result, `${label}: tenía que salir bien (${lastFailure})`).not.toBeNull()
   return result!
 }
 
@@ -117,6 +121,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['stock_adjustment_lines', mock.saLines],
     ['journal_entry_lines', mock.jeLines],
     ['supplier_invoice_lines', mock.siLines],
+    ['payment_order_lines', mock.opLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -137,7 +142,7 @@ async function created(
   onPg: (b: Backend) => Promise<{ id: string; display_number: string }>,
 ) {
   const result = await step(label, username, onMock, onPg)
-  expect(result, label).not.toBeNull()
+  expect(result, `${label}: tenía que salir bien (${lastFailure})`).not.toBeNull()
   expect(result!.pg.display_number, label).toBe(result!.mock.display_number)
   await linkDocument(result!.mock.id, result!.pg.id)
   return result!.mock.id
@@ -1086,6 +1091,180 @@ describe('paridad de comandos', () => {
     ).toBeNull()
   })
 
+  it('órdenes de pago: reserva del saldo, aprobación, pago con su asiento, separación de funciones y anulación', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const registered = (supplierCode: string, number: string) =>
+      mock.documents.find(
+        (d) =>
+          d.doc_type === 'SUPPLIER_INVOICE' &&
+          d.status === 'REGISTRADA' &&
+          d.supplier_id === supplier(supplierCode) &&
+          d.si!.invoice_number === number,
+      )!
+    // La factura C del servicio (la registró compras2) y una factura de PRV-001, de la prueba anterior.
+    const service = registered('PRV-010', '00000077')
+    const other = registered('PRV-001', '00001001')
+    const payment = (
+      invoiceId: string | null,
+      amount: number,
+      { from = '1.1.01.03', supplierCode }: { from?: string; supplierCode?: string } = {},
+    ) => {
+      const input: E.PaymentOrderInput = {
+        supplier_id: supplierCode
+          ? supplier(supplierCode)
+          : mock.documents.find((d) => d.id === invoiceId)!.supplier_id!,
+        treasury_account_id: account(from),
+        notes: '',
+        lines: invoiceId ? [{ invoice_id: invoiceId, amount }] : [],
+      }
+      const pgInput = {
+        ...input,
+        supplier_id: pg(input.supplier_id),
+        treasury_account_id: pg(input.treasury_account_id),
+        lines: input.lines.map((l) => ({ ...l, invoice_id: pg(l.invoice_id) })),
+      }
+      return { input, pgInput }
+    }
+    const create = (label: string, username: string, p: ReturnType<typeof payment>, submit: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreatePaymentOrder(c, company, p.input, submit),
+        (b) => b.commands.createPaymentOrder(companyPg, p.pgInput, submit),
+      )
+    const createdOrder = (label: string, username: string, p: ReturnType<typeof payment>, submit: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreatePaymentOrder(c, company, p.input, submit),
+        (b) => b.commands.createPaymentOrder(companyPg, p.pgInput, submit),
+      )
+    const approve = (label: string, username: string, id: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdApprovePaymentOrder(c, id, 'Autorizado'),
+        (b) => b.commands.approvePaymentOrder(pg(id), 'Autorizado'),
+      )
+    const pay = (label: string, username: string, id: string, reference = '') =>
+      step(
+        label,
+        username,
+        (c) => E.cmdPayPaymentOrder(c, id, reference),
+        (b) => b.commands.payPaymentOrder(pg(id), reference),
+      )
+    const cancel = (label: string, username: string, id: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelPaymentOrder(c, id, reason),
+        (b) => b.commands.cancelPaymentOrder(pg(id), reason),
+      )
+
+    // Controles: el saldo de la factura, los importes, la caja o el banco, el proveedor y los permisos.
+    for (const [label, username, p] of [
+      ['pagar más que el saldo', 'contabilidad', payment(service.id, service.total + 1)],
+      ['importe con tres decimales', 'contabilidad', payment(service.id, 1.005)],
+      [
+        'pagar desde una cuenta que no es caja ni banco',
+        'contabilidad',
+        payment(service.id, 1000, { from: '2.1.01.01' }),
+      ],
+      ['factura de otro proveedor', 'contabilidad', payment(service.id, 1000, { supplierCode: 'PRV-001' })],
+      ['orden sin facturas', 'contabilidad', payment(null, 0, { supplierCode: 'PRV-010' })],
+      ['Compras no prepara pagos', 'compras1', payment(service.id, 1000)],
+    ] as const)
+      expect(await create(label, username, p, true), label).toBeNull()
+
+    // Un pago parcial reserva su parte: el resto se puede incluir en otra orden, no más.
+    const partial = await createdOrder('pago parcial', 'contabilidad', payment(service.id, 20000), true)
+    const rest = E.round2(service.total - 20000)
+    expect(await create('reservar de más', 'tesoreria', payment(service.id, rest + 0.01), false)).toBeNull()
+    const draft = await createdOrder(
+      'el resto, en borrador',
+      'tesoreria',
+      payment(service.id, rest, { from: '1.1.01.01' }),
+      false,
+    )
+    await ok(
+      'enviar el borrador a aprobación',
+      'tesoreria',
+      (c) => E.cmdSubmitPaymentOrder(c, draft),
+      (b) => b.commands.submitPaymentOrder(pg(draft)),
+    )
+
+    // Gerencia aprueba una y rechaza la otra; Contabilidad no aprueba.
+    expect(await approve('Contabilidad no aprueba pagos', 'contabilidad', partial)).toBeNull()
+    expect(await approve('aprobar', 'gerencia', partial)).not.toBeNull()
+    expect(
+      await step(
+        'rechazar sin motivo',
+        'gerencia',
+        (c) => E.cmdRejectPaymentOrder(c, draft, ''),
+        (b) => b.commands.rejectPaymentOrder(pg(draft), ''),
+      ),
+    ).toBeNull()
+    await ok(
+      'rechazar',
+      'gerencia',
+      (c) => E.cmdRejectPaymentOrder(c, draft, 'Se paga todo junto el mes que viene'),
+      (b) => b.commands.rejectPaymentOrder(pg(draft), 'Se paga todo junto el mes que viene'),
+    )
+
+    // Tesorería paga (asiento automático) y la factura queda pagada en parte.
+    expect(await pay('Gerencia no paga', 'gerencia', partial)).toBeNull()
+    expect(await pay('pagar', 'tesoreria', partial, 'Transferencia 000777')).not.toBeNull()
+    expect(await pay('pagar otra vez', 'tesoreria', partial)).toBeNull()
+
+    // Separación de funciones: compras2 registró la factura; con el rol de Tesorería tampoco la puede pagar.
+    const tes = mock.sectors.find((s) => s.company_id === company && s.code === 'TES')!.id
+    await ok(
+      'el docente le suma Tesorería a compras2',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('compras2'), 'TESORERIA', tes),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('compras2')), 'TESORERIA', pg(tes)),
+    )
+    const balance = await createdOrder('el resto, otra vez', 'contabilidad', payment(service.id, rest), true)
+    expect(await approve('aprobar el resto', 'gerencia', balance)).not.toBeNull()
+    expect(await pay('pagar una factura que registró', 'compras2', balance)).toBeNull()
+    expect(await pay('pagar el resto', 'tesoreria', balance, 'Cheque 000321')).not.toBeNull()
+    expect(
+      await step(
+        'anular una factura pagada',
+        'compras2',
+        (c) => E.cmdCancelSupplierInvoice(c, service.id, 'Error'),
+        (b) => b.commands.cancelSupplierInvoice(pg(service.id), 'Error'),
+      ),
+    ).toBeNull()
+
+    // Anular un pago: con motivo, revierte el asiento y la factura vuelve a tener saldo.
+    expect(await cancel('anular el pago sin motivo', 'tesoreria', balance, '')).toBeNull()
+    expect(await cancel('anular el pago', 'tesoreria', balance, 'El cheque fue rechazado')).not.toBeNull()
+
+    // Una factura en una orden en curso no se anula; y no se paga sin fondos.
+    // (El fondo fijo lo desactivó la prueba de Contabilidad; Valores a depositar tampoco tiene saldo.)
+    const pending = await createdOrder(
+      'pago desde una cuenta sin saldo',
+      'contabilidad',
+      payment(other.id, 1000, { from: '1.1.01.04' }),
+      true,
+    )
+    expect(
+      await step(
+        'anular una factura en una orden en curso',
+        'compras1',
+        (c) => E.cmdCancelSupplierInvoice(c, other.id, 'Error de carga'),
+        (b) => b.commands.cancelSupplierInvoice(pg(other.id), 'Error de carga'),
+      ),
+    ).toBeNull()
+    expect(await approve('aprobar el pago sin fondos', 'gerencia', pending)).not.toBeNull()
+    expect(await pay('pagar sin fondos', 'tesoreria', pending)).toBeNull()
+    expect(
+      await cancel('anular la orden aprobada', 'contabilidad', pending, 'No hay fondos en esa cuenta'),
+    ).not.toBeNull()
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -1095,6 +1274,7 @@ describe('paridad de comandos', () => {
       'STOCK_ADJUSTMENT',
       'JOURNAL_ENTRY',
       'SUPPLIER_INVOICE',
+      'PAYMENT_ORDER',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`
@@ -1105,7 +1285,17 @@ describe('paridad de comandos', () => {
       (b) => b.api.members(companyPg),
       (u) => Q.listMembers(mock, u, company),
     )
-    const users = ['docente', 'compras1', 'compras2', 'deposito', 'produccion', 'gerencia', 'auditor', 'contabilidad']
+    const users = [
+      'docente',
+      'compras1',
+      'compras2',
+      'deposito',
+      'produccion',
+      'gerencia',
+      'auditor',
+      'contabilidad',
+      'tesoreria',
+    ]
     for (const username of users) {
       for (const type of types)
         await sameRead(
@@ -1219,6 +1409,19 @@ describe('paridad de comandos', () => {
         (b) => b.api.postingRules(companyPg),
         (u) => Q.listPostingRules(mock, u, company),
       )
+      await sameRead(
+        `cajas y bancos (${username})`,
+        username,
+        (b) => b.api.treasuryAccounts(companyPg),
+        (u) => Q.treasuryAccounts(mock, u, company),
+      )
+      for (const code of ['PRV-001', 'PRV-010'])
+        await sameRead(
+          `facturas para pagar de ${code} (${username})`,
+          username,
+          (b) => b.api.paymentCandidates(companyPg, pg(supplier(code))),
+          (u) => Q.paymentCandidates(mock, u, company, supplier(code)),
+        )
     }
   })
 })

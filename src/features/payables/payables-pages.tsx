@@ -1,11 +1,12 @@
 import { Link, useNavigate, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Wallet } from 'lucide-react'
+import { Banknote, Landmark, Wallet } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/common/data-table'
 import { EmptyState, KpiCard, Loading, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, type PayableRow } from '@/lib/api'
+import { api, type PayableRow, type TreasuryAccountRow } from '@/lib/api'
 import { VAT_CONDITIONS } from '@/lib/domain/catalog'
 import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -32,7 +33,6 @@ export function PayablesPage() {
   })
   const total = data.reduce((s, r) => s + r.balance, 0)
   const overdue = data.reduce((s, r) => s + r.overdue, 0)
-  if (error) return <Loading error={error} />
   return (
     <>
       <PageHeader
@@ -53,6 +53,7 @@ export function PayablesPage() {
       <DataTable<PayableRow>
         rows={data}
         loading={isLoading}
+        error={error}
         rowKey={(r) => r.supplier.id}
         search={(r) => `${r.supplier.code} ${r.supplier.legal_name} ${r.supplier.tax_id}`}
         searchPlaceholder="Buscar proveedor…"
@@ -91,6 +92,73 @@ export function PayablesPage() {
   )
 }
 
+/** Cajas y bancos: el saldo de cada una sale del libro mayor y no se edita. */
+export function TreasuryPage() {
+  const company = useCompany()
+  const navigate = useNavigate()
+  const {
+    data = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['treasury-accounts', company.companyId],
+    queryFn: () => api.treasuryAccounts(company.companyId),
+  })
+  const total = data.reduce((s, r) => s + r.balance, 0)
+  const canLedger = company.can('ledger.read')
+  return (
+    <>
+      <PageHeader
+        crumbs={[{ label: 'Inicio', to: company.to() }, { label: 'Pagos y tesorería' }, { label: 'Cajas y bancos' }]}
+        title="Cajas y bancos"
+        description="El dinero de la empresa. El saldo de cada caja y cada banco sale del libro mayor: no se edita. Para abrir otra cuenta bancaria, Contabilidad la agrega en el plan de cuentas, dentro de Caja y bancos."
+      />
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <KpiCard label="Disponible en total" value={money(total)} icon={Landmark} />
+      </div>
+      <DataTable<TreasuryAccountRow>
+        rows={data}
+        loading={isLoading}
+        error={error}
+        rowKey={(r) => r.account.id}
+        onRowClick={canLedger ? (r) => navigate(company.to(`contabilidad/mayor?cuenta=${r.account.id}`)) : undefined}
+        empty="La empresa no tiene cuentas de caja ni de banco."
+        columns={[
+          { key: 'code', header: 'Cuenta', sort: (r) => r.account.code, cell: (r) => <Mono>{r.account.code}</Mono> },
+          {
+            key: 'name',
+            header: 'Caja o banco',
+            sort: (r) => r.account.name,
+            cell: (r) => (
+              <div>
+                <span className="font-medium">{r.account.name}</span>{' '}
+                {!r.account.is_active && <StatusBadge label="Desactivada" badge="neutral" />}
+                {r.account.description && (
+                  <div className="text-xs whitespace-normal text-muted-foreground">{r.account.description}</div>
+                )}
+              </div>
+            ),
+          },
+          {
+            key: 'balance',
+            header: 'Saldo',
+            align: 'right',
+            sort: (r) => r.balance,
+            cell: (r) => (
+              <span className={cn('tabular font-semibold', r.balance < 0 && 'text-red-700')}>{money(r.balance)}</span>
+            ),
+          },
+        ]}
+      />
+      {canLedger && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Tocá una cuenta para ver sus movimientos en el libro mayor.
+        </p>
+      )}
+    </>
+  )
+}
+
 /** Cuenta corriente de un proveedor: facturas y pagos con saldo acumulado, y lo pendiente. */
 export function SupplierAccountPage() {
   const company = useCompany()
@@ -117,6 +185,15 @@ export function SupplierAccountPage() {
         description={`CUIT ${data.supplier.tax_id || '—'} (simulado) · ${VAT_CONDITIONS[data.supplier.vat_condition]} · plazo de pago ${
           data.supplier.payment_terms_days ? `${data.supplier.payment_terms_days} días` : 'contado'
         }`}
+        actions={
+          data.balance > 0 && company.can('payment_order.create') ? (
+            <Button asChild>
+              <Link to={`${company.docPath('PAYMENT_ORDER', 'nueva')}?proveedor=${data.supplier.code}`}>
+                <Banknote /> Preparar orden de pago
+              </Link>
+            </Button>
+          ) : undefined
+        }
       />
       <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
         <Section
@@ -186,6 +263,11 @@ export function SupplierAccountPage() {
                 Factura {i.invoice_label} · vence {date(i.due_date)}
               </div>
               <div className="tabular font-medium">{money(i.pending)}</div>
+              {i.paid > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  Pagado {money(i.paid)} de {money(i.total)}
+                </div>
+              )}
             </div>
           ))}
           {!data.pending.length && <p className="text-sm text-muted-foreground">No hay facturas pendientes.</p>}

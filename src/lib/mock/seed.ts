@@ -11,6 +11,7 @@ import {
   cmdApprovePurchaseOrder,
   cmdCreateGoodsReceipt,
   cmdCreateJournalEntry,
+  cmdCreatePaymentOrder,
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
   cmdCreateStockAdjustment,
@@ -75,6 +76,7 @@ export function buildSeed(): DB {
     saLines: [],
     jeLines: [],
     siLines: [],
+    opLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],
@@ -478,6 +480,20 @@ export function buildSeed(): DB {
         { account_id: account('1.1.01.03'), debit: 300000, credit: 0 },
         { account_id: account('1.1.01.01'), debit: 0, credit: 300000 },
       ],
+    },
+    true,
+  )
+
+  // La orden de pago de esa factura, desde el banco, esperando la autorización de Gerencia.
+  const invoice = db.documents.find((d) => d.doc_type === 'SUPPLIER_INVOICE')!
+  cmdCreatePaymentOrder(
+    ctx(users.contabilidad, 45),
+    companyId,
+    {
+      supplier_id: invoice.supplier_id!,
+      treasury_account_id: account('1.1.01.03'),
+      notes: '',
+      lines: [{ invoice_id: invoice.id, amount: invoice.total }],
     },
     true,
   )

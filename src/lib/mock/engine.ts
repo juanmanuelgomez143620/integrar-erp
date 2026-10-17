@@ -30,6 +30,7 @@ import {
   INVENTORY_ACCOUNTS,
   OPENING_BALANCES,
   OPENING_BALANCING_ACCOUNT,
+  TREASURY_RUBRO,
   accountLevel,
   accountTypeOf,
   normalSideOf,
@@ -2430,10 +2431,14 @@ function ruleAccount(db: DB, companyId: string, event: string, key: string) {
   return account
 }
 
+/** Un importe del asiento automático: va a la cuenta de una regla o a una cuenta dada. */
+type PostingAmount = ({ key: string } | { account_id: string }) & { debit: number; credit: number }
+
 /**
  * Asiento automático de un evento (private.post_event): cada importe va a la
- * cuenta de su regla; se registra con fecha de hoy (la de registración) con las
- * validaciones de siempre y queda vinculado al documento que lo originó.
+ * cuenta de su regla (o a una cuenta dada, como la caja o el banco de un pago);
+ * se registra con fecha de hoy (la de registración) con las validaciones de
+ * siempre y queda vinculado al documento que lo originó.
  */
 function postEvent(
   ctx: Ctx,
@@ -2441,7 +2446,7 @@ function postEvent(
   source: T.Document,
   event: string,
   description: string,
-  amounts: { key: string; debit: number; credit: number }[],
+  amounts: PostingAmount[],
 ) {
   const { db } = ctx
   const lines: EntryLine[] = []
@@ -2449,7 +2454,10 @@ function postEvent(
     const debit = round2(a.debit)
     const credit = round2(a.credit)
     if (!debit && !credit) continue
-    const account = ruleAccount(db, source.company_id, event, a.key)
+    const account =
+      'account_id' in a
+        ? getAccount(db, source.company_id, a.account_id)
+        : ruleAccount(db, source.company_id, event, a.key)
     const same = lines.find((l) => l.account_id === account.id && l.debit > 0 === debit > 0)
     if (same) {
       same.debit = round2(same.debit + debit)
@@ -2712,6 +2720,12 @@ export function cmdCancelSupplierInvoice(ctx: Ctx, docId: string, reason: string
   const actor = requirePermission(ctx, doc.company_id, 'supplier_invoice.cancel')
   const comment = reason.trim()
   if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const order = activeOrderWith(db, doc.id)
+  if (order)
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} está en la orden de pago ${order.display_number}: primero hay que anular esa orden.`,
+    )
   const entry = automaticEntryOf(db, doc.id)
   const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
   transition(ctx, doc, 'CANCEL', {
@@ -2719,6 +2733,267 @@ export function cmdCancelSupplierInvoice(ctx: Ctx, docId: string, reason: string
     actor,
     summary: `Anuló ${doc.display_number}${reversal ? ` y su asiento con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
   })
+}
+
+// ============================================================ Órdenes de pago (docs/FASE_3_COMPRAS_Y_TESORERIA.md §5)
+
+export interface PaymentOrderInput {
+  supplier_id: string
+  /** Caja o banco desde el que se paga. */
+  treasury_account_id: string
+  notes: string
+  lines: { invoice_id: string; amount: number }[]
+}
+
+/** Órdenes de pago en curso: reservan el saldo de sus facturas hasta pagarse o anularse. */
+export const ACTIVE_PAYMENT_STATUSES = ['BORRADOR', 'PENDIENTE_APROBACION', 'APROBADA']
+
+/** Facturas que todavía se pueden pagar. */
+const PAYABLE_STATUSES = ['REGISTRADA', 'PAGADA_PARCIAL']
+
+const orderLines = (db: DB, docId: string) =>
+  db.opLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** Lo que aplican a una factura las órdenes de pago en esos estados (salvo una). */
+function appliedToInvoice(db: DB, invoiceId: string, statuses: string[], exceptDocId?: string) {
+  const orders = new Set(
+    db.documents
+      .filter((d) => d.doc_type === 'PAYMENT_ORDER' && statuses.includes(d.status) && d.id !== exceptDocId)
+      .map((d) => d.id),
+  )
+  return round2(
+    db.opLines.filter((l) => l.invoice_id === invoiceId && orders.has(l.document_id)).reduce((s, l) => s + l.amount, 0),
+  )
+}
+
+/** Lo pagado de una factura: sus órdenes de pago pagadas. */
+export const invoicePaid = (db: DB, invoiceId: string) => appliedToInvoice(db, invoiceId, ['PAGADA'])
+
+/** Lo reservado de una factura en órdenes de pago en curso (salvo una). */
+export const invoiceCommitted = (db: DB, invoiceId: string, exceptDocId?: string) =>
+  appliedToInvoice(db, invoiceId, ACTIVE_PAYMENT_STATUSES, exceptDocId)
+
+/** La primera orden de pago en curso que incluye una factura. */
+function activeOrderWith(db: DB, invoiceId: string) {
+  const ids = new Set(db.opLines.filter((l) => l.invoice_id === invoiceId).map((l) => l.document_id))
+  return db.documents
+    .filter((d) => ids.has(d.id) && ACTIVE_PAYMENT_STATUSES.includes(d.status))
+    .sort((a, b) => a.number - b.number)[0]
+}
+
+/** Caja o banco de la empresa: una cuenta imputable y activa del rubro Caja y bancos. */
+function treasuryAccount(db: DB, companyId: string, accountId: string) {
+  const account = db.accounts.find((a) => a.id === accountId && a.company_id === companyId)
+  if (!account || !account.is_imputable || !account.code.startsWith(`${TREASURY_RUBRO}.`))
+    fail('DATO_INVALIDO', 'Elegí la caja o el banco desde el que se paga (una cuenta de Caja y bancos).')
+  if (!account.is_active) fail('DATO_INVALIDO', `La cuenta ${accountLabel(account)} está desactivada.`)
+  return account
+}
+
+/** Quien registró una factura: la confirmación en su historial. */
+export function invoiceRegistrant(db: DB, invoiceId: string) {
+  return db.audit.find((e) => e.document_id === invoiceId && e.action === 'CONFIRM')?.actor_user_id ?? null
+}
+
+/** Estado de una factura según lo pagado: registrada, pagada parcialmente o pagada. */
+function recomputeInvoice(ctx: Ctx, invoiceId: string) {
+  const invoice = getDoc(ctx.db, invoiceId, 'SUPPLIER_INVOICE')
+  if (![...PAYABLE_STATUSES, 'PAGADA'].includes(invoice.status)) return
+  const paid = invoicePaid(ctx.db, invoice.id)
+  const target = paid >= invoice.total - EPS ? 'PAGADA' : paid > EPS ? 'PAGADA_PARCIAL' : 'REGISTRADA'
+  if (target !== invoice.status) transition(ctx, invoice, 'SYSTEM', { to: target })
+}
+
+export function cmdCreatePaymentOrder(ctx: Ctx, companyId: string, input: PaymentOrderInput, submit: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'payment_order.create')
+  const supplier = db.suppliers.find((s) => s.id === input.supplier_id && s.company_id === companyId)
+  if (!supplier) fail('DATO_INVALIDO', 'Elegí el proveedor al que se le paga.')
+  const account = treasuryAccount(db, companyId, input.treasury_account_id)
+  const seen = new Set<string>()
+  const lines = input.lines
+    .filter((l) => l.invoice_id && l.amount)
+    .map((l) => {
+      const invoice = db.documents.find(
+        (d) => d.id === l.invoice_id && d.company_id === companyId && d.doc_type === 'SUPPLIER_INVOICE',
+      )
+      if (!invoice || invoice.supplier_id !== supplier.id)
+        fail('DATO_INVALIDO', `Una de las facturas no es de ${supplier.legal_name}.`)
+      if (seen.has(invoice.id)) fail('DATO_INVALIDO', `${invoice.display_number} está dos veces en la orden.`)
+      seen.add(invoice.id)
+      if (!PAYABLE_STATUSES.includes(invoice.status))
+        fail(
+          'DATO_INVALIDO',
+          `${invoice.display_number} está en estado "${statusLabel(invoice.doc_type, invoice.status)}": se pagan facturas registradas con saldo.`,
+        )
+      if (!Number.isFinite(l.amount) || !(l.amount > 0) || round2(l.amount) !== l.amount)
+        fail('DATO_INVALIDO', 'Los importes deben ser mayores que cero y tener hasta 2 decimales.')
+      const pending = round2(invoice.total - invoicePaid(db, invoice.id))
+      const committed = invoiceCommitted(db, invoice.id)
+      const available = round2(pending - committed)
+      if (l.amount > available + EPS)
+        fail(
+          'IMPORTE_EXCEDIDO',
+          `${invoice.display_number}: el saldo es ${money(pending)}${committed > 0 ? ` y ya hay ${money(committed)} en otras órdenes de pago en curso` : ''}; como mucho se pueden pagar ${money(Math.max(available, 0))}.`,
+          'Una factura no se paga dos veces: lo que está en una orden de pago en curso queda reservado.',
+        )
+      return { invoice, amount: l.amount }
+    })
+  if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué facturas se pagan y cuánto de cada una.')
+  const doc = newDocument(ctx, companyId, 'PAYMENT_ORDER', actor, {
+    supplier_id: supplier.id,
+    notes: input.notes.trim(),
+    op: { treasury_account_id: account.id, payment_reference: '', paid_on: null },
+  })
+  lines.forEach((l, i) => {
+    db.opLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      invoice_id: l.invoice.id,
+      amount: l.amount,
+    })
+  })
+  doc.subtotal = round2(lines.reduce((s, l) => s + l.amount, 0))
+  doc.total = doc.subtotal
+  for (const l of lines) link(ctx, companyId, l.invoice.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'payment_order',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: pago a ${supplier.legal_name} por ${money(doc.total)} desde ${accountLabel(account)}`,
+  })
+  if (submit) submitPaymentOrder(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+function submitPaymentOrder(ctx: Ctx, doc: T.Document) {
+  transition(ctx, doc, 'SUBMIT', { summary: `Envió ${doc.display_number} a aprobación (${money(doc.total)})` })
+}
+
+export function cmdSubmitPaymentOrder(ctx: Ctx, docId: string) {
+  submitPaymentOrder(ctx, getDoc(ctx.db, docId, 'PAYMENT_ORDER'))
+}
+
+/** Gerencia aprueba o rechaza; quien preparó la orden no decide sobre ella. */
+function decidePaymentOrder(ctx: Ctx, docId: string, action: 'APPROVE' | 'REJECT', comment: string) {
+  const doc = getDoc(ctx.db, docId, 'PAYMENT_ORDER')
+  requireTransition(doc, action)
+  const actor = requirePermission(ctx, doc.company_id, 'payment_order.approve')
+  const eff = effectivePermissions(ctx.db, ctx.userId!, doc.company_id)
+  if (!eff.supervisor && getCompany(ctx.db, doc.company_id).settings.sod_enabled && doc.created_by === ctx.userId)
+    fail(
+      'SEPARACION_FUNCIONES',
+      'No podés aprobar ni rechazar una orden de pago que preparaste vos.',
+      'Separación de funciones: quien prepara un pago no lo autoriza.',
+    )
+  transition(ctx, doc, action, {
+    actor,
+    comment,
+    summary:
+      action === 'APPROVE'
+        ? `Aprobó ${doc.display_number} por ${money(doc.total)}${comment.trim() ? ` — ${comment.trim()}` : ''}`
+        : undefined,
+  })
+}
+
+export function cmdApprovePaymentOrder(ctx: Ctx, docId: string, comment: string) {
+  decidePaymentOrder(ctx, docId, 'APPROVE', comment)
+}
+
+export function cmdRejectPaymentOrder(ctx: Ctx, docId: string, reason: string) {
+  decidePaymentOrder(ctx, docId, 'REJECT', reason)
+}
+
+/**
+ * Tesorería paga: controla de nuevo los saldos de las facturas y el de la caja
+ * o el banco, genera el asiento de pago y actualiza el estado de cada factura.
+ */
+export function cmdPayPaymentOrder(ctx: Ctx, docId: string, reference: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PAYMENT_ORDER')
+  requireTransition(doc, 'PAY')
+  const actor = requirePermission(ctx, doc.company_id, 'payment_order.pay')
+  const ref = reference.trim()
+  if (ref.length > 60) fail('DATO_INVALIDO', 'La referencia del pago tiene hasta 60 caracteres.')
+  const company = getCompany(db, doc.company_id)
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  const lines = orderLines(db, doc.id)
+  for (const l of lines) {
+    const invoice = getDoc(db, l.invoice_id, 'SUPPLIER_INVOICE')
+    if (company.settings.sod_enabled && !eff.supervisor && invoiceRegistrant(db, invoice.id) === ctx.userId)
+      fail(
+        'SEPARACION_FUNCIONES',
+        `No podés pagar ${invoice.display_number}: la registraste vos.`,
+        'Separación de funciones: quien registra una deuda no la paga. Tiene que pagarla otro integrante de Tesorería.',
+      )
+  }
+  for (const l of lines) {
+    const invoice = getDoc(db, l.invoice_id, 'SUPPLIER_INVOICE')
+    const pending = round2(invoice.total - invoicePaid(db, invoice.id))
+    if (!PAYABLE_STATUSES.includes(invoice.status) || l.amount > pending + EPS)
+      fail(
+        'IMPORTE_EXCEDIDO',
+        `${invoice.display_number}: el saldo pendiente es ${money(Math.max(pending, 0))} y la orden paga ${money(l.amount)}.`,
+      )
+  }
+  const account = treasuryAccount(db, doc.company_id, doc.op!.treasury_account_id)
+  const balance = accountBalance(db, account.id)
+  if (doc.total > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y la orden es por ${money(doc.total)}.`,
+      'Antes de pagar hay que controlar que haya fondos; por ejemplo, depositar el efectivo en el banco.',
+    )
+  const supplier = db.suppliers.find((s) => s.id === doc.supplier_id)!
+  transition(ctx, doc, 'PAY', {
+    actor,
+    summary: `Pagó ${doc.display_number}: ${money(doc.total)} a ${supplier.legal_name} desde ${accountLabel(account)}${ref ? ` (${ref})` : ''}`,
+  })
+  doc.op = { ...doc.op!, payment_reference: ref, paid_on: businessDate(company) }
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    'PAGO',
+    `Pago a ${supplier.legal_name} según ${doc.display_number}${ref ? ` (${ref})` : ''}.`,
+    [
+      { key: 'PROVEEDORES', debit: doc.total, credit: 0 },
+      { account_id: account.id, debit: 0, credit: doc.total },
+    ],
+  )
+  for (const l of lines) recomputeInvoice(ctx, l.invoice_id)
+}
+
+/**
+ * Antes de pagarse, la orden se anula sin más. Una orden pagada se anula con
+ * el contraasiento de su pago, y sus facturas vuelven a tener saldo.
+ */
+export function cmdCancelPaymentOrder(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PAYMENT_ORDER')
+  if (doc.status !== 'PAGADA') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'payment_order.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? ` y su pago con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
+  })
+  for (const l of orderLines(db, doc.id)) recomputeInvoice(ctx, l.invoice_id)
 }
 
 // ============================================================ Tareas y notificaciones

@@ -44,6 +44,8 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   stock_adjustment: 'inventory',
   supplier_invoice: 'purchasing',
   payable: 'payables',
+  payment_order: 'payables',
+  treasury: 'payables',
   account: 'accounting',
   posting_rule: 'accounting',
   journal_entry: 'accounting',
@@ -77,7 +79,7 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   VENTAS: { code: 'VENTAS', name: 'Ventas', island: 3, defaultSector: 'VEN', isSupervisor: false, description: 'Administra la cartera de clientes.' },
   CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Registra los asientos, lleva los libros contables y cierra los meses.' },
   IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones y libros contables (obligaciones en fases siguientes).' },
-  TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Consulta órdenes de compra para proyectar pagos y los saldos de caja y bancos.' },
+  TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Prepara y ejecuta los pagos a proveedores y controla los saldos de caja y bancos.' },
   RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Legajos y sueldos en fases siguientes.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Detecta necesidades de materiales y las solicita a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe mercadería, controla el stock y pide reposición.' },
@@ -118,6 +120,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'goods_receipt.read', 'goods_receipt.cancel', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read',
+    'payment_order.read', 'payment_order.approve', 'treasury.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -151,10 +154,12 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'journal_entry.create', 'journal_entry.update', 'journal_entry.cancel', 'journal_entry.export',
     'ledger.export', 'fiscal_period.update',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
+    'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
     'supplier_invoice.read', 'payable.read',
+    'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
   ],
   RRHH: [...CORE_READ],
   IMPUESTOS: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read'],
@@ -166,7 +171,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.read', 'purchase_order.export', 'goods_receipt.read',
     'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
-    'supplier_invoice.read', 'payable.read', 'posting_rule.read',
+    'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
   ],
   DOCENTE: [],
 }
@@ -215,6 +220,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'SUPPLIER_INVOICE', prefix: 'FP', name: 'Factura de proveedor', plural: 'Facturas de proveedores',
     resource: 'supplier_invoice', module: 'purchasing', path: 'compras/facturas',
     description: 'Registro de la factura que emitió el proveedor, controlada contra la orden de compra y lo recibido. Genera el asiento de compra y la deuda con el proveedor.',
+  },
+  PAYMENT_ORDER: {
+    code: 'PAYMENT_ORDER', prefix: 'OP', name: 'Orden de pago', plural: 'Órdenes de pago',
+    resource: 'payment_order', module: 'payables', path: 'pagos/ordenes',
+    description: 'Documento interno que autoriza a Tesorería a pagarle a un proveedor las facturas indicadas, desde una caja o un banco. Al pagarse genera el asiento y cancela la deuda.',
   },
 }
 
@@ -268,6 +278,14 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     PAGADA_PARCIAL: { label: 'Pagada parcialmente', badge: 'warning', final: false, description: 'Se pagó una parte; queda saldo pendiente.' },
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagó completa: la deuda con el proveedor quedó cancelada.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba registrada, un contraasiento revirtió la compra.' },
+  },
+  PAYMENT_ORDER: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Contabilidad o Tesorería la está preparando: todavía no reservó nada.' },
+    PENDIENTE_APROBACION: { label: 'Pendiente de aprobación', badge: 'warning', final: false, description: 'Espera la autorización de Gerencia.' },
+    APROBADA: { label: 'Aprobada', badge: 'info', final: false, description: 'Autorizada: Tesorería tiene que pagarla.' },
+    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagó: la deuda con el proveedor bajó y el pago está en el libro diario.' },
+    RECHAZADA: { label: 'Rechazada', badge: 'danger', final: true, description: 'Gerencia no autorizó el pago.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba pagada, un contraasiento revirtió el pago.' },
   },
 }
 
@@ -353,6 +371,16 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('SUPPLIER_INVOICE', 'PAGADA_PARCIAL', 'SYSTEM', 'REGISTRADA', null, '', ''),
   t('SUPPLIER_INVOICE', 'PAGADA', 'SYSTEM', 'PAGADA_PARCIAL', null, '', ''),
   t('SUPPLIER_INVOICE', 'PAGADA', 'SYSTEM', 'REGISTRADA', null, '', ''),
+
+  // Orden de pago
+  t('PAYMENT_ORDER', 'BORRADOR', 'SUBMIT', 'PENDIENTE_APROBACION', 'payment_order.create', 'Enviar a aprobación', 'Gerencia recibirá una tarea para autorizar el pago.'),
+  t('PAYMENT_ORDER', 'BORRADOR', 'CANCEL', 'ANULADA', 'payment_order.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('PAYMENT_ORDER', 'PENDIENTE_APROBACION', 'APPROVE', 'APROBADA', 'payment_order.approve', 'Aprobar', 'Autoriza a Tesorería a pagar.'),
+  t('PAYMENT_ORDER', 'PENDIENTE_APROBACION', 'REJECT', 'RECHAZADA', 'payment_order.approve', 'Rechazar', 'No se paga. Si hace falta, se prepara otra orden.', true, 'destructive'),
+  t('PAYMENT_ORDER', 'PENDIENTE_APROBACION', 'CANCEL', 'ANULADA', 'payment_order.cancel', 'Anular', 'Queda sin efecto antes de que Gerencia la autorice.', true, 'destructive'),
+  t('PAYMENT_ORDER', 'APROBADA', 'PAY', 'PAGADA', 'payment_order.pay', 'Pagar', 'Registra el pago desde la caja o el banco: genera el asiento y baja la deuda con el proveedor.'),
+  t('PAYMENT_ORDER', 'APROBADA', 'CANCEL', 'ANULADA', 'payment_order.cancel', 'Anular', 'Queda sin efecto antes de pagarse.', true, 'destructive'),
+  t('PAYMENT_ORDER', 'PAGADA', 'CANCEL', 'ANULADA', 'payment_order.cancel', 'Anular con contraasiento', 'Revierte el pago con un contraasiento: las facturas vuelven a tener saldo.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -367,6 +395,7 @@ export const ACTION_VERBS: Record<string, string> = {
   CONFIRM: 'Confirmó',
   CANCEL: 'Anuló',
   CLOSE: 'Cerró el saldo de',
+  PAY: 'Pagó',
   SYSTEM: 'Actualizó',
   CLOSE_PERIOD: 'Cerró el período',
   REOPEN_PERIOD: 'Reabrió el período',
@@ -407,6 +436,9 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'STOCK_ADJUSTMENT', status: 'BORRADOR', taskType: 'CONFIRMAR_AJUSTE', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar el ajuste y confirmarlo.' },
   { docType: 'JOURNAL_ENTRY', status: 'BORRADOR', taskType: 'REGISTRAR_ASIENTO', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar que el debe y el haber sumen lo mismo y registrar el asiento en el libro diario.' },
   { docType: 'SUPPLIER_INVOICE', status: 'BORRADOR', taskType: 'REGISTRAR_FACTURA', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar los datos del comprobante y las cantidades contra lo recibido, y registrar la factura.' },
+  { docType: 'PAYMENT_ORDER', status: 'BORRADOR', taskType: 'ENVIAR_OP', assignee: 'CREATOR', title: 'Enviar {number} a aprobación', description: 'Revisar las facturas, los importes y la caja o el banco, y enviar la orden a Gerencia.' },
+  { docType: 'PAYMENT_ORDER', status: 'PENDIENTE_APROBACION', taskType: 'APROBAR_PAGO', assignee: 'ROLE', role: 'GERENCIA', title: 'Autorizar el pago {number} por {total}', description: 'Revisar las facturas y el saldo de la caja o el banco; aprobar o rechazar con motivo.' },
+  { docType: 'PAYMENT_ORDER', status: 'APROBADA', taskType: 'PAGAR', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Hacer la transferencia o entregar el cheque o el efectivo, y registrar el pago.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -419,6 +451,9 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CONFIRMAR_AJUSTE: 'Confirmar ajuste',
   REGISTRAR_ASIENTO: 'Registrar asiento',
   REGISTRAR_FACTURA: 'Registrar factura',
+  ENVIAR_OP: 'Enviar orden de pago',
+  APROBAR_PAGO: 'Autorizar pago',
+  PAGAR: 'Pagar',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -508,6 +543,13 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       SERVICIO: 'Servicios comprados',
       IVA_CREDITO: 'IVA de la factura (letra A)',
       PROVEEDORES: 'Deuda con el proveedor',
+    },
+  },
+  PAGO: {
+    label: 'Pago a proveedores (orden de pago pagada)',
+    keys: {
+      // La contrapartida es la caja o el banco de la orden, no una regla.
+      PROVEEDORES: 'Deuda con el proveedor que se cancela',
     },
   },
 }

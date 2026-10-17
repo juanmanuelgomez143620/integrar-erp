@@ -69,6 +69,10 @@ const PayablesPage = lazyPage(() => import('@/features/payables/payables-pages')
 const SupplierAccountPage = lazyPage(() =>
   import('@/features/payables/payables-pages').then((m) => m.SupplierAccountPage),
 )
+const TreasuryPage = lazyPage(() => import('@/features/payables/payables-pages').then((m) => m.TreasuryPage))
+const PaymentOrderFormPage = lazyPage(() =>
+  import('@/features/payables/payment-order-form').then((m) => m.PaymentOrderFormPage),
+)
 
 function NotFound() {
   return (
@@ -121,6 +125,10 @@ export const router = createBrowserRouter([
               { path: 'compras/facturas/:number', element: <DocumentPage key="si" docType="SUPPLIER_INVOICE" /> },
               { path: 'pagos/proveedores', element: <PayablesPage /> },
               { path: 'pagos/proveedores/:code', element: <SupplierAccountPage /> },
+              { path: 'pagos/ordenes', element: <DocumentListPage key="op" docType="PAYMENT_ORDER" /> },
+              { path: 'pagos/ordenes/nueva', element: <PaymentOrderFormPage /> },
+              { path: 'pagos/ordenes/:number', element: <DocumentPage key="op" docType="PAYMENT_ORDER" /> },
+              { path: 'pagos/cajas-y-bancos', element: <TreasuryPage /> },
               { path: 'contabilidad/imputacion', element: <PostingRulesPage /> },
               { path: 'deposito/recepciones', element: <DocumentListPage key="gr" docType="GOODS_RECEIPT" /> },
               { path: 'deposito/recepciones/nueva', element: <ReceiptFormPage /> },

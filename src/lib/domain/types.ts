@@ -20,7 +20,7 @@ export type RoleCode =
 export type ModuleCode =
   'core' | 'masters' | 'purchasing' | 'inventory' | 'payables' | 'accounting' | 'management' | 'audit'
 
-export type PermissionAction = 'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export'
+export type PermissionAction = 'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay'
 
 export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 'CONSUMIDOR_FINAL'
 
@@ -33,9 +33,10 @@ export type DocType =
   | 'STOCK_ADJUSTMENT'
   | 'JOURNAL_ENTRY'
   | 'SUPPLIER_INVOICE'
+  | 'PAYMENT_ORDER'
 
 export type TransitionAction =
-  'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW' | 'REOPEN' | 'SEND' | 'CONFIRM' | 'CANCEL' | 'CLOSE' | 'SYSTEM'
+  'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW' | 'REOPEN' | 'SEND' | 'CONFIRM' | 'CANCEL' | 'CLOSE' | 'PAY' | 'SYSTEM'
 
 export type Badge = 'neutral' | 'info' | 'warning' | 'success' | 'danger'
 
@@ -261,6 +262,16 @@ export interface SupplierInvoiceHeader {
   registered_at: string | null
 }
 
+/** Orden de pago (tabla payment_orders, 1 a 1 con documents): qué facturas de un proveedor se pagan y desde dónde. */
+export interface PaymentOrderHeader {
+  /** Caja o banco desde el que se paga: una cuenta imputable del rubro Caja y bancos. */
+  treasury_account_id: string
+  /** Número de transferencia o de cheque, que anota Tesorería al pagar. */
+  payment_reference: string
+  /** Fecha del pago (la del asiento). */
+  paid_on: string | null
+}
+
 /** Cabecera común de todo comprobante (tabla `documents`) + detalle por tipo. */
 export interface Document extends Audited {
   id: string
@@ -284,6 +295,7 @@ export interface Document extends Audited {
   sa?: StockAdjustmentHeader
   je?: JournalEntryHeader
   si?: SupplierInvoiceHeader
+  op?: PaymentOrderHeader
 }
 
 export interface RequisitionLine {
@@ -352,6 +364,16 @@ export interface SupplierInvoiceLine {
 }
 
 /** Regla de imputación automática: a qué cuenta va cada importe de un evento contable. */
+/** Una factura (y cuánto de ella) que cancela una orden de pago. */
+export interface PaymentOrderLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  invoice_id: string
+  amount: number
+}
+
 export interface PostingRule {
   id: string
   company_id: string

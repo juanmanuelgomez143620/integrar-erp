@@ -5,23 +5,39 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DB } from './db'
 import {
   BusinessError,
+  cmdApprovePaymentOrder,
   cmdApprovePurchaseOrder,
+  cmdAssignRole,
   cmdCancelGoodsReceipt,
+  cmdCancelPaymentOrder,
   cmdCancelSupplierInvoice,
   cmdConfirmSupplierInvoice,
   cmdCreateCompanyFromTemplate,
   cmdCreateCourse,
   cmdCreateGoodsReceipt,
+  cmdCreatePaymentOrder,
   cmdCreatePurchaseOrder,
   cmdCreateSupplierInvoice,
+  cmdPayPaymentOrder,
+  cmdRejectPaymentOrder,
   cmdSavePostingRule,
   cmdSendPurchaseOrder,
   cmdSetPeriodStatus,
+  cmdSubmitPaymentOrder,
   cmdSubmitPurchaseOrder,
   type Ctx,
   type SupplierInvoiceInput,
 } from './engine'
-import { documentDetail, invoiceableOrders, listPayables, listPostingRules, supplierAccount } from './queries'
+import {
+  documentDetail,
+  invoiceableOrders,
+  listPayables,
+  listPostingRules,
+  listTasks,
+  paymentCandidates,
+  supplierAccount,
+  treasuryAccounts,
+} from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -142,6 +158,7 @@ describe('factura de proveedor', () => {
       'PURCHASE_ORDER',
       'GOODS_RECEIPT',
       'SUPPLIER_INVOICE',
+      'PAYMENT_ORDER',
       'JOURNAL_ENTRY',
     ])
   })
@@ -280,5 +297,148 @@ describe('cuenta corriente de proveedores', () => {
     expect(account.balance).toBe(333960)
     expect(supplierAccount(db, userId('tesoreria'), companyId(), 'no-existe')).toBeNull()
     expect(() => listPayables(db, userId('deposito'), companyId())).toThrow()
+  })
+})
+
+describe('órdenes de pago', () => {
+  const demoInvoice = () => db.documents.find((d) => d.doc_type === 'SUPPLIER_INVOICE')!
+  const demoOrder = () => db.documents.find((d) => d.doc_type === 'PAYMENT_ORDER')!
+  const sector = (code: string) => db.sectors.find((s) => s.company_id === companyId() && s.code === code)!.id
+  /** Orden de pago de una factura, desde el banco por defecto. */
+  const order = (invoiceId: string, amount: number, from = '1.1.01.03', supplier?: string) => ({
+    supplier_id: supplier ?? doc(invoiceId).supplier_id!,
+    treasury_account_id: account(from).id,
+    notes: '',
+    lines: [{ invoice_id: invoiceId, amount }],
+  })
+  /** Líneas del asiento automático de un documento: [código, debe, haber]. */
+  const automaticLines = (docId: string) => entryLines(docId)
+
+  it('la demo deja la orden de pago de su factura esperando la autorización de Gerencia', () => {
+    const op = demoOrder()
+    expect(op).toMatchObject({ display_number: 'OP-00001', status: 'PENDIENTE_APROBACION', total: 266200 })
+    const tasks = listTasks(db, userId('gerencia'), companyId(), 'mine', false)
+    expect(tasks.map((t) => t.task_type)).toContain('APROBAR_PAGO')
+    // Mientras tanto, la factura sigue con saldo pero ya no se puede reservar de nuevo.
+    const [candidate] = paymentCandidates(db, userId('tesoreria'), companyId(), demoInvoice().supplier_id!)
+    expect(candidate).toMatchObject({ committed: 266200, available: 0 })
+  })
+
+  it('circuito completo: Gerencia aprueba, Tesorería paga, se genera el asiento y la deuda se cancela', () => {
+    const op = demoOrder()
+    cmdApprovePaymentOrder(ctx('gerencia'), op.id, 'Vence este mes')
+    expect(doc(op.id).status).toBe('APROBADA')
+    cmdPayPaymentOrder(ctx('tesoreria'), op.id, 'Transferencia 000123')
+    expect(doc(op.id)).toMatchObject({ status: 'PAGADA' })
+    expect(doc(op.id).op).toMatchObject({ payment_reference: 'Transferencia 000123', paid_on: '2027-05-14' })
+    expect(automaticLines(op.id)).toEqual([
+      ['2.1.01.01', 266200, 0],
+      ['1.1.01.03', 0, 266200],
+    ])
+    expect(doc(demoInvoice().id).status).toBe('PAGADA')
+    const [payable] = listPayables(db, userId('tesoreria'), companyId())
+    expect(payable).toMatchObject({ balance: 0, invoices: 0 })
+    const statement = supplierAccount(db, userId('tesoreria'), companyId(), demoInvoice().supplier_id!)!
+    expect(statement.movements.map((m) => [m.debit, m.credit, m.balance])).toEqual([
+      [0, 266200, 266200],
+      [266200, 0, 0],
+    ])
+    expect(statement.pending).toEqual([])
+    const bank = treasuryAccounts(db, userId('tesoreria'), companyId()).find((t) => t.account.code === '1.1.01.03')!
+    expect(bank.balance).toBe(12500000 + 300000 - 266200)
+  })
+
+  it('separación de funciones: quien prepara no aprueba y quien registró la factura no la paga', () => {
+    cmdAssignRole(ctx('docente'), companyId(), userId('gerencia'), 'TESORERIA', sector('TES'))
+    cmdAssignRole(ctx('docente'), companyId(), userId('compras1'), 'TESORERIA', sector('TES'))
+    cmdCancelPaymentOrder(ctx('contabilidad'), demoOrder().id, 'Se prepara de nuevo')
+    const own = cmdCreatePaymentOrder(ctx('gerencia'), companyId(), order(demoInvoice().id, 1000), true)
+    expectBusinessError(() => cmdApprovePaymentOrder(ctx('gerencia'), own.id, ''), 'SEPARACION_FUNCIONES')
+    expectBusinessError(() => cmdApprovePaymentOrder(ctx('tesoreria'), own.id, ''), 'SIN_PERMISO')
+    cmdCancelPaymentOrder(ctx('tesoreria'), own.id, 'La prepara Contabilidad')
+    const op = cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(demoInvoice().id, 1000), true)
+    cmdApprovePaymentOrder(ctx('gerencia'), op.id, '')
+    // compras1 registró FP-00001.
+    expectBusinessError(() => cmdPayPaymentOrder(ctx('compras1'), op.id, ''), 'SEPARACION_FUNCIONES')
+    cmdPayPaymentOrder(ctx('tesoreria'), op.id, '')
+    expect(doc(demoInvoice().id).status).toBe('PAGADA_PARCIAL')
+  })
+
+  it('no se paga más que el saldo ni se reserva dos veces lo mismo', () => {
+    const fp = demoInvoice()
+    expectBusinessError(
+      () => cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(fp.id, 100), true),
+      'IMPORTE_EXCEDIDO',
+    )
+    cmdRejectPaymentOrder(ctx('gerencia'), demoOrder().id, 'Esperar al vencimiento')
+    expect(doc(demoOrder().id).status).toBe('RECHAZADA')
+    expectBusinessError(
+      () => cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(fp.id, 266200.01), true),
+      'IMPORTE_EXCEDIDO',
+    )
+    expectBusinessError(
+      () => cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(fp.id, 10.005), true),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(fp.id, 1000, '2.1.01.01'), true),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () =>
+        cmdCreatePaymentOrder(
+          ctx('contabilidad'),
+          companyId(),
+          order(fp.id, 1000, '1.1.01.03', supplierId('PRV-001')),
+          true,
+        ),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => cmdCreatePaymentOrder(ctx('compras1'), companyId(), order(fp.id, 1000), true),
+      'SIN_PERMISO',
+    )
+    const first = cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(fp.id, 200000), false)
+    expect(doc(first.id).status).toBe('BORRADOR')
+    expectBusinessError(
+      () => cmdCreatePaymentOrder(ctx('tesoreria'), companyId(), order(fp.id, 66200.01), true),
+      'IMPORTE_EXCEDIDO',
+    )
+    cmdCreatePaymentOrder(ctx('tesoreria'), companyId(), order(fp.id, 66200), true)
+    expect(paymentCandidates(db, userId('contabilidad'), companyId(), fp.supplier_id!)[0]).toMatchObject({
+      committed: 266200,
+      available: 0,
+    })
+    cmdSubmitPaymentOrder(ctx('contabilidad'), first.id)
+    expect(doc(first.id).status).toBe('PENDIENTE_APROBACION')
+  })
+
+  it('no se paga si la caja o el banco no tiene saldo', () => {
+    cmdCancelPaymentOrder(ctx('contabilidad'), demoOrder().id, 'Se paga desde el fondo fijo')
+    const op = cmdCreatePaymentOrder(ctx('contabilidad'), companyId(), order(demoInvoice().id, 5000, '1.1.01.02'), true)
+    cmdApprovePaymentOrder(ctx('gerencia'), op.id, '')
+    expectBusinessError(() => cmdPayPaymentOrder(ctx('tesoreria'), op.id, ''), 'SALDO_INSUFICIENTE')
+    expect(doc(op.id).status).toBe('APROBADA')
+  })
+
+  it('una factura en una orden en curso no se anula; una orden pagada se anula con contraasiento', () => {
+    const fp = demoInvoice()
+    const op = demoOrder()
+    expectBusinessError(() => cmdCancelSupplierInvoice(ctx('compras1'), fp.id, 'Error de carga'), 'TRANSICION_INVALIDA')
+    cmdApprovePaymentOrder(ctx('gerencia'), op.id, '')
+    cmdPayPaymentOrder(ctx('tesoreria'), op.id, '')
+    expectBusinessError(() => cmdCancelPaymentOrder(ctx('tesoreria'), op.id, ''), 'MOTIVO_REQUERIDO')
+    expectBusinessError(() => cmdCancelPaymentOrder(ctx('gerencia'), op.id, 'Error'), 'SIN_PERMISO')
+    cmdCancelPaymentOrder(ctx('tesoreria'), op.id, 'La transferencia fue rechazada')
+    expect(doc(op.id).status).toBe('ANULADA')
+    expect(doc(fp.id).status).toBe('REGISTRADA')
+    const payment = db.docLinks.find(
+      (l) => l.from_document_id === op.id && doc(l.to_document_id).je?.origin === 'AUTOMATICO',
+    )!
+    expect(doc(payment.to_document_id).status).toBe('ANULADO')
+    expect(listPayables(db, userId('tesoreria'), companyId())[0]).toMatchObject({ balance: 266200, invoices: 1 })
+    // Ya sin órdenes en curso, la factura se puede anular.
+    cmdCancelSupplierInvoice(ctx('compras1'), fp.id, 'Error de carga')
+    expect(doc(fp.id).status).toBe('ANULADA')
   })
 })

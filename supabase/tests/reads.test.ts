@@ -30,6 +30,7 @@ const USERS = [
   'compras2',
   'ventas',
   'contabilidad',
+  'tesoreria',
   'produccion',
   'deposito',
   'admin',
@@ -41,6 +42,7 @@ const DOC_TYPES: DocType[] = [
   'STOCK_ADJUSTMENT',
   'JOURNAL_ENTRY',
   'SUPPLIER_INVOICE',
+  'PAYMENT_ORDER',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -209,6 +211,25 @@ describe('cuentas corrientes de proveedores e imputación automática', () => {
   it('reglas de imputación', async () => {
     for (const u of USERS)
       await same(u, () => Q.listPostingRules(mock, userId(u), company), 'posting_rules_list', [companyPg])
+  })
+})
+
+describe('tesorería', () => {
+  it('cajas y bancos con su saldo', async () => {
+    for (const u of USERS)
+      await same(u, () => Q.treasuryAccounts(mock, userId(u), company), 'treasury_accounts', [companyPg])
+  })
+
+  it('facturas para pagar, con lo reservado en otras órdenes', async () => {
+    const suppliers = ['PRV-001', 'PRV-009', 'PRV-010', 'PRV-003'].map(
+      (code) => mock.suppliers.find((s) => s.company_id === company && s.code === code)!.id,
+    )
+    for (const u of ['docente', 'contabilidad', 'tesoreria', 'gerencia', 'compras1'])
+      for (const id of [...suppliers, crypto.randomUUID()])
+        await same(u, () => Q.paymentCandidates(mock, userId(u), company, id), 'payment_candidates', [
+          companyPg,
+          mock.suppliers.some((s) => s.id === id) ? loaded.pg(id) : id,
+        ])
   })
 })
 
