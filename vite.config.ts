@@ -7,6 +7,8 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
+  // Ruta base del sitio: "/" en una instancia propia; "/integrar-erp/" en GitHub Pages (lo fija el flujo de publicación).
+  base: process.env.VITE_BASE ?? '/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },

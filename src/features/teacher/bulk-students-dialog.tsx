@@ -48,7 +48,7 @@ export function BulkStudentsDialog({ open, onOpenChange }: { open: boolean; onOp
         ]
           .filter(Boolean)
           .join(' · '),
-        appUrl: window.location.origin,
+        appUrl: new URL(import.meta.env.BASE_URL, window.location.origin).href.replace(/\/$/, ''),
       }),
     )
   }

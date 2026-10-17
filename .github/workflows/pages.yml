@@ -1,0 +1,55 @@
+name: Publicar en GitHub Pages
+
+# Cada cambio en main se publica en https://<usuario>.github.io/integrar-erp/.
+# Sin variables, es la demostración (datos en el navegador de cada visitante).
+# Con Supabase: en Settings → Secrets and variables → Actions → Variables,
+# cargar VITE_BACKEND=supabase, VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY
+# (es pública) y, si hace falta, VITE_AUTH_EMAIL_DOMAIN. Nunca la clave secreta.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_BACKEND: ${{ vars.VITE_BACKEND || 'mock' }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_AUTH_EMAIL_DOMAIN: ${{ vars.VITE_AUTH_EMAIL_DOMAIN }}
+      # Pages no conoce las rutas de la aplicación: para que un enlace directo
+      # (por ejemplo, .../e/forestal-del-norte/compras/ordenes) abra la app.
+      - run: cp dist/index.html dist/404.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
