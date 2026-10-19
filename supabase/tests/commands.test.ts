@@ -122,6 +122,8 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['journal_entry_lines', mock.jeLines],
     ['supplier_invoice_lines', mock.siLines],
     ['payment_order_lines', mock.opLines],
+    ['rfq_lines', mock.rfqLines],
+    ['supplier_quote_lines', mock.sqLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -1265,6 +1267,248 @@ describe('paridad de comandos', () => {
     ).not.toBeNull()
   })
 
+  it('cotizaciones: solicitud, cotizaciones, cuadro comparativo, adjudicación y anulación', async () => {
+    const companyPg = pg(company)
+    const byLineNo = (a: { line_no: number }, b: { line_no: number }) => a.line_no - b.line_no
+    // Una SC propia de esta prueba: la solicitud de cotización atiende sus líneas.
+    const scInput: E.RequisitionInput = {
+      needed_by: null,
+      priority: 'NORMAL',
+      reason: 'Bisagras y correderas para los placares del mes',
+      notes: '',
+      lines: [
+        { product_id: product('IN-004').id, quantity: 200 },
+        { product_id: product('IN-005').id, quantity: 40 },
+      ],
+    }
+    const scId = await created(
+      'SC para cotizar',
+      'produccion',
+      (c) => E.cmdCreateRequisition(c, company, scInput, true),
+      (b) =>
+        b.commands.createRequisition(
+          companyPg,
+          { ...scInput, lines: scInput.lines.map((l) => ({ ...l, product_id: pg(l.product_id) })) },
+          true,
+        ),
+    )
+    const scLines = mock.prLines.filter((l) => l.document_id === scId).sort(byLineNo)
+    const rfq = (suppliers: string[], over: Partial<E.RfqInput> = {}) => {
+      const input: E.RfqInput = {
+        response_due: addDays(todayAR(), 3),
+        warehouse_id: warehouse('DEP-MP'),
+        notes: 'Entregar en el depósito de materias primas',
+        supplier_ids: suppliers.map(supplier),
+        lines: scLines.map((l) => ({ product_id: l.product_id, quantity: l.quantity, requisition_line_id: l.id })),
+        ...over,
+      }
+      const pgInput = {
+        ...input,
+        warehouse_id: pg(input.warehouse_id),
+        supplier_ids: input.supplier_ids.map(pg),
+        lines: input.lines.map((l) => ({
+          ...l,
+          product_id: pg(l.product_id),
+          requisition_line_id: l.requisition_line_id ? pg(l.requisition_line_id) : null,
+        })),
+      }
+      return { input, pgInput }
+    }
+    const createRfq = (label: string, username: string, r: ReturnType<typeof rfq>, send: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateRfq(c, company, r.input, send),
+        (b) => b.commands.createRfq(companyPg, r.pgInput, send),
+      )
+    const createdRfq = (label: string, username: string, r: ReturnType<typeof rfq>, send: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateRfq(c, company, r.input, send),
+        (b) => b.commands.createRfq(companyPg, r.pgInput, send),
+      )
+
+    // Controles de la solicitud: proveedores, fecha, cantidades y permisos.
+    for (const [label, username, r] of [
+      ['invitar a un solo proveedor', 'compras1', rfq(['PRV-003'])],
+      ['el mismo proveedor dos veces', 'compras1', rfq(['PRV-003', 'PRV-003'])],
+      ['responder en el pasado', 'compras1', rfq(['PRV-003', 'PRV-009'], { response_due: addDays(todayAR(), -1) })],
+      [
+        'cotizar más de lo pendiente de la SC',
+        'compras1',
+        rfq(['PRV-003', 'PRV-009'], {
+          lines: [
+            {
+              product_id: scLines[0].product_id,
+              quantity: scLines[0].quantity + 1,
+              requisition_line_id: scLines[0].id,
+            },
+          ],
+        }),
+      ],
+      ['sin ítems', 'compras1', rfq(['PRV-003', 'PRV-009'], { lines: [] })],
+      ['Depósito no pide cotizaciones', 'deposito', rfq(['PRV-003', 'PRV-009'])],
+    ] as const)
+      expect(await createRfq(label, username, r, true), label).toBeNull()
+
+    const rfqId = await createdRfq('solicitud en borrador', 'compras1', rfq(['PRV-003', 'PRV-009', 'PRV-010']), false)
+    await ok(
+      'enviarla a los proveedores',
+      'compras1',
+      (c) => E.cmdSendRfq(c, rfqId),
+      (b) => b.commands.sendRfq(pg(rfqId)),
+    )
+    expect(
+      await step(
+        'enviarla otra vez',
+        'compras1',
+        (c) => E.cmdSendRfq(c, rfqId),
+        (b) => b.commands.sendRfq(pg(rfqId)),
+      ),
+    ).toBeNull()
+
+    // Cotizaciones: proveedor invitado, una por proveedor, validez, plazos y precios.
+    const quote = (
+      rfqDoc: string,
+      supplierCode: string,
+      prices: (number | null)[],
+      over: Partial<E.SupplierQuoteInput> = {},
+    ) => {
+      const items = mock.rfqLines.filter((l) => l.document_id === rfqDoc).sort(byLineNo)
+      const input: E.SupplierQuoteInput = {
+        rfq_id: rfqDoc,
+        supplier_id: supplier(supplierCode),
+        supplier_reference: 'P-778',
+        valid_until: addDays(todayAR(), 10),
+        delivery_days: 5,
+        payment_terms_days: 30,
+        notes: '',
+        lines: items.flatMap((l, i) =>
+          prices[i] == null ? [] : [{ rfq_line_id: l.id, unit_price: prices[i]!, vat_rate: 21 }],
+        ),
+        ...over,
+      }
+      const pgInput = {
+        ...input,
+        rfq_id: pg(input.rfq_id),
+        supplier_id: pg(input.supplier_id),
+        lines: input.lines.map((l) => ({ ...l, rfq_line_id: pg(l.rfq_line_id) })),
+      }
+      return { input, pgInput }
+    }
+    const createQuote = (label: string, username: string, q: ReturnType<typeof quote>) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateSupplierQuote(c, company, q.input),
+        (b) => b.commands.createSupplierQuote(companyPg, q.pgInput),
+      )
+    const createdQuote = (label: string, username: string, q: ReturnType<typeof quote>) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateSupplierQuote(c, company, q.input),
+        (b) => b.commands.createSupplierQuote(companyPg, q.pgInput),
+      )
+    for (const [label, username, q] of [
+      ['proveedor no invitado', 'compras1', quote(rfqId, 'PRV-005', [2100, 9000])],
+      ['oferta vencida', 'compras1', quote(rfqId, 'PRV-003', [2100, 9000], { valid_until: addDays(todayAR(), -1) })],
+      ['precio cero', 'compras1', quote(rfqId, 'PRV-003', [0, 9000])],
+      ['precio con cinco decimales', 'compras1', quote(rfqId, 'PRV-003', [2100.12345, 9000])],
+      ['plazo de entrega con decimales', 'compras1', quote(rfqId, 'PRV-003', [2100, 9000], { delivery_days: 1.5 })],
+      ['condición de pago negativa', 'compras1', quote(rfqId, 'PRV-003', [2100, 9000], { payment_terms_days: -1 })],
+      [
+        'referencia muy larga',
+        'compras1',
+        quote(rfqId, 'PRV-003', [2100, 9000], { supplier_reference: 'x'.repeat(41) }),
+      ],
+      ['sin precios', 'compras1', quote(rfqId, 'PRV-003', [null, null])],
+      ['Contabilidad no carga cotizaciones', 'contabilidad', quote(rfqId, 'PRV-003', [2100, 9000])],
+    ] as const)
+      expect(await createQuote(label, username, q), label).toBeNull()
+    const usual = await createdQuote('cotización completa', 'compras1', quote(rfqId, 'PRV-003', [2150, 9300]))
+    expect(await createQuote('una por proveedor', 'compras2', quote(rfqId, 'PRV-003', [2000, 9000]))).toBeNull()
+    const partial = await createdQuote(
+      'cotización que no cotiza todo',
+      'compras2',
+      quote(rfqId, 'PRV-009', [2050, null], { delivery_days: 2, payment_terms_days: 0 }),
+    )
+    // El monotributista cotiza el precio final: el IVA se ignora.
+    const service = await createdQuote(
+      'cotización sin IVA discriminado',
+      'compras1',
+      quote(rfqId, 'PRV-010', [2300, 9900], { supplier_reference: '' }),
+    )
+    expect(
+      await step(
+        'anular una cotización sin motivo',
+        'compras1',
+        (c) => E.cmdCancelSupplierQuote(c, service, ''),
+        (b) => b.commands.cancelSupplierQuote(pg(service), ''),
+      ),
+    ).toBeNull()
+    await ok(
+      'anular una cotización',
+      'compras1',
+      (c) => E.cmdCancelSupplierQuote(c, service, 'El proveedor mandó otra con descuento'),
+      (b) => b.commands.cancelSupplierQuote(pg(service), 'El proveedor mandó otra con descuento'),
+    )
+
+    // Adjudicar: una que no es la más conveniente exige justificarlo; sólo Compras adjudica.
+    const award = (label: string, username: string, quoteId: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdAwardRfq(c, rfqId, quoteId, reason),
+        (b) => b.commands.awardRfq(pg(rfqId), pg(quoteId), reason),
+      )
+    expect(await award('adjudicar la incompleta sin justificar', 'compras1', partial, 'Barata')).toBeNull()
+    expect(await award('adjudicar una anulada', 'compras1', service, 'La necesitamos ya mismo')).toBeNull()
+    expect(await award('Contabilidad no adjudica', 'contabilidad', usual, '')).toBeNull()
+    const order = await created(
+      'adjudicar la más conveniente',
+      'compras1',
+      (c) => E.cmdAwardRfq(c, rfqId, usual, ''),
+      (b) => b.commands.awardRfq(pg(rfqId), pg(usual), ''),
+    )
+    expect(await award('adjudicar otra vez', 'compras1', usual, '')).toBeNull()
+    await ok(
+      'la OC de la adjudicación sigue su circuito',
+      'compras1',
+      (c) => E.cmdSubmitPurchaseOrder(c, order),
+      (b) => b.commands.submitPurchaseOrder(pg(order)),
+    )
+
+    // Otra solicitud que se anula: su cotización queda descartada.
+    const dropped = await createdRfq(
+      'otra solicitud',
+      'compras2',
+      rfq(['PRV-003', 'PRV-005'], {
+        lines: [{ product_id: product('IN-003').id, quantity: 5, requisition_line_id: null, notes: 'Caja cerrada' }],
+      }),
+      true,
+    )
+    await createdQuote('su cotización', 'compras2', quote(dropped, 'PRV-005', [13500]))
+    expect(
+      await step(
+        'anular la solicitud sin motivo',
+        'compras1',
+        (c) => E.cmdCancelRfq(c, dropped, ''),
+        (b) => b.commands.cancelRfq(pg(dropped), ''),
+      ),
+    ).toBeNull()
+    await ok(
+      'anular la solicitud',
+      'compras1',
+      (c) => E.cmdCancelRfq(c, dropped, 'Se compra con la próxima licitación'),
+      (b) => b.commands.cancelRfq(pg(dropped), 'Se compra con la próxima licitación'),
+    )
+    expect(
+      await createQuote('cotizar una solicitud anulada', 'compras2', quote(dropped, 'PRV-003', [13000])),
+    ).toBeNull()
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -1275,6 +1519,8 @@ describe('paridad de comandos', () => {
       'JOURNAL_ENTRY',
       'SUPPLIER_INVOICE',
       'PAYMENT_ORDER',
+      'RFQ',
+      'SUPPLIER_QUOTE',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

@@ -18,8 +18,10 @@ export type {
   AccountRow,
   AvailableAction,
   CompanyContext,
+  ComparisonQuote,
   Dashboard,
   DetailLine,
+  DocRef,
   DocumentDetail,
   DocumentListItem,
   FiscalYearView,
@@ -42,7 +44,9 @@ export type {
   PostingRuleRow,
   ProductDetail,
   ProductRow,
+  QuoteView,
   ReceivableOrder,
+  RfqView,
   StockRow,
   SupplierAccount,
   SupplierAccountMovement,
@@ -60,9 +64,11 @@ export type {
   PaymentOrderInput,
   PurchaseOrderInput,
   RequisitionInput,
+  RfqInput,
   SchoolSettingsInput,
   StockAdjustmentInput,
   SupplierInvoiceInput,
+  SupplierQuoteInput,
   StudentCredential,
   StudentInput,
   TeacherInput,
@@ -242,6 +248,15 @@ const mockCommands = {
   rejectPaymentOrder: (docId: string, reason: string) => command((c) => E.cmdRejectPaymentOrder(c, docId, reason)),
   payPaymentOrder: (docId: string, reference: string) => command((c) => E.cmdPayPaymentOrder(c, docId, reference)),
   cancelPaymentOrder: (docId: string, reason: string) => command((c) => E.cmdCancelPaymentOrder(c, docId, reason)),
+  createRfq: (companyId: string, input: E.RfqInput, send: boolean) =>
+    command((c) => E.cmdCreateRfq(c, companyId, input, send)),
+  sendRfq: (docId: string) => command((c) => E.cmdSendRfq(c, docId)),
+  cancelRfq: (docId: string, reason: string) => command((c) => E.cmdCancelRfq(c, docId, reason)),
+  awardRfq: (docId: string, quoteId: string, reason: string) =>
+    command((c) => E.cmdAwardRfq(c, docId, quoteId, reason)),
+  createSupplierQuote: (companyId: string, input: E.SupplierQuoteInput) =>
+    command((c) => E.cmdCreateSupplierQuote(c, companyId, input)),
+  cancelSupplierQuote: (docId: string, reason: string) => command((c) => E.cmdCancelSupplierQuote(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

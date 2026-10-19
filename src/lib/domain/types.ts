@@ -20,7 +20,8 @@ export type RoleCode =
 export type ModuleCode =
   'core' | 'masters' | 'purchasing' | 'inventory' | 'payables' | 'accounting' | 'management' | 'audit'
 
-export type PermissionAction = 'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay'
+export type PermissionAction =
+  'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award'
 
 export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 'CONSUMIDOR_FINAL'
 
@@ -34,9 +35,22 @@ export type DocType =
   | 'JOURNAL_ENTRY'
   | 'SUPPLIER_INVOICE'
   | 'PAYMENT_ORDER'
+  | 'RFQ'
+  | 'SUPPLIER_QUOTE'
 
 export type TransitionAction =
-  'SUBMIT' | 'APPROVE' | 'REJECT' | 'WITHDRAW' | 'REOPEN' | 'SEND' | 'CONFIRM' | 'CANCEL' | 'CLOSE' | 'PAY' | 'SYSTEM'
+  | 'SUBMIT'
+  | 'APPROVE'
+  | 'REJECT'
+  | 'WITHDRAW'
+  | 'REOPEN'
+  | 'SEND'
+  | 'CONFIRM'
+  | 'CANCEL'
+  | 'CLOSE'
+  | 'PAY'
+  | 'AWARD'
+  | 'SYSTEM'
 
 export type Badge = 'neutral' | 'info' | 'warning' | 'success' | 'danger'
 
@@ -272,6 +286,27 @@ export interface PaymentOrderHeader {
   paid_on: string | null
 }
 
+/** Solicitud de cotización (tabla rfqs, 1 a 1 con documents): qué se pide cotizar, hasta cuándo y dónde se entregaría. */
+export interface RfqHeader {
+  /** Fecha límite para que respondan los proveedores. */
+  response_due: string
+  /** Depósito de entrega: pasa a la OC de la cotización adjudicada. */
+  warehouse_id: string
+  /** Por qué se adjudicó (obligatorio si no es la más conveniente por precio). */
+  award_reason: string
+}
+
+/** Cotización de un proveedor (tabla supplier_quotes, 1 a 1 con documents) a una solicitud de cotización. */
+export interface SupplierQuoteHeader {
+  rfq_id: string
+  /** Número o referencia de la cotización del proveedor. */
+  supplier_reference: string
+  /** Validez de la oferta. */
+  valid_until: string
+  delivery_days: number
+  payment_terms_days: number
+}
+
 /** Cabecera común de todo comprobante (tabla `documents`) + detalle por tipo. */
 export interface Document extends Audited {
   id: string
@@ -296,6 +331,8 @@ export interface Document extends Audited {
   je?: JournalEntryHeader
   si?: SupplierInvoiceHeader
   op?: PaymentOrderHeader
+  rq?: RfqHeader
+  sq?: SupplierQuoteHeader
 }
 
 export interface RequisitionLine {
@@ -363,7 +400,6 @@ export interface SupplierInvoiceLine {
   line_total: number
 }
 
-/** Regla de imputación automática: a qué cuenta va cada importe de un evento contable. */
 /** Una factura (y cuánto de ella) que cancela una orden de pago. */
 export interface PaymentOrderLine {
   id: string
@@ -374,6 +410,42 @@ export interface PaymentOrderLine {
   amount: number
 }
 
+/** Un ítem que se pide cotizar; puede atender una línea de solicitud de compra. */
+export interface RfqLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  product_id: string
+  quantity: number
+  requisition_line_id: string | null
+  notes: string
+}
+
+/** Un proveedor invitado a cotizar (tabla rfq_suppliers). */
+export interface RfqSupplier {
+  company_id: string
+  document_id: string
+  supplier_id: string
+}
+
+/** El precio que cotiza un proveedor para un ítem de la solicitud (la cantidad es la pedida). */
+export interface SupplierQuoteLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  rfq_line_id: string
+  product_id: string
+  quantity: number
+  unit_price: number
+  vat_rate: number
+  line_subtotal: number
+  line_tax: number
+  line_total: number
+}
+
+/** Regla de imputación automática: a qué cuenta va cada importe de un evento contable. */
 export interface PostingRule {
   id: string
   company_id: string

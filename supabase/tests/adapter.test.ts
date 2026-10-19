@@ -315,9 +315,12 @@ describe('comandos: el circuito de compras completo por el adaptador', () => {
     await produccion.commands.cancelRequisition(cancelled.id, 'Ya no hace falta')
     expect(await status(produccion, 'PURCHASE_REQUISITION', cancelled.display_number)).toBe('ANULADO')
 
-    const partial = mock.documents.find((d) => d.display_number === 'SC-00002')!
+    // La SC del escenario que una OC atiende en parte.
+    const partial = mock.documents.find(
+      (d) => d.doc_type === 'PURCHASE_REQUISITION' && d.status === 'ORDENADO_PARCIAL',
+    )!
     await compras1.commands.closeRequisition(loaded.pg(partial.id), 'El resto no se compra')
-    expect(await status(compras1, 'PURCHASE_REQUISITION', 'SC-00002')).toBe('CERRADO')
+    expect(await status(compras1, 'PURCHASE_REQUISITION', partial.display_number)).toBe('CERRADO')
 
     const blank = {
       supplier_id: supplier,

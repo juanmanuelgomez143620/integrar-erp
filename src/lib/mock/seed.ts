@@ -14,15 +14,17 @@ import {
   cmdCreatePaymentOrder,
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
+  cmdCreateRfq,
   cmdCreateStockAdjustment,
   cmdCreateSupplierInvoice,
+  cmdCreateSupplierQuote,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
   scanStockAlerts,
   startAccounting,
   type Ctx,
 } from './engine'
-import { todayAR } from '../format'
+import { addDays, todayAR } from '../format'
 
 export const DEMO_PASSWORD = 'demo1234'
 
@@ -77,6 +79,9 @@ export function buildSeed(): DB {
     jeLines: [],
     siLines: [],
     opLines: [],
+    rfqLines: [],
+    rfqSuppliers: [],
+    sqLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],
@@ -513,6 +518,59 @@ export function buildSeed(): DB {
 
   // Alertas de los productos que ya empiezan por debajo del mínimo.
   scanStockAlerts(ctx(null, 30), companyId)
+
+  // Depósito pide reponer dos placas bajo el mínimo y Compras pide cotización a
+  // tres proveedores: respondieron dos (la más barata entrega más tarde y cobra
+  // antes), así el cuadro comparativo tiene una decisión para discutir.
+  const placas = cmdCreateRequisition(
+    ctx(users.deposito, 29),
+    companyId,
+    {
+      needed_by: null,
+      priority: 'ALTA',
+      reason: 'Reposición de placas por debajo del stock mínimo.',
+      notes: '',
+      lines: [
+        { product_id: product['MP-004'].id, quantity: 40 },
+        { product_id: product['MP-007'].id, quantity: 20 },
+      ],
+    },
+    true,
+  )
+  const rfq = cmdCreateRfq(
+    ctx(users.compras1, 28),
+    companyId,
+    {
+      response_due: addDays(todayAR(), 5),
+      warehouse_id: whMP.id,
+      notes: '',
+      supplier_ids: [supplier['PRV-002'], supplier['PRV-001'], supplier['PRV-009']],
+      lines: db.prLines
+        .filter((l) => l.document_id === placas.id)
+        .map((l) => ({ product_id: l.product_id, quantity: l.quantity, requisition_line_id: l.id })),
+    },
+    true,
+  )
+  const items = db.rfqLines.filter((l) => l.document_id === rfq.id)
+  const quote = (
+    supplierCode: string,
+    prices: number[],
+    delivery: number,
+    terms: number,
+    valid: number,
+    ref: string,
+  ) => ({
+    rfq_id: rfq.id,
+    supplier_id: supplier[supplierCode],
+    supplier_reference: ref,
+    valid_until: addDays(todayAR(), valid),
+    delivery_days: delivery,
+    payment_terms_days: terms,
+    notes: '',
+    lines: items.map((l, i) => ({ rfq_line_id: l.id, unit_price: prices[i], vat_rate: 21 })),
+  })
+  cmdCreateSupplierQuote(ctx(users.compras2, 27), companyId, quote('PRV-002', [95000, 104000], 7, 30, 15, 'P-2231'))
+  cmdCreateSupplierQuote(ctx(users.compras1, 26), companyId, quote('PRV-001', [89500, 108000], 12, 15, 10, ''))
 
   // El historial previo no debe aparecer como "no leído".
   for (const n of db.notifications) n.read_at = now

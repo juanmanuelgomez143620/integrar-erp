@@ -17,6 +17,7 @@ import type { DB } from './db'
 import {
   accountBalance,
   accountLabel,
+  bestQuote,
   can,
   docPath,
   effectivePermissions,
@@ -33,8 +34,12 @@ import {
   isInstanceAdmin,
   isPosted,
   isSchoolAdmin,
+  orderFromQuote,
+  quoteIsValid,
+  quotesOf,
   requirePermission,
   requisitionAvailableQuantity,
+  rfqLinesOf,
   round2,
   round3,
 } from './engine'
@@ -338,6 +343,10 @@ function lineCount(db: DB, doc: T.Document) {
       return db.siLines.filter((l) => l.document_id === doc.id).length
     case 'PAYMENT_ORDER':
       return db.opLines.filter((l) => l.document_id === doc.id).length
+    case 'RFQ':
+      return db.rfqLines.filter((l) => l.document_id === doc.id).length
+    case 'SUPPLIER_QUOTE':
+      return db.sqLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -356,6 +365,10 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return []
     case 'SUPPLIER_INVOICE':
       return db.siLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
+    case 'RFQ':
+      return rfqLinesOf(db, doc.id)
+    case 'SUPPLIER_QUOTE':
+      return db.sqLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
   }
 }
 
@@ -429,6 +442,8 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
   const readable = new Set(readableDocTypes(db, userId, doc.company_id))
   const order: T.DocType[] = [
     'PURCHASE_REQUISITION',
+    'RFQ',
+    'SUPPLIER_QUOTE',
     'PURCHASE_ORDER',
     'GOODS_RECEIPT',
     'SUPPLIER_INVOICE',
@@ -531,6 +546,9 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       reason =
         'Separación de funciones: registraste una de las facturas; tiene que pagarla otro integrante de Tesorería.'
     }
+    if (doc.doc_type === 'RFQ' && tr.action === 'AWARD' && !quotesOf(db, doc.id).some((q) => quoteIsValid(db, q))) {
+      reason = 'Todavía no hay cotizaciones vigentes para adjudicar.'
+    }
     result.push({
       action: tr.action,
       label: tr.label,
@@ -544,6 +562,9 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
   return result
 }
 
+const rfqNumber = (db: DB, quote: T.Document) =>
+  db.documents.find((d) => d.id === quote.sq?.rfq_id)?.display_number ?? '—'
+
 function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
   const sector = db.sectors.find((s) => s.id === doc.sector_id)?.name ?? 'el sector solicitante'
   switch (`${doc.doc_type}:${doc.status}`) {
@@ -552,7 +573,7 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
     case 'PURCHASE_REQUISITION:SOLICITADO':
       return {
         who: 'Compras',
-        text: 'Debe incluir la solicitud en una orden de compra a un proveedor, o rechazarla indicando el motivo.',
+        text: 'Debe pedir cotizaciones o incluir la solicitud en una orden de compra a un proveedor, o rechazarla indicando el motivo.',
       }
     case 'PURCHASE_REQUISITION:ORDENADO_PARCIAL':
       return { who: 'Compras', text: 'Resta ordenar el saldo pendiente o cerrarlo con motivo.' }
@@ -651,6 +672,40 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: 'Contabilidad o Tesorería',
         text: `Motivo del rechazo: "${doc.status_reason}". Si igual hay que pagar, se prepara otra orden.`,
       }
+    case 'RFQ:BORRADOR':
+      return {
+        who: 'Compras',
+        text: 'Revisar los ítems, las cantidades y los proveedores invitados, y enviar la solicitud. Si algo está mal, se anula y se prepara otra.',
+      }
+    case 'RFQ:ENVIADA': {
+      const loaded = quotesOf(db, doc.id).length
+      const invited = db.rfqSuppliers.filter((s) => s.document_id === doc.id).length
+      return {
+        who: 'Compras',
+        text: loaded
+          ? `Hay ${loaded} de ${invited} cotizaciones cargadas. Compararlas en el cuadro y adjudicar: se genera la orden de compra en borrador. Si no es la más conveniente por precio, hay que justificar la elección.`
+          : `Mandar la solicitud impresa a cada proveedor invitado y cargar sus cotizaciones a medida que lleguen (responden hasta el ${date(doc.rq?.response_due)}).`,
+      }
+    }
+    case 'RFQ:ADJUDICADA': {
+      const awarded = quotesOf(db, doc.id).find((q) => q.status === 'ADJUDICADA')
+      const order = awarded ? orderFromQuote(db, awarded.id) : undefined
+      const supplier = db.suppliers.find((s) => s.id === awarded?.supplier_id)
+      return {
+        who: 'Compras',
+        text: `Se adjudicó a ${supplier?.legal_name ?? '—'} (${awarded?.display_number ?? '—'}) y se generó ${order?.display_number ?? 'la orden de compra'}: la compra sigue en esa orden.`,
+      }
+    }
+    case 'SUPPLIER_QUOTE:RECIBIDA':
+      return {
+        who: 'Compras',
+        text: `Participa del cuadro comparativo de ${rfqNumber(db, doc)}. Se adjudica desde la solicitud; si se cargó mal, se anula y se carga de nuevo.`,
+      }
+    case 'SUPPLIER_QUOTE:ADJUDICADA':
+      return {
+        who: '—',
+        text: `Fue la elegida en ${rfqNumber(db, doc)}: de ella nació ${orderFromQuote(db, doc.id)?.display_number ?? 'la orden de compra'}.`,
+      }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -748,11 +803,68 @@ export interface PaymentView {
   lines: PaymentLineView[]
 }
 
+/** Otro documento, para enlazarlo. */
+export interface DocRef {
+  id: string
+  display_number: string
+  status: string
+  path: string
+  status_info: StatusInfo
+}
+
+/** Una cotización en el cuadro comparativo de su solicitud (una columna). */
+export interface ComparisonQuote extends DocRef {
+  supplier: { id: string; code: string; legal_name: string; vat_condition: T.VatCondition }
+  supplier_reference: string
+  document_date: string
+  valid_until: string
+  /** La oferta venció (sólo mientras la solicitud está enviada). */
+  expired: boolean
+  delivery_days: number
+  payment_terms_days: number
+  /** Costo para la empresa: el neto. */
+  subtotal: number
+  tax_total: number
+  total: number
+  quoted_lines: number
+  complete: boolean
+  /** Un precio por ítem de la solicitud, en su orden; null si no lo cotizó. */
+  prices: ({ unit_price: number; vat_rate: number; line_subtotal: number; lowest: boolean } | null)[]
+}
+
+/** Solicitud de cotización: proveedores invitados, cuadro comparativo y adjudicación. */
+export interface RfqView {
+  response_due: string
+  award_reason: string
+  invited: { supplier: { id: string; code: string; legal_name: string }; quote: DocRef | null }[]
+  quotes: ComparisonQuote[]
+  /** La más conveniente por precio (sólo mientras la solicitud está enviada). */
+  best_quote_id: string | null
+  awarded_quote_id: string | null
+  /** La orden de compra que nació de la cotización adjudicada. */
+  order: DocRef | null
+}
+
+/** Cotización: su solicitud, sus condiciones y, si fue adjudicada, su orden de compra. */
+export interface QuoteView {
+  rfq: DocRef
+  supplier_reference: string
+  valid_until: string
+  expired: boolean
+  delivery_days: number
+  payment_terms_days: number
+  /** Es la más conveniente por precio de su solicitud (mientras está enviada). */
+  best: boolean
+  order: DocRef | null
+}
+
 export interface DocumentDetail {
   doc: DocumentListItem
   lines: DetailLine[]
   journal: JournalView | null
   payment: PaymentView | null
+  rfq: RfqView | null
+  quote: QuoteView | null
   supplier: T.Supplier | null
   warehouse: T.Warehouse | null
   related_order: DocumentListItem | null
@@ -893,7 +1005,38 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
         }
       })
   }
-  const warehouseId = doc.po?.warehouse_id ?? doc.gr?.warehouse_id ?? doc.sa?.warehouse_id
+  if (doc.doc_type === 'RFQ') {
+    lines = rfqLinesOf(db, doc.id).map((l) => {
+      const rl = db.prLines.find((x) => x.id === l.requisition_line_id)
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        product: product(l.product_id),
+        quantity: l.quantity,
+        notes: l.notes,
+        requisition_label: rl ? (db.documents.find((d) => d.id === rl.document_id)?.display_number ?? null) : null,
+        requisition_line_id: l.requisition_line_id,
+      }
+    })
+  }
+  if (doc.doc_type === 'SUPPLIER_QUOTE') {
+    lines = db.sqLines
+      .filter((l) => l.document_id === doc.id)
+      .sort(byLineNo)
+      .map((l) => ({
+        id: l.id,
+        line_no: l.line_no,
+        product: product(l.product_id),
+        quantity: l.quantity,
+        notes: '',
+        unit_price: l.unit_price,
+        vat_rate: l.vat_rate,
+        line_subtotal: l.line_subtotal,
+        line_tax: l.line_tax,
+        line_total: l.line_total,
+      }))
+  }
+  const warehouseId = doc.po?.warehouse_id ?? doc.gr?.warehouse_id ?? doc.sa?.warehouse_id ?? doc.rq?.warehouse_id
   const orderId = doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id
   const relatedOrder = orderId ? db.documents.find((d) => d.id === orderId) : undefined
   const history = db.audit.filter((e) => e.document_id === doc.id).sort((a, b) => a.id - b.id)
@@ -923,15 +1066,27 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                 { label: 'Autorizó', ...firstBy(['APPROVE']) },
                 { label: 'Pagó', ...firstBy(['PAY']) },
               ]
-            : [
-                { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                { label: 'Controló', name: '', sector: '', at: '' },
-              ]
+            : doc.doc_type === 'RFQ'
+              ? [
+                  { label: 'Preparó', ...firstBy(['SUBMIT', 'CREATE']) },
+                  { label: 'Adjudicó', ...firstBy(['AWARD']) },
+                ]
+              : doc.doc_type === 'SUPPLIER_QUOTE'
+                ? [
+                    { label: 'Cargó', ...firstBy(['CREATE']) },
+                    { label: 'Controló', name: '', sector: '', at: '' },
+                  ]
+                : [
+                    { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                    { label: 'Controló', name: '', sector: '', at: '' },
+                  ]
   return {
     doc: listItem(db, doc),
     lines,
     journal: doc.je ? journalView(db, doc) : null,
     payment: doc.op ? paymentView(db, doc) : null,
+    rfq: doc.rq ? rfqView(db, doc) : null,
+    quote: doc.sq ? quoteView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     warehouse: db.warehouses.find((w) => w.id === warehouseId) ?? null,
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
@@ -980,6 +1135,101 @@ function paymentView(db: DB, doc: T.Document): PaymentView {
           amount: l.amount,
         }
       }),
+  }
+}
+
+const docRef = (db: DB, d: T.Document): DocRef => ({
+  id: d.id,
+  display_number: d.display_number,
+  status: d.status,
+  path: docPath(db, d),
+  status_info: DOC_STATUSES[d.doc_type][d.status],
+})
+
+function rfqView(db: DB, doc: T.Document): RfqView {
+  const open = doc.status === 'ENVIADA'
+  const items = rfqLinesOf(db, doc.id)
+  const quotes = quotesOf(db, doc.id)
+  const linesOf = (q: T.Document) => db.sqLines.filter((l) => l.document_id === q.id)
+  // El precio más bajo de cada ítem entre las cotizaciones del cuadro.
+  const lowest = new Map<string, number>()
+  for (const q of quotes)
+    for (const l of linesOf(q)) {
+      const min = lowest.get(l.rfq_line_id)
+      if (min === undefined || l.unit_price < min) lowest.set(l.rfq_line_id, l.unit_price)
+    }
+  const best = open ? bestQuote(db, doc) : null
+  const awarded = quotes.find((q) => q.status === 'ADJUDICADA')
+  const order = awarded ? orderFromQuote(db, awarded.id) : undefined
+  return {
+    response_due: doc.rq!.response_due,
+    award_reason: doc.rq!.award_reason,
+    invited: db.rfqSuppliers
+      .filter((s) => s.document_id === doc.id)
+      .map((s) => db.suppliers.find((x) => x.id === s.supplier_id)!)
+      .sort((a, b) => compareCodes(a.code, b.code))
+      .map((s) => {
+        const quote = quotes.find((q) => q.supplier_id === s.id)
+        return {
+          supplier: { id: s.id, code: s.code, legal_name: s.legal_name },
+          quote: quote ? docRef(db, quote) : null,
+        }
+      }),
+    quotes: quotes.map((q) => {
+      const supplier = db.suppliers.find((s) => s.id === q.supplier_id)!
+      const quoted = linesOf(q)
+      return {
+        ...docRef(db, q),
+        supplier: {
+          id: supplier.id,
+          code: supplier.code,
+          legal_name: supplier.legal_name,
+          vat_condition: supplier.vat_condition,
+        },
+        supplier_reference: q.sq!.supplier_reference,
+        document_date: q.document_date,
+        valid_until: q.sq!.valid_until,
+        expired: open && q.status === 'RECIBIDA' && !quoteIsValid(db, q),
+        delivery_days: q.sq!.delivery_days,
+        payment_terms_days: q.sq!.payment_terms_days,
+        subtotal: q.subtotal,
+        tax_total: q.tax_total,
+        total: q.total,
+        quoted_lines: quoted.length,
+        complete: quoted.length === items.length,
+        prices: items.map((item) => {
+          const l = quoted.find((x) => x.rfq_line_id === item.id)
+          return l
+            ? {
+                unit_price: l.unit_price,
+                vat_rate: l.vat_rate,
+                line_subtotal: l.line_subtotal,
+                lowest: l.unit_price === lowest.get(item.id),
+              }
+            : null
+        }),
+      }
+    }),
+    best_quote_id: best?.id ?? null,
+    awarded_quote_id: awarded?.id ?? null,
+    order: order ? docRef(db, order) : null,
+  }
+}
+
+function quoteView(db: DB, doc: T.Document): QuoteView {
+  const sq = doc.sq!
+  const rfq = db.documents.find((d) => d.id === sq.rfq_id)!
+  const open = rfq.status === 'ENVIADA'
+  const order = doc.status === 'ADJUDICADA' ? orderFromQuote(db, doc.id) : undefined
+  return {
+    rfq: docRef(db, rfq),
+    supplier_reference: sq.supplier_reference,
+    valid_until: sq.valid_until,
+    expired: open && doc.status === 'RECIBIDA' && !quoteIsValid(db, doc),
+    delivery_days: sq.delivery_days,
+    payment_terms_days: sq.payment_terms_days,
+    best: open && bestQuote(db, rfq)?.id === doc.id,
+    order: order ? docRef(db, order) : null,
   }
 }
 

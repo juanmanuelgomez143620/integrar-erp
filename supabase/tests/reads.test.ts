@@ -43,6 +43,8 @@ const DOC_TYPES: DocType[] = [
   'JOURNAL_ENTRY',
   'SUPPLIER_INVOICE',
   'PAYMENT_ORDER',
+  'RFQ',
+  'SUPPLIER_QUOTE',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 

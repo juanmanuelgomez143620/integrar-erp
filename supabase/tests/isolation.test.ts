@@ -78,6 +78,11 @@ async function snapshot(company: string) {
     'supplier_invoice_lines',
     'payment_orders',
     'payment_order_lines',
+    'rfqs',
+    'rfq_lines',
+    'rfq_suppliers',
+    'supplier_quotes',
+    'supplier_quote_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -105,7 +110,11 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
               ? B.invoice
               : fn.startsWith('op_')
                 ? B.paymentOrder
-                : B.order
+                : fn.startsWith('rfq_')
+                  ? B.rfq
+                  : fn.startsWith('sq_')
+                    ? B.quote
+                    : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -133,10 +142,17 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         credit: 0,
         invoice_id: B.invoice,
         amount: 1,
+        rfq_line_id: B.rfqLine,
       },
       { account_id: B.account, debit: 0, credit: 1 },
     ],
     document_date: '2027-03-01',
+    rfq_id: B.rfq,
+    supplier_ids: [B.supplier, B.supplier2],
+    response_due: '2099-12-31',
+    valid_until: '2099-12-31',
+    delivery_days: 1,
+    supplier_reference: 'Intruso',
     description: 'Asiento de un intruso',
     is_contra: false,
     id: B.product,
@@ -178,6 +194,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_account_id: B.account,
     p_supplier_id: B.supplier,
     p_rule_id: B.rule,
+    p_quote_id: B.quote,
     p_period_id: B.period,
     p_status: 'CERRADO',
     p_year: 2028,
@@ -322,6 +339,34 @@ beforeAll(async () => {
       p_submit: true,
     })
   ).id
+  B.supplier2 = (await one(`select id from public.suppliers where company_id = $1 and code = 'PRV-002'`, [B.id])).id
+  const today = (await one<{ d: string }>(`select private.business_date($1)::text as d`, [B.id])).d
+  B.rfq = (
+    await rpc<{ id: string }>('alumnoB', 'rfq_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        response_due: today,
+        warehouse_id: B.warehouse,
+        supplier_ids: [B.supplier, B.supplier2],
+        lines: [{ product_id: B.product, quantity: 10 }],
+      }),
+      p_send: true,
+    })
+  ).id
+  B.rfqLine = (await one(`select id from public.rfq_lines where document_id = $1`, [B.rfq])).id
+  B.quote = (
+    await rpc<{ id: string }>('alumnoB', 'sq_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        rfq_id: B.rfq,
+        supplier_id: B.supplier,
+        valid_until: today,
+        delivery_days: 3,
+        payment_terms_days: 30,
+        lines: [{ rfq_line_id: B.rfqLine, unit_price: 1250, vat_rate: 21 }],
+      }),
+    })
+  ).id
   B.adjustment = (
     await one(`select id from public.documents where company_id = $1 and doc_type = 'STOCK_ADJUSTMENT' limit 1`, [B.id])
   ).id
@@ -359,6 +404,8 @@ beforeAll(async () => {
          union select id::text from public.supplier_invoice_lines where company_id = $1
          union select id::text from public.posting_rules where company_id = $1
          union select id::text from public.payment_order_lines where company_id = $1
+         union select id::text from public.rfq_lines where company_id = $1
+         union select id::text from public.supplier_quote_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

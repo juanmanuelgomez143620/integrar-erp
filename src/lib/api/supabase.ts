@@ -327,6 +327,12 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     rejectPaymentOrder: (docId, reason) => rpc('op_reject', { ...doc(docId), p_reason: reason }),
     payPaymentOrder: (docId, reference) => rpc('op_pay', { ...doc(docId), p_reference: reference }),
     cancelPaymentOrder: (docId, reason) => rpc('op_cancel', { ...doc(docId), p_reason: reason }),
+    createRfq: (companyId, input, send) => rpc('rfq_create', { ...company(companyId), p_input: input, p_send: send }),
+    sendRfq: (docId) => rpc('rfq_submit', doc(docId)),
+    cancelRfq: (docId, reason) => rpc('rfq_cancel', { ...doc(docId), p_reason: reason }),
+    awardRfq: (docId, quoteId, reason) => rpc('rfq_award', { ...doc(docId), p_quote_id: quoteId, p_reason: reason }),
+    createSupplierQuote: (companyId, input) => rpc('sq_create', { ...company(companyId), p_input: input }),
+    cancelSupplierQuote: (docId, reason) => rpc('sq_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

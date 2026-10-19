@@ -2996,6 +2996,341 @@ export function cmdCancelPaymentOrder(ctx: Ctx, docId: string, reason: string) {
   for (const l of orderLines(db, doc.id)) recomputeInvoice(ctx, l.invoice_id)
 }
 
+// ============================================================ Cotizaciones (docs/FASE_3_COMPRAS_Y_TESORERIA.md §6)
+
+export interface RfqInput {
+  /** Fecha límite para que respondan los proveedores. */
+  response_due: string
+  warehouse_id: string
+  notes: string
+  /** Proveedores invitados a cotizar. */
+  supplier_ids: string[]
+  lines: { product_id: string; quantity: number; requisition_line_id: string | null; notes?: string }[]
+}
+
+export interface SupplierQuoteInput {
+  rfq_id: string
+  supplier_id: string
+  supplier_reference: string
+  valid_until: string
+  delivery_days: number
+  payment_terms_days: number
+  notes: string
+  /** Sólo los ítems que cotiza. Si el proveedor no discrimina IVA, su precio es el final y va sin IVA. */
+  lines: { rfq_line_id: string; unit_price: number; vat_rate: number }[]
+}
+
+/** Proveedores a los que, como mínimo, se pide cotización (a validar). */
+export const MIN_RFQ_SUPPLIERS = 2
+
+const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s))
+
+export const rfqLinesOf = (db: DB, rfqId: string) =>
+  db.rfqLines.filter((l) => l.document_id === rfqId).sort((a, b) => a.line_no - b.line_no)
+
+/** Las cotizaciones de una solicitud que no se anularon, por número. */
+export function quotesOf(db: DB, rfqId: string) {
+  return db.documents
+    .filter((d) => d.doc_type === 'SUPPLIER_QUOTE' && d.sq?.rfq_id === rfqId && d.status !== 'ANULADA')
+    .sort((a, b) => a.number - b.number)
+}
+
+/** Vigente: recibida y con la oferta todavía válida. */
+export function quoteIsValid(db: DB, quote: T.Document) {
+  return quote.status === 'RECIBIDA' && quote.sq!.valid_until >= businessDate(getCompany(db, quote.company_id))
+}
+
+/**
+ * La más conveniente por precio: entre las vigentes que cotizan todos los
+ * ítems, la de menor costo para la empresa (el neto: el IVA de un responsable
+ * inscripto es crédito fiscal, y quien no lo discrimina cotiza sin IVA) y, a
+ * igual costo, la de menor plazo de entrega (a validar).
+ */
+export function bestQuote(db: DB, rfq: T.Document): T.Document | null {
+  const items = rfqLinesOf(db, rfq.id).length
+  return (
+    quotesOf(db, rfq.id)
+      .filter((q) => quoteIsValid(db, q) && db.sqLines.filter((l) => l.document_id === q.id).length === items)
+      .sort((a, b) => a.subtotal - b.subtotal || a.sq!.delivery_days - b.sq!.delivery_days || a.number - b.number)[0] ??
+    null
+  )
+}
+
+/** La orden de compra que nació de una cotización adjudicada. */
+export function orderFromQuote(db: DB, quoteId: string) {
+  const ids = new Set(db.docLinks.filter((l) => l.from_document_id === quoteId).map((l) => l.to_document_id))
+  return db.documents
+    .filter((d) => ids.has(d.id) && d.doc_type === 'PURCHASE_ORDER')
+    .sort((a, b) => a.number - b.number)[0]
+}
+
+function validateRfqLines(ctx: Ctx, companyId: string, input: RfqInput['lines']) {
+  const { db } = ctx
+  const lines = input.filter((l) => l.product_id).map((l) => ({ ...l, quantity: round3(l.quantity) }))
+  if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un ítem para cotizar.')
+  const usedByReqLine = new Map<string, number>()
+  for (const l of lines) {
+    const p = getProduct(db, companyId, l.product_id)
+    if (!p.is_active) fail('DATO_INVALIDO', `${productLabel(p)} está inactivo.`)
+    if (!Number.isFinite(l.quantity) || !(l.quantity > 0))
+      fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero y tener hasta 3 decimales.`)
+    if (!l.requisition_line_id) continue
+    const rl = db.prLines.find((x) => x.id === l.requisition_line_id && x.company_id === companyId)
+    if (!rl) fail('DATO_INVALIDO', 'La línea de solicitud vinculada no existe.')
+    const req = getDoc(db, rl.document_id, 'PURCHASE_REQUISITION')
+    if (!['SOLICITADO', 'ORDENADO_PARCIAL'].includes(req.status))
+      fail('TRANSICION_INVALIDA', `${req.display_number} no está pendiente de atención.`)
+    if (rl.product_id !== l.product_id)
+      fail('DATO_INVALIDO', `El producto no coincide con el de ${req.display_number}.`)
+    const used = (usedByReqLine.get(rl.id) ?? 0) + l.quantity
+    usedByReqLine.set(rl.id, used)
+    const pending = requisitionAvailableQuantity(db, rl.id)
+    if (used > pending + EPS)
+      fail(
+        'CANTIDAD_EXCEDE_PENDIENTE',
+        `${p.code}: la cantidad supera lo pendiente de ${req.display_number} (${fmtQty(pending, p.uom_code)}).`,
+        'Si hace falta cotizar más, agregá una línea sin vínculo a la solicitud.',
+      )
+  }
+  return lines
+}
+
+export function cmdCreateRfq(ctx: Ctx, companyId: string, input: RfqInput, send: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'rfq.create')
+  if (!isIsoDate(input.response_due)) fail('DATO_INVALIDO', 'Indicá hasta cuándo pueden responder los proveedores.')
+  if (input.response_due < businessDate(getCompany(db, companyId)))
+    fail('DATO_INVALIDO', 'La fecha límite para responder no puede ser anterior a hoy.')
+  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
+    fail('DATO_INVALIDO', 'Elegí el depósito de entrega.')
+  const suppliers = [...new Set(input.supplier_ids.filter(Boolean))].map((id) => {
+    const s = db.suppliers.find((x) => x.id === id && x.company_id === companyId)
+    if (!s) fail('DATO_INVALIDO', 'Uno de los proveedores invitados no existe en esta empresa.')
+    if (!s.is_active) fail('DATO_INVALIDO', `El proveedor ${s.legal_name} está inactivo.`)
+    return s
+  })
+  if (suppliers.length < MIN_RFQ_SUPPLIERS)
+    fail(
+      'DATO_INVALIDO',
+      'Invitá al menos a dos proveedores: la idea es comparar sus ofertas.',
+      'Pedir más de un precio permite elegir con fundamento.',
+    )
+  const lines = validateRfqLines(ctx, companyId, input.lines)
+  const doc = newDocument(ctx, companyId, 'RFQ', actor, {
+    notes: input.notes.trim(),
+    rq: { response_due: input.response_due, warehouse_id: input.warehouse_id, award_reason: '' },
+  })
+  lines.forEach((l, i) => {
+    db.rfqLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: l.product_id,
+      quantity: l.quantity,
+      requisition_line_id: l.requisition_line_id ?? null,
+      notes: (l.notes ?? '').trim(),
+    })
+  })
+  for (const s of suppliers) db.rfqSuppliers.push({ company_id: companyId, document_id: doc.id, supplier_id: s.id })
+  const requisitions = new Set(
+    lines
+      .filter((l) => l.requisition_line_id)
+      .map((l) => db.prLines.find((x) => x.id === l.requisition_line_id)!.document_id),
+  )
+  for (const prId of requisitions) link(ctx, companyId, prId, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'rfq',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: pide cotización a ${suppliers.length} proveedores (${lines.length} ítem${lines.length > 1 ? 's' : ''})`,
+  })
+  if (send) sendRfq(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+function sendRfq(ctx: Ctx, doc: T.Document) {
+  const invited = ctx.db.rfqSuppliers.filter((s) => s.document_id === doc.id).length
+  transition(ctx, doc, 'SUBMIT', { summary: `Envió ${doc.display_number} a ${invited} proveedores` })
+}
+
+export function cmdSendRfq(ctx: Ctx, docId: string) {
+  sendRfq(ctx, getDoc(ctx.db, docId, 'RFQ'))
+}
+
+/** Anular la solicitud descarta las cotizaciones que seguían en juego. */
+export function cmdCancelRfq(ctx: Ctx, docId: string, reason: string) {
+  const doc = getDoc(ctx.db, docId, 'RFQ')
+  transition(ctx, doc, 'CANCEL', { comment: reason })
+  for (const q of quotesOf(ctx.db, doc.id).filter((x) => x.status === 'RECIBIDA'))
+    transition(ctx, q, 'SYSTEM', { to: 'DESCARTADA' })
+}
+
+export function cmdCreateSupplierQuote(ctx: Ctx, companyId: string, input: SupplierQuoteInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'supplier_quote.create')
+  const rfq = db.documents.find((d) => d.id === input.rfq_id && d.company_id === companyId && d.doc_type === 'RFQ')
+  if (!rfq) fail('DATO_INVALIDO', 'Elegí la solicitud de cotización que responde el proveedor.')
+  if (rfq.status !== 'ENVIADA')
+    fail(
+      'TRANSICION_INVALIDA',
+      `${rfq.display_number} está en estado "${statusLabel(rfq.doc_type, rfq.status)}": se cargan cotizaciones de una solicitud enviada a los proveedores.`,
+    )
+  const supplier = db.suppliers.find((s) => s.id === input.supplier_id && s.company_id === companyId)
+  if (!supplier || !db.rfqSuppliers.some((s) => s.document_id === rfq.id && s.supplier_id === supplier.id))
+    fail('DATO_INVALIDO', `Elegí uno de los proveedores invitados a cotizar en ${rfq.display_number}.`)
+  if (!supplier.is_active) fail('DATO_INVALIDO', `El proveedor ${supplier.legal_name} está inactivo.`)
+  const previous = quotesOf(db, rfq.id).find((q) => q.supplier_id === supplier.id)
+  if (previous)
+    fail(
+      'DATO_INVALIDO',
+      `Ya está cargada la cotización de ${supplier.legal_name} (${previous.display_number}). Si cambió su oferta, anulala y cargá la nueva.`,
+    )
+  if (!isIsoDate(input.valid_until)) fail('DATO_INVALIDO', 'Indicá hasta cuándo vale la oferta.')
+  if (input.valid_until < businessDate(getCompany(db, companyId)))
+    fail('DATO_INVALIDO', 'La oferta ya está vencida: pedile al proveedor que la renueve.')
+  if (!Number.isInteger(input.delivery_days) || input.delivery_days < 0)
+    fail('DATO_INVALIDO', 'El plazo de entrega es una cantidad entera de días (0 o más).')
+  if (!Number.isInteger(input.payment_terms_days) || input.payment_terms_days < 0)
+    fail('DATO_INVALIDO', 'La condición de pago es una cantidad entera de días (0 = contado).')
+  const reference = input.supplier_reference.trim()
+  if (reference.length > 40) fail('DATO_INVALIDO', 'La referencia del proveedor tiene hasta 40 caracteres.')
+  // Quien no es responsable inscripto no discrimina IVA: cotiza el precio final.
+  const discriminates = supplier.vat_condition === 'RESPONSABLE_INSCRIPTO'
+  const items = rfqLinesOf(db, rfq.id)
+  const seen = new Set<string>()
+  const lines = input.lines
+    .filter((l) => l.rfq_line_id)
+    .map((l) => {
+      const item = items.find((x) => x.id === l.rfq_line_id)
+      if (!item) fail('DATO_INVALIDO', `Uno de los ítems no es de ${rfq.display_number}.`)
+      if (seen.has(item.id)) fail('DATO_INVALIDO', `El ítem ${item.line_no} está dos veces en la cotización.`)
+      seen.add(item.id)
+      const p = db.products.find((x) => x.id === item.product_id)!
+      if (!Number.isFinite(l.unit_price) || !(l.unit_price > 0) || round4(l.unit_price) !== l.unit_price)
+        fail('DATO_INVALIDO', `El precio de ${p.code} debe ser mayor que cero y tener hasta 4 decimales.`)
+      const vat = discriminates ? l.vat_rate : 0
+      if (!VAT_RATES.includes(vat)) fail('DATO_INVALIDO', `La alícuota de IVA de ${p.code} no es válida.`)
+      const subtotal = round2(item.quantity * l.unit_price)
+      return { item, unit_price: l.unit_price, vat, subtotal, tax: round2((subtotal * vat) / 100) }
+    })
+    .sort((a, b) => a.item.line_no - b.item.line_no)
+  if (!lines.length) fail('DATO_INVALIDO', 'Indicá el precio de al menos un ítem.')
+  const doc = newDocument(ctx, companyId, 'SUPPLIER_QUOTE', actor, {
+    status: 'RECIBIDA',
+    supplier_id: supplier.id,
+    notes: input.notes.trim(),
+    sq: {
+      rfq_id: rfq.id,
+      supplier_reference: reference,
+      valid_until: input.valid_until,
+      delivery_days: input.delivery_days,
+      payment_terms_days: input.payment_terms_days,
+    },
+  })
+  lines.forEach((l, i) => {
+    db.sqLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      rfq_line_id: l.item.id,
+      product_id: l.item.product_id,
+      quantity: l.item.quantity,
+      unit_price: l.unit_price,
+      vat_rate: l.vat,
+      line_subtotal: l.subtotal,
+      line_tax: l.tax,
+      line_total: round2(l.subtotal + l.tax),
+    })
+  })
+  doc.subtotal = round2(lines.reduce((s, l) => s + l.subtotal, 0))
+  doc.tax_total = round2(lines.reduce((s, l) => s + l.tax, 0))
+  doc.total = round2(doc.subtotal + doc.tax_total)
+  link(ctx, companyId, rfq.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'supplier_quote',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'RECIBIDA',
+    summary: `Cargó ${doc.display_number}: cotización de ${supplier.legal_name} para ${rfq.display_number} por ${money(doc.total)}`,
+  })
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+export function cmdCancelSupplierQuote(ctx: Ctx, docId: string, reason: string) {
+  transition(ctx, getDoc(ctx.db, docId, 'SUPPLIER_QUOTE'), 'CANCEL', { comment: reason })
+}
+
+/**
+ * Adjudica la solicitud a una cotización vigente: genera la OC en borrador con
+ * sus precios y condiciones, y descarta las demás. Si no es la más conveniente
+ * por precio, hay que justificar la elección.
+ */
+export function cmdAwardRfq(ctx: Ctx, docId: string, quoteId: string, reason: string) {
+  const { db } = ctx
+  const rfq = getDoc(db, docId, 'RFQ')
+  requireTransition(rfq, 'AWARD')
+  const actor = requirePermission(ctx, rfq.company_id, 'rfq.award')
+  const quote = quotesOf(db, rfq.id).find((q) => q.id === quoteId && q.status === 'RECIBIDA')
+  if (!quote) fail('DATO_INVALIDO', `Elegí una de las cotizaciones recibidas para ${rfq.display_number}.`)
+  const supplier = db.suppliers.find((s) => s.id === quote.supplier_id)!
+  if (!quoteIsValid(db, quote))
+    fail(
+      'OFERTA_VENCIDA',
+      `La oferta de ${supplier.legal_name} venció el ${fmtDate(quote.sq!.valid_until)}: pedile que la renueve y cargá la nueva cotización.`,
+    )
+  const comment = reason.trim()
+  const best = bestQuote(db, rfq)
+  if (quote.id !== best?.id && comment.length < 10)
+    fail(
+      'MOTIVO_REQUERIDO',
+      best
+        ? `${quote.display_number} no es la más conveniente por precio (es ${best.display_number}): explicá por qué la elegís, en al menos 10 caracteres.`
+        : `Ninguna cotización vigente cubre todos los ítems: explicá por qué elegís ${quote.display_number}, en al menos 10 caracteres.`,
+      'Justificar la elección es parte del control: queda en la solicitud y Gerencia la ve al aprobar la orden de compra.',
+    )
+  const items = rfqLinesOf(db, rfq.id)
+  const reference = quote.sq!.supplier_reference
+  const order = cmdCreatePurchaseOrder(ctx, rfq.company_id, {
+    supplier_id: supplier.id,
+    expected_date: addDays(businessDate(getCompany(db, rfq.company_id)), quote.sq!.delivery_days),
+    warehouse_id: rfq.rq!.warehouse_id,
+    payment_terms_days: quote.sq!.payment_terms_days,
+    delivery_terms: '',
+    notes: `Según la cotización ${quote.display_number}${reference ? ` (referencia del proveedor: ${reference})` : ''}.`,
+    lines: db.sqLines
+      .filter((l) => l.document_id === quote.id)
+      .sort((a, b) => a.line_no - b.line_no)
+      .map((l) => ({
+        product_id: l.product_id,
+        requisition_line_id: items.find((x) => x.id === l.rfq_line_id)!.requisition_line_id,
+        quantity: l.quantity,
+        unit_price: l.unit_price,
+        vat_rate: l.vat_rate,
+      })),
+  })
+  link(ctx, rfq.company_id, quote.id, order.id)
+  rfq.rq = { ...rfq.rq!, award_reason: comment }
+  transition(ctx, rfq, 'AWARD', {
+    actor,
+    summary: `Adjudicó ${rfq.display_number} a ${supplier.legal_name} (${quote.display_number}) y generó ${order.display_number} en borrador${comment ? ` — ${comment}` : ''}`,
+  })
+  for (const q of quotesOf(db, rfq.id).filter((x) => x.status === 'RECIBIDA'))
+    transition(ctx, q, 'SYSTEM', { to: q.id === quote.id ? 'ADJUDICADA' : 'DESCARTADA' })
+  return order
+}
+
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {

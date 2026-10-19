@@ -11,7 +11,7 @@ export function buildScenario(): DB {
   const db = buildSeed()
   const company = db.companies.find((c) => c.is_template)!.id
   // Cada operación diez segundos después de la anterior (el orden por fecha no
-  // tiene empates), entre lo último del seed (hace 30 minutos) y el momento en
+  // tiene empates), entre lo último del seed (hace 26 minutos) y el momento en
   // que se arma: así todo queda antes de lo que hagan las pruebas de comandos.
   let clock = Date.parse(db.seededAt) - 25 * 60_000
   const as = (username: string): E.Ctx => {
@@ -178,6 +178,70 @@ export function buildScenario(): DB {
   E.cmdRejectPurchaseOrder(as('compras2'), rejected.id, 'Pedí otra cotización: el precio subió')
   const cancelled = E.cmdCreatePurchaseOrder(as('compras2'), company, order('PRV-005', [['IN-003', 4, 14000, null]]))
   E.cmdCancelPurchaseOrder(as('compras2'), cancelled.id, 'Se cargó por error')
+
+  // Cotizaciones en cada estado. En la solicitud de la demo responde además un
+  // proveedor que no cotiza todo, y la oferta más barata ya venció; otra
+  // solicitud queda en borrador, otra adjudicada (con su OC en borrador, una
+  // cotización anulada y las demás descartadas) y otra anulada.
+  const demoRfq = db.documents.find((d) => d.company_id === company && d.doc_type === 'RFQ')!
+  const rfqItems = (rfqId: string) =>
+    db.rfqLines.filter((l) => l.document_id === rfqId).sort((a, b) => a.line_no - b.line_no)
+  const quote = (
+    rfqId: string,
+    supplierCode: string,
+    prices: (number | null)[],
+    delivery = 5,
+    terms = 30,
+  ): E.SupplierQuoteInput => ({
+    rfq_id: rfqId,
+    supplier_id: supplier(supplierCode),
+    supplier_reference: '',
+    valid_until: addDays(todayAR(), 7),
+    delivery_days: delivery,
+    payment_terms_days: terms,
+    notes: '',
+    lines: rfqItems(rfqId).flatMap((l, i) =>
+      prices[i] == null ? [] : [{ rfq_line_id: l.id, unit_price: prices[i]!, vat_rate: 21 }],
+    ),
+  })
+  E.cmdCreateSupplierQuote(as('compras2'), company, quote(demoRfq.id, 'PRV-009', [86000, null], 3, 0))
+  // Pasó el tiempo: la oferta más barata de la demo ya venció.
+  db.documents.find((d) => d.sq?.rfq_id === demoRfq.id && d.supplier_id === supplier('PRV-001'))!.sq!.valid_until =
+    addDays(todayAR(), -1)
+  const rfqInput = (suppliers: string[], lines: [string, number][]): E.RfqInput => ({
+    response_due: addDays(todayAR(), 4),
+    warehouse_id: warehouse('DEP-MP'),
+    notes: '',
+    supplier_ids: suppliers.map(supplier),
+    lines: lines.map(([code, quantity]) => ({ product_id: product(code).id, quantity, requisition_line_id: null })),
+  })
+  E.cmdCreateRfq(as('compras2'), company, rfqInput(['PRV-003', 'PRV-009'], [['IN-004', 100]]), false)
+  const awardedRfq = E.cmdCreateRfq(
+    as('compras1'),
+    company,
+    rfqInput(
+      ['PRV-003', 'PRV-005', 'PRV-010'],
+      [
+        ['IN-003', 10],
+        ['IN-004', 50],
+      ],
+    ),
+    true,
+  )
+  const usual = E.cmdCreateSupplierQuote(as('compras1'), company, quote(awardedRfq.id, 'PRV-003', [14500, 2300], 4))
+  const mistaken = E.cmdCreateSupplierQuote(as('compras2'), company, quote(awardedRfq.id, 'PRV-005', [13000, 2100], 2))
+  E.cmdCancelSupplierQuote(as('compras2'), mistaken.id, 'Se cargó el precio sin el descuento')
+  E.cmdCreateSupplierQuote(as('compras2'), company, quote(awardedRfq.id, 'PRV-005', [12800, 2100], 2))
+  E.cmdCreateSupplierQuote(as('compras1'), company, quote(awardedRfq.id, 'PRV-010', [15000, 2600], 1, 0))
+  E.cmdAwardRfq(
+    as('compras1'),
+    awardedRfq.id,
+    usual.id,
+    'Herrajes Guaraníes es el proveedor habitual y da garantía de un año.',
+  )
+  const droppedRfq = E.cmdCreateRfq(as('compras2'), company, rfqInput(['PRV-004', 'PRV-009'], [['IN-002', 12]]), true)
+  E.cmdCreateSupplierQuote(as('compras2'), company, quote(droppedRfq.id, 'PRV-004', [17500]))
+  E.cmdCancelRfq(as('compras1'), droppedRfq.id, 'Producción ya no necesita el barniz este mes')
 
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(

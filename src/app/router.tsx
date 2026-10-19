@@ -73,6 +73,8 @@ const TreasuryPage = lazyPage(() => import('@/features/payables/payables-pages')
 const PaymentOrderFormPage = lazyPage(() =>
   import('@/features/payables/payment-order-form').then((m) => m.PaymentOrderFormPage),
 )
+const RfqFormPage = lazyPage(() => import('@/features/purchasing/quotations/rfq-form').then((m) => m.RfqFormPage))
+const QuoteFormPage = lazyPage(() => import('@/features/purchasing/quotations/quote-form').then((m) => m.QuoteFormPage))
 
 function NotFound() {
   return (
@@ -121,6 +123,15 @@ export const router = createBrowserRouter(
                 { path: 'compras/ordenes/nueva', element: <OrderFormPage /> },
                 { path: 'compras/ordenes/:number', element: <DocumentPage key="po" docType="PURCHASE_ORDER" /> },
                 { path: 'compras/ordenes/:number/editar', element: <OrderFormPage /> },
+                { path: 'compras/solicitudes-cotizacion', element: <DocumentListPage key="rq" docType="RFQ" /> },
+                { path: 'compras/solicitudes-cotizacion/nueva', element: <RfqFormPage /> },
+                { path: 'compras/solicitudes-cotizacion/:number', element: <DocumentPage key="rq" docType="RFQ" /> },
+                { path: 'compras/cotizaciones', element: <DocumentListPage key="sq" docType="SUPPLIER_QUOTE" /> },
+                { path: 'compras/cotizaciones/nueva', element: <QuoteFormPage /> },
+                {
+                  path: 'compras/cotizaciones/:number',
+                  element: <DocumentPage key="sq" docType="SUPPLIER_QUOTE" />,
+                },
                 { path: 'compras/facturas', element: <DocumentListPage key="si" docType="SUPPLIER_INVOICE" /> },
                 { path: 'compras/facturas/nueva', element: <InvoiceFormPage /> },
                 { path: 'compras/facturas/:number', element: <DocumentPage key="si" docType="SUPPLIER_INVOICE" /> },

@@ -5,6 +5,8 @@ import {
   AlertCircle,
   ArrowRight,
   Banknote,
+  FilePlus2,
+  FileSearch,
   Info,
   Lightbulb,
   Pencil,
@@ -31,6 +33,7 @@ import { date, dateTime, money, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { AwardDialog, ComparisonSection } from '@/features/purchasing/quotations/quotation-views'
 
 type Runner = (docId: string, text: string) => Promise<unknown>
 
@@ -74,6 +77,14 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     PAY: (id, t) => commands.payPaymentOrder(id, t),
     CANCEL: (id, t) => commands.cancelPaymentOrder(id, t),
   },
+  // Adjudicar tiene su propio diálogo (AwardDialog): hay que elegir la cotización.
+  RFQ: {
+    SUBMIT: (id) => commands.sendRfq(id),
+    CANCEL: (id, t) => commands.cancelRfq(id, t),
+  },
+  SUPPLIER_QUOTE: {
+    CANCEL: (id, t) => commands.cancelSupplierQuote(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -84,6 +95,8 @@ const AREA: Record<DocType, string> = {
   JOURNAL_ENTRY: 'Contabilidad',
   SUPPLIER_INVOICE: 'Compras',
   PAYMENT_ORDER: 'Pagos y tesorería',
+  RFQ: 'Compras',
+  SUPPLIER_QUOTE: 'Compras',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -112,6 +125,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
   const { doc } = detail
   const info = DOC_TYPES[doc.doc_type]
   const [pending, setPending] = useState<AvailableAction | null>(null)
+  const [awarding, setAwarding] = useState(false)
   const run = useCommand(
     (action: AvailableAction, text: string) => RUNNERS[doc.doc_type][action.action]!(doc.id, text),
     {
@@ -137,6 +151,11 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
     doc.doc_type === 'PURCHASE_ORDER' &&
     ['RECIBIDO_PARCIAL', 'RECIBIDO', 'CERRADO'].includes(doc.status) &&
     company.can('supplier_invoice.create')
+  const canRequestQuotes =
+    doc.doc_type === 'PURCHASE_REQUISITION' &&
+    ['SOLICITADO', 'ORDENADO_PARCIAL'].includes(doc.status) &&
+    company.can('rfq.create')
+  const canLoadQuote = doc.doc_type === 'RFQ' && doc.status === 'ENVIADA' && company.can('supplier_quote.create')
   const canPay =
     doc.doc_type === 'SUPPLIER_INVOICE' &&
     ['REGISTRADA', 'PAGADA_PARCIAL'].includes(doc.status) &&
@@ -152,7 +171,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
         key={a.action}
         variant={a.tone === 'destructive' ? 'destructive' : a.tone === 'outline' ? 'outline' : 'default'}
         disabled={!a.enabled}
-        onClick={() => setPending(a)}
+        onClick={() => (a.action === 'AWARD' ? setAwarding(true) : setPending(a))}
       >
         {a.label}
       </Button>
@@ -201,6 +220,20 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
                 <Printer /> Imprimir
               </Link>
             </Button>
+            {canRequestQuotes && (
+              <Button variant="outline" asChild>
+                <Link to={`${company.docPath('RFQ', 'nueva')}?sc=${doc.display_number}`}>
+                  <FileSearch /> Pedir cotizaciones
+                </Link>
+              </Button>
+            )}
+            {canLoadQuote && (
+              <Button variant="outline" asChild>
+                <Link to={`${company.docPath('SUPPLIER_QUOTE', 'nueva')}?solicitud=${doc.display_number}`}>
+                  <FilePlus2 /> Cargar cotización
+                </Link>
+              </Button>
+            )}
             {canOrder && (
               <Button variant="outline" asChild>
                 <Link to={`${company.docPath('PURCHASE_ORDER', 'nueva')}?sc=${doc.display_number}`}>
@@ -252,6 +285,13 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
           <div>
             <span className="font-medium">Motivo ({doc.status_info.label.toLowerCase()}):</span> {doc.status_reason}
           </div>
+        </div>
+      )}
+
+      {/* El cuadro comparativo va a todo el ancho: una columna por cotización. */}
+      {detail.rfq && (
+        <div className="mb-4">
+          <ComparisonSection detail={detail} />
         </div>
       )}
 
@@ -367,6 +407,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
         </aside>
       </div>
 
+      {awarding && <AwardDialog detail={detail} open={awarding} onOpenChange={setAwarding} />}
       {pending && (
         <ActionDialog
           open={!!pending}
@@ -477,6 +518,70 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
       </dl>
     )
   }
+  if (doc.doc_type === 'RFQ' && detail.rfq) {
+    const { rfq } = detail
+    return (
+      <dl className={grid}>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Responden hasta">{date(rfq.response_due)}</InfoRow>
+        <InfoRow label="Depósito de entrega">{warehouse?.name}</InfoRow>
+        <InfoRow label="Proveedores invitados">{rfq.invited.length}</InfoRow>
+        <InfoRow label="Preparó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.reference_label && <InfoRow label="Atiende">{doc.reference_label}</InfoRow>}
+        {rfq.order && (
+          <InfoRow label="Orden de compra">
+            <Link className="font-mono hover:underline" to={rfq.order.path}>
+              {rfq.order.display_number}
+            </Link>{' '}
+            <DocStatus info={rfq.order.status_info} />
+          </InfoRow>
+        )}
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'SUPPLIER_QUOTE' && detail.quote) {
+    const { quote } = detail
+    return (
+      <dl className={grid}>
+        <InfoRow label="Proveedor">{supplier?.legal_name}</InfoRow>
+        <InfoRow label="CUIT (simulado)">
+          {supplier?.tax_id} · {supplier ? VAT_CONDITIONS[supplier.vat_condition] : ''}
+        </InfoRow>
+        <InfoRow label="Solicitud de cotización">
+          <Link className="font-mono hover:underline" to={quote.rfq.path}>
+            {quote.rfq.display_number}
+          </Link>{' '}
+          <DocStatus info={quote.rfq.status_info} />
+        </InfoRow>
+        <InfoRow label="Referencia del proveedor">{quote.supplier_reference || '—'}</InfoRow>
+        <InfoRow label="Recibida">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Válida hasta">
+          {date(quote.valid_until)}
+          {quote.expired && <span className="text-red-700"> · vencida</span>}
+        </InfoRow>
+        <InfoRow label="Plazo de entrega">{quote.delivery_days} días</InfoRow>
+        <InfoRow label="Condición de pago">
+          {quote.payment_terms_days ? `${quote.payment_terms_days} días` : 'Contado'}
+        </InfoRow>
+        {quote.best && <InfoRow label="En el cuadro">La más conveniente por precio</InfoRow>}
+        {quote.order && (
+          <InfoRow label="Orden de compra">
+            <Link className="font-mono hover:underline" to={quote.order.path}>
+              {quote.order.display_number}
+            </Link>{' '}
+            <DocStatus info={quote.order.status_info} />
+          </InfoRow>
+        )}
+        <InfoRow label="Cargó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
   if (doc.doc_type === 'PURCHASE_REQUISITION' && doc.pr) {
     return (
       <>
@@ -540,7 +645,7 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Emitió">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
-        {doc.reference_label && <InfoRow label="Solicitudes que atiende">{doc.reference_label}</InfoRow>}
+        {doc.reference_label && <InfoRow label="Origen">{doc.reference_label}</InfoRow>}
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
       </dl>
     )
@@ -732,6 +837,21 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 <TableHead className={cn(head, 'text-right')}>Importe</TableHead>
               </>
             )}
+            {doc.doc_type === 'RFQ' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Cantidad</TableHead>
+                <TableHead className={head}>Solicitud</TableHead>
+                <TableHead className={head}>Observaciones</TableHead>
+              </>
+            )}
+            {doc.doc_type === 'SUPPLIER_QUOTE' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Cantidad</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Precio unit.</TableHead>
+                <TableHead className={cn(head, 'text-right')}>IVA</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
+              </>
+            )}
             {doc.doc_type === 'SUPPLIER_INVOICE' && (
               <>
                 <TableHead className={cn(head, 'text-right')}>Recibido (OC)</TableHead>
@@ -804,6 +924,21 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                   <TableCell className="tabular text-right">{money(l.quantity * (l.unit_cost ?? 0))}</TableCell>
                 </>
               )}
+              {doc.doc_type === 'RFQ' && (
+                <>
+                  <TableCell className="tabular text-right">{qty(l.quantity, l.product.uom_code)}</TableCell>
+                  <TableCell className="font-mono text-xs">{l.requisition_label ?? '—'}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{l.notes || '—'}</TableCell>
+                </>
+              )}
+              {doc.doc_type === 'SUPPLIER_QUOTE' && (
+                <>
+                  <TableCell className="tabular text-right">{qty(l.quantity, l.product.uom_code)}</TableCell>
+                  <TableCell className="tabular text-right">{money(l.unit_price)}</TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
+                </>
+              )}
               {doc.doc_type === 'SUPPLIER_INVOICE' && (
                 <>
                   <TableCell className="tabular text-right">{qty(l.qty_received, l.product.uom_code)}</TableCell>
@@ -836,6 +971,13 @@ function Lines({ detail }: { detail: DocumentDetail }) {
             />
             <TotalRow label="IVA" value={doc.tax_total} span={6} trailing={doc.doc_type === 'PURCHASE_ORDER'} />
             <TotalRow label="Total" value={doc.total} span={6} strong trailing={doc.doc_type === 'PURCHASE_ORDER'} />
+          </TableFooter>
+        )}
+        {doc.doc_type === 'SUPPLIER_QUOTE' && (
+          <TableFooter>
+            <TotalRow label="Subtotal neto (costo para la empresa)" value={doc.subtotal} span={5} />
+            <TotalRow label="IVA" value={doc.tax_total} span={5} />
+            <TotalRow label="Total" value={doc.total} span={5} strong />
           </TableFooter>
         )}
         {(doc.doc_type === 'GOODS_RECEIPT' || doc.doc_type === 'STOCK_ADJUSTMENT') && (

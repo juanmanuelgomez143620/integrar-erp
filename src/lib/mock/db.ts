@@ -40,6 +40,9 @@ export interface DB {
   jeLines: T.JournalEntryLine[]
   siLines: T.SupplierInvoiceLine[]
   opLines: T.PaymentOrderLine[]
+  rfqLines: T.RfqLine[]
+  rfqSuppliers: T.RfqSupplier[]
+  sqLines: T.SupplierQuoteLine[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -54,7 +57,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 5
+export const DB_VERSION = 6
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -93,6 +96,9 @@ const COLLECTIONS = [
   'jeLines',
   'siLines',
   'opLines',
+  'rfqLines',
+  'rfqSuppliers',
+  'sqLines',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -116,6 +122,9 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   siLines: 4,
   postingRules: 4,
   opLines: 5,
+  rfqLines: 6,
+  rfqSuppliers: 6,
+  sqLines: 6,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -173,6 +182,12 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.opLines ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+  },
+  // v5 → v6: solicitudes de cotización y cotizaciones de proveedores (Fase 3c).
+  5: (db) => {
+    db.rfqLines ??= []
+    db.rfqSuppliers ??= []
+    db.sqLines ??= []
   },
 }
 

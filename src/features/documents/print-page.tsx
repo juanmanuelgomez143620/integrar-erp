@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Loading } from '@/components/common/blocks'
-import { api } from '@/lib/api'
+import { api, type ComparisonQuote } from '@/lib/api'
 import { ADJUSTMENT_REASONS, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
 import { date, dateTime, money, qty } from '@/lib/format'
 import { useCompany } from '@/app/company'
@@ -20,9 +20,11 @@ export function PrintPage() {
   })
   if (isLoading || error) return <Loading error={error} />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
-  const { doc, lines, supplier, warehouse, journal, payment } = data
+  const { doc, lines, supplier, warehouse, journal, payment, rfq, quote } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
+  const priced =
+    doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE' || doc.doc_type === 'SUPPLIER_QUOTE'
   const th = 'border-b border-slate-300 px-2 py-1.5 text-left text-[11px] font-semibold uppercase text-slate-600'
   const td = 'border-b border-slate-200 px-2 py-1.5 align-top'
 
@@ -166,6 +168,54 @@ export function PrintPage() {
               </div>
             </>
           )}
+          {rfq && (
+            <>
+              <div className="col-span-2">
+                Pedimos cotización por los ítems siguientes, con su precio unitario, el plazo de entrega, la condición
+                de pago y la validez de la oferta.
+              </div>
+              <div>
+                <b>Responder hasta:</b> {date(rfq.response_due)}
+              </div>
+              <div>
+                <b>Entrega en:</b> {warehouse?.name}
+              </div>
+              <div className="col-span-2">
+                <b>Proveedores consultados:</b> {rfq.invited.map((i) => i.supplier.legal_name).join(', ')}
+              </div>
+              {doc.reference_label && (
+                <div>
+                  <b>Atiende:</b> {doc.reference_label}
+                </div>
+              )}
+            </>
+          )}
+          {quote && (
+            <>
+              <div className="col-span-2 rounded border border-slate-300 p-2">
+                <div className="text-[11px] font-semibold text-slate-600 uppercase">Cotiza</div>
+                <div className="font-semibold">{supplier?.legal_name}</div>
+                <div>
+                  CUIT {supplier?.tax_id} (simulado) · {supplier ? VAT_CONDITIONS[supplier.vat_condition] : ''}
+                </div>
+              </div>
+              <div>
+                <b>Responde a:</b> {quote.rfq.display_number}
+              </div>
+              <div>
+                <b>Referencia del proveedor:</b> {quote.supplier_reference || '—'}
+              </div>
+              <div>
+                <b>Válida hasta:</b> {date(quote.valid_until)}
+              </div>
+              <div>
+                <b>Plazo de entrega:</b> {quote.delivery_days} días
+              </div>
+              <div>
+                <b>Condición de pago:</b> {quote.payment_terms_days ? `${quote.payment_terms_days} días` : 'Contado'}
+              </div>
+            </>
+          )}
           {doc.doc_type === 'STOCK_ADJUSTMENT' && doc.sa && (
             <>
               <div>
@@ -286,13 +336,14 @@ export function PrintPage() {
                       ? 'Ajuste'
                       : 'Cantidad'}
                 </th>
-                {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
+                {priced && (
                   <>
                     <th className={`${th} text-right`}>Precio unit.</th>
                     <th className={`${th} text-right`}>IVA</th>
                     <th className={`${th} text-right`}>Subtotal</th>
                   </>
                 )}
+                {rfq && <th className={th}>Especificación</th>}
               </tr>
             </thead>
             <tbody>
@@ -305,20 +356,85 @@ export function PrintPage() {
                     <td className={`${td} text-right`}>{qty(l.qty_ordered_po, l.product.uom_code)}</td>
                   )}
                   <td className={`${td} text-right`}>{qty(l.quantity, l.product.uom_code)}</td>
-                  {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
+                  {priced && (
                     <>
                       <td className={`${td} text-right`}>{money(l.unit_price)}</td>
                       <td className={`${td} text-right`}>{String(l.vat_rate).replace('.', ',')} %</td>
                       <td className={`${td} text-right`}>{money(l.line_subtotal)}</td>
                     </>
                   )}
+                  {rfq && <td className={td}>{l.notes || '—'}</td>}
                 </tr>
               ))}
             </tbody>
           </table>
         )}
 
-        {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
+        {rfq && rfq.quotes.length > 0 && (
+          <>
+            <h2 className="mt-5 text-[11px] font-semibold text-slate-600 uppercase">
+              Cuadro comparativo (costo para la empresa: neto sin IVA)
+            </h2>
+            <table className="mt-1 w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className={th}>Ítem</th>
+                  {rfq.quotes.map((q) => (
+                    <th key={q.id} className={`${th.replace(' uppercase', '')} text-right`}>
+                      {q.supplier.legal_name}
+                      <div className="font-mono font-normal">
+                        {q.display_number}
+                        {q.id === rfq.awarded_quote_id ? ' · ADJUDICADA' : ''}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={l.id}>
+                    <td className={td}>
+                      {l.product.code} · {qty(l.quantity, l.product.uom_code)}
+                    </td>
+                    {rfq.quotes.map((q) => {
+                      const p = q.prices[i]
+                      return (
+                        <td key={q.id} className={`${td} text-right ${p?.lowest ? 'font-bold' : ''}`}>
+                          {p ? `${money(p.unit_price)}${p.lowest ? ' (más bajo)' : ''}` : 'no cotiza'}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+                {(
+                  [
+                    ['Costo (neto)', (q) => money(q.subtotal)],
+                    ['Total con IVA', (q) => money(q.total)],
+                    ['Plazo de entrega', (q) => `${q.delivery_days} días`],
+                    ['Condición de pago', (q) => (q.payment_terms_days ? `${q.payment_terms_days} días` : 'Contado')],
+                    ['Válida hasta', (q) => date(q.valid_until)],
+                  ] as [string, (q: ComparisonQuote) => string][]
+                ).map(([label, value]) => (
+                  <tr key={label}>
+                    <td className={`${td} font-semibold`}>{label}</td>
+                    {rfq.quotes.map((q) => (
+                      <td key={q.id} className={`${td} text-right`}>
+                        {value(q)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rfq.award_reason && (
+              <p className="mt-2">
+                <b>Justificación de la adjudicación:</b> {rfq.award_reason}
+              </p>
+            )}
+          </>
+        )}
+
+        {priced && (
           <div className="mt-3 ml-auto w-64">
             <div className="flex justify-between">
               <span>Subtotal neto</span>

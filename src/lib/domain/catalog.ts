@@ -39,6 +39,8 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   product: 'masters',
   purchase_requisition: 'purchasing',
   purchase_order: 'purchasing',
+  rfq: 'purchasing',
+  supplier_quote: 'purchasing',
   goods_receipt: 'inventory',
   stock: 'inventory',
   stock_adjustment: 'inventory',
@@ -121,6 +123,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read',
     'payment_order.read', 'payment_order.approve', 'treasury.read',
+    'rfq.read', 'supplier_quote.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -131,6 +134,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.cancel', 'purchase_order.export',
     'goods_receipt.read',
     'supplier_invoice.read', 'supplier_invoice.create', 'supplier_invoice.cancel', 'payable.read',
+    'rfq.read', 'rfq.create', 'rfq.cancel', 'rfq.award',
+    'supplier_quote.read', 'supplier_quote.create', 'supplier_quote.cancel',
   ],
   VENTAS: [...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read'],
   DEPOSITO: [
@@ -139,6 +144,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'stock_adjustment.read', 'stock_adjustment.create', 'stock_adjustment.cancel',
     'purchase_requisition.read', 'purchase_requisition.create', 'purchase_requisition.update', 'purchase_requisition.cancel',
     'purchase_order.read', 'goods_receipt.read', 'goods_receipt.create', 'goods_receipt.cancel',
+    'rfq.read', 'supplier_quote.read',
   ],
   PRODUCCION: [
     ...CORE_READ,
@@ -155,14 +161,19 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'ledger.export', 'fiscal_period.update',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
     'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read',
+    'rfq.read', 'supplier_quote.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
     'supplier_invoice.read', 'payable.read',
     'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
+    'rfq.read', 'supplier_quote.read',
   ],
   RRHH: [...CORE_READ],
-  IMPUESTOS: [...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read'],
+  IMPUESTOS: [
+    ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
+    'rfq.read', 'supplier_quote.read',
+  ],
   LOGISTICA: [...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read'],
   AUDITOR: [
     ...CORE_READ,
@@ -172,6 +183,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
+    'rfq.read', 'supplier_quote.read',
   ],
   DOCENTE: [],
 }
@@ -225,6 +237,16 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'PAYMENT_ORDER', prefix: 'OP', name: 'Orden de pago', plural: 'Órdenes de pago',
     resource: 'payment_order', module: 'payables', path: 'pagos/ordenes',
     description: 'Documento interno que autoriza a Tesorería a pagarle a un proveedor las facturas indicadas, desde una caja o un banco. Al pagarse genera el asiento y cancela la deuda.',
+  },
+  RFQ: {
+    code: 'RFQ', prefix: 'SCT', name: 'Solicitud de cotización', plural: 'Solicitudes de cotización',
+    resource: 'rfq', module: 'purchasing', path: 'compras/solicitudes-cotizacion',
+    description: 'Pedido de precios que Compras hace a varios proveedores antes de comprar: qué, cuánto y hasta cuándo responder. No compromete a la empresa.',
+  },
+  SUPPLIER_QUOTE: {
+    code: 'SUPPLIER_QUOTE', prefix: 'COT', name: 'Cotización de proveedor', plural: 'Cotizaciones',
+    resource: 'supplier_quote', module: 'purchasing', path: 'compras/cotizaciones',
+    description: 'Respuesta de un proveedor a una solicitud de cotización: precios, plazo de entrega, condición de pago y validez de la oferta. Se compara con las demás antes de elegir.',
   },
 }
 
@@ -286,6 +308,18 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagó: la deuda con el proveedor bajó y el pago está en el libro diario.' },
     RECHAZADA: { label: 'Rechazada', badge: 'danger', final: true, description: 'Gerencia no autorizó el pago.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba pagada, un contraasiento revirtió el pago.' },
+  },
+  RFQ: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Compras la está preparando: todavía no se pidió precio a nadie.' },
+    ENVIADA: { label: 'Enviada', badge: 'info', final: false, description: 'Se pidió cotización a los proveedores: Compras carga sus respuestas y las compara.' },
+    ADJUDICADA: { label: 'Adjudicada', badge: 'success', final: true, description: 'Se eligió una cotización y de ella nació la orden de compra.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: no se compra por esta vía.' },
+  },
+  SUPPLIER_QUOTE: {
+    RECIBIDA: { label: 'Recibida', badge: 'info', final: false, description: 'Cargada: participa del cuadro comparativo de su solicitud.' },
+    ADJUDICADA: { label: 'Adjudicada', badge: 'success', final: true, description: 'Fue la elegida: de ella nació la orden de compra.' },
+    DESCARTADA: { label: 'Descartada', badge: 'neutral', final: true, description: 'No fue elegida, o la solicitud se anuló.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: por ejemplo, se cargó mal o el proveedor cambió su oferta.' },
   },
 }
 
@@ -381,6 +415,17 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('PAYMENT_ORDER', 'APROBADA', 'PAY', 'PAGADA', 'payment_order.pay', 'Pagar', 'Registra el pago desde la caja o el banco: genera el asiento y baja la deuda con el proveedor.'),
   t('PAYMENT_ORDER', 'APROBADA', 'CANCEL', 'ANULADA', 'payment_order.cancel', 'Anular', 'Queda sin efecto antes de pagarse.', true, 'destructive'),
   t('PAYMENT_ORDER', 'PAGADA', 'CANCEL', 'ANULADA', 'payment_order.cancel', 'Anular con contraasiento', 'Revierte el pago con un contraasiento: las facturas vuelven a tener saldo.', true, 'destructive'),
+
+  // Solicitud de cotización
+  t('RFQ', 'BORRADOR', 'SUBMIT', 'ENVIADA', 'rfq.create', 'Enviar a los proveedores', 'Imprimila y mandásela a cada proveedor invitado; después cargá sus cotizaciones.'),
+  t('RFQ', 'BORRADOR', 'CANCEL', 'ANULADA', 'rfq.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('RFQ', 'ENVIADA', 'AWARD', 'ADJUDICADA', 'rfq.award', 'Adjudicar', 'Elegí la cotización: se genera la orden de compra en borrador y las demás quedan descartadas.'),
+  t('RFQ', 'ENVIADA', 'CANCEL', 'ANULADA', 'rfq.cancel', 'Anular', 'No se compra por esta vía: las cotizaciones cargadas quedan descartadas.', true, 'destructive'),
+
+  // Cotización de proveedor
+  t('SUPPLIER_QUOTE', 'RECIBIDA', 'CANCEL', 'ANULADA', 'supplier_quote.cancel', 'Anular', 'Sale del cuadro comparativo. Si el proveedor cambió su oferta, cargá la nueva.', true, 'destructive'),
+  t('SUPPLIER_QUOTE', 'RECIBIDA', 'SYSTEM', 'ADJUDICADA', null, '', ''),
+  t('SUPPLIER_QUOTE', 'RECIBIDA', 'SYSTEM', 'DESCARTADA', null, '', ''),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -396,6 +441,7 @@ export const ACTION_VERBS: Record<string, string> = {
   CANCEL: 'Anuló',
   CLOSE: 'Cerró el saldo de',
   PAY: 'Pagó',
+  AWARD: 'Adjudicó',
   SYSTEM: 'Actualizó',
   CLOSE_PERIOD: 'Cerró el período',
   REOPEN_PERIOD: 'Reabrió el período',
@@ -425,7 +471,7 @@ export interface TaskRule {
 
 // prettier-ignore
 export const TASK_RULES: TaskRule[] = [
-  { docType: 'PURCHASE_REQUISITION', status: 'SOLICITADO', taskType: 'ATENDER_SC', assignee: 'ROLE', role: 'COMPRAS', title: 'Atender {number}', description: 'Incluir la solicitud en una orden de compra o rechazarla con motivo.' },
+  { docType: 'PURCHASE_REQUISITION', status: 'SOLICITADO', taskType: 'ATENDER_SC', assignee: 'ROLE', role: 'COMPRAS', title: 'Atender {number}', description: 'Pedir cotizaciones o incluir la solicitud en una orden de compra, o rechazarla con motivo.' },
   { docType: 'PURCHASE_REQUISITION', status: 'ORDENADO_PARCIAL', taskType: 'ATENDER_SC', assignee: 'ROLE', role: 'COMPRAS', title: 'Completar {number} (saldo sin ordenar)', description: 'Ordenar el saldo pendiente o cerrarlo con motivo.' },
   { docType: 'PURCHASE_ORDER', status: 'PENDIENTE_APROBACION', taskType: 'APROBAR_OC', assignee: 'APPROVER', title: 'Aprobar {number} por {total}', description: 'Revisar proveedor, precios y cantidades; aprobar o rechazar con motivo.' },
   { docType: 'PURCHASE_ORDER', status: 'RECHAZADO', taskType: 'CORREGIR_OC', assignee: 'CREATOR', title: 'Revisar {number} rechazada', description: 'Leer el motivo del rechazo, corregir y reenviar, o anular.' },
@@ -439,6 +485,8 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'PAYMENT_ORDER', status: 'BORRADOR', taskType: 'ENVIAR_OP', assignee: 'CREATOR', title: 'Enviar {number} a aprobación', description: 'Revisar las facturas, los importes y la caja o el banco, y enviar la orden a Gerencia.' },
   { docType: 'PAYMENT_ORDER', status: 'PENDIENTE_APROBACION', taskType: 'APROBAR_PAGO', assignee: 'ROLE', role: 'GERENCIA', title: 'Autorizar el pago {number} por {total}', description: 'Revisar las facturas y el saldo de la caja o el banco; aprobar o rechazar con motivo.' },
   { docType: 'PAYMENT_ORDER', status: 'APROBADA', taskType: 'PAGAR', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Hacer la transferencia o entregar el cheque o el efectivo, y registrar el pago.' },
+  { docType: 'RFQ', status: 'BORRADOR', taskType: 'ENVIAR_SCT', assignee: 'CREATOR', title: 'Enviar {number} a los proveedores', description: 'Revisar los ítems, las cantidades y los proveedores invitados, y enviar la solicitud.' },
+  { docType: 'RFQ', status: 'ENVIADA', taskType: 'ADJUDICAR_SCT', assignee: 'ROLE', role: 'COMPRAS', title: 'Comparar y adjudicar {number}', description: 'Cargar las cotizaciones que lleguen, compararlas en el cuadro y adjudicar la más conveniente, o anular la solicitud con motivo.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -454,6 +502,8 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   ENVIAR_OP: 'Enviar orden de pago',
   APROBAR_PAGO: 'Autorizar pago',
   PAGAR: 'Pagar',
+  ENVIAR_SCT: 'Enviar solicitud de cotización',
+  ADJUDICAR_SCT: 'Adjudicar cotización',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }

@@ -22,6 +22,8 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   JOURNAL_ENTRY: { area: 'Contabilidad', newLabel: 'Nuevo asiento', createPerm: 'journal_entry.create' },
   SUPPLIER_INVOICE: { area: 'Compras', newLabel: 'Registrar factura', createPerm: 'supplier_invoice.create' },
   PAYMENT_ORDER: { area: 'Pagos y tesorería', newLabel: 'Nueva orden de pago', createPerm: 'payment_order.create' },
+  RFQ: { area: 'Compras', newLabel: 'Nueva solicitud de cotización', createPerm: 'rfq.create' },
+  SUPPLIER_QUOTE: { area: 'Compras', newLabel: 'Cargar cotización', createPerm: 'supplier_quote.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -158,6 +160,42 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       {
         key: 'total',
         header: 'Importe',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
+  if (docType === 'RFQ') {
+    columns.push(
+      { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      {
+        key: 'ref',
+        header: 'Origen',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      { key: 'due', header: 'Responden hasta', sort: (d) => d.rq!.response_due, cell: (d) => date(d.rq!.response_due) },
+    )
+  }
+  if (docType === 'SUPPLIER_QUOTE') {
+    columns.push(
+      { key: 'supplier', header: 'Proveedor', sort: (d) => d.supplier_name, cell: (d) => d.supplier_name },
+      {
+        key: 'ref',
+        header: 'Solicitud',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      { key: 'valid', header: 'Válida hasta', sort: (d) => d.sq!.valid_until, cell: (d) => date(d.sq!.valid_until) },
+      {
+        key: 'delivery',
+        header: 'Entrega',
+        align: 'right',
+        sort: (d) => d.sq!.delivery_days,
+        cell: (d) => <span className="tabular">{d.sq!.delivery_days} días</span>,
+      },
+      {
+        key: 'total',
+        header: 'Total',
         align: 'right',
         sort: (d) => d.total,
         cell: (d) => <span className="tabular">{money(d.total)}</span>,
