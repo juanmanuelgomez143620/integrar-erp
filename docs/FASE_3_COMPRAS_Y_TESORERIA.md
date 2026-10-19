@@ -8,7 +8,7 @@ Diseño corto. Sigue [ROADMAP.md §3](../ROADMAP.md) (Fase 3), [DATABASE.md §15
 |---|---|---|---|
 | 3a | Motor de imputación, factura de proveedor y cuenta corriente | La compra termina en un asiento automático y en la deuda con el proveedor | Hecho (simulador, pantallas y Supabase con paridad) |
 | 3b | Tesorería: cajas y bancos, orden de pago con aprobación y pago | La deuda se cancela; el pago mueve el banco o la caja y genera su asiento | Hecho (simulador, pantallas y Supabase con paridad) |
-| 3c | Solicitud de cotización, cotizaciones y cuadro comparativo | La OC nace de la mejor cotización | Pendiente |
+| 3c | Solicitud de cotización, cotizaciones y cuadro comparativo | La OC nace de la mejor cotización | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 3d | Transferencias entre cuentas, cheques, conciliación simplificada y flujo de fondos | Tesorería completa | Pendiente |
 
 ## 2. Motor de imputación (`posting_rules`)
@@ -43,7 +43,19 @@ Se calcula, nunca se edita: por proveedor, las facturas registradas (aumentan la
 - **Separación de funciones**: quien preparó la orden no la aprueba ni la rechaza; quien registró una de sus facturas no la paga (SoD-5).
 - Una factura incluida en una orden en curso no se anula: primero se anula la orden. En la cuenta corriente, los pagos van al debe y bajan el saldo.
 
-## 6. Permisos (a validar)
+## 6. Cotizaciones (3c)
+
+El circuito enseña a **pedir precio antes de comprar** y a **justificar la elección**: Compras pide cotización a varios proveedores, carga lo que responde cada uno, los compara en un cuadro y adjudica; de la cotización elegida nace la OC, que sigue su aprobación por monto como siempre.
+
+- **Solicitud de cotización (`SCT-00001`)**: la prepara Compras, a mano o desde una SC pendiente (botón "Pedir cotizaciones"): productos y cantidades (cada línea puede atender una línea de SC, como en la OC, sin superar lo pendiente), depósito de entrega, fecha límite para responder y los **proveedores invitados**, al menos dos **(a validar)**. Estados: **Borrador → Enviada → Adjudicada**; se **anula** con motivo antes de adjudicarse. No se modifica: si está mal, se anula y se prepara otra. Se imprime para mandarla a los proveedores.
+- **Cotización (`COT-00001`)**: Compras carga la respuesta de un proveedor invitado a una solicitud enviada: precio unitario de cada ítem que cotiza (puede no cotizar alguno), alícuota de IVA, plazo de entrega en días, condición de pago, validez de la oferta (no se carga una oferta vencida) y su referencia. Un proveedor responde una vez por solicitud: si cambia su oferta, se anula la cotización y se carga la nueva. Estados: **Recibida → Adjudicada / Descartada**, o **Anulada** con motivo.
+- Un proveedor que no es responsable inscripto cotiza el **precio final** (no discrimina IVA: su IVA es costo), así que sus líneas van sin IVA.
+- **Cuadro comparativo** (en la solicitud y en su impresión): una columna por cotización y una fila por ítem, con el precio más bajo de cada fila marcado; por cotización, el **costo para la empresa** (el neto sin IVA, porque el IVA de un responsable inscripto es crédito fiscal; si el proveedor no lo discrimina, su precio final), el total con IVA, los ítems que cotizó, el plazo de entrega, la condición de pago y la validez. Los proveedores invitados que no respondieron figuran como "Sin respuesta". Mientras la solicitud está enviada, se marca la **más conveniente por precio**: la de menor costo entre las vigentes que cotizan todos los ítems (a igual costo, la de menor plazo de entrega) **(a validar)**.
+- **Adjudicar** (Compras): se elige **una** cotización vigente para toda la solicitud. Si no es la más conveniente por precio (o ninguna cotiza todo), hay que **justificar** la elección (por ejemplo, el plazo de entrega o la condición de pago) **(a validar)**. Se genera la **OC en borrador** con el proveedor, los ítems cotizados a sus precios, el depósito de la solicitud, la condición de pago y la entrega comprometida (hoy + plazo de entrega), vinculada a las SC que atendía; la solicitud queda Adjudicada con su justificación, la cotización elegida Adjudicada y las demás Descartadas. Los ítems que la cotización no cubría quedan pendientes en su SC.
+- La aprobación de Gerencia (la **A** de la matriz de ROLES_Y_PERMISOS.md §7) ocurre en la OC, por monto: Gerencia ve de qué cotización nace y, en la solicitud, la justificación.
+- Tareas: "Enviar SCT-00001 a los proveedores" (a quien la preparó, si quedó en borrador) y "Comparar y adjudicar SCT-00001" (a Compras, mientras está enviada).
+
+## 7. Permisos (a validar)
 
 | Permiso | Roles |
 |---|---|
@@ -55,3 +67,5 @@ Se calcula, nunca se edita: por proveedor, las facturas registradas (aumentan la
 | `payment_order.create/cancel` | Contabilidad y Tesorería |
 | `payment_order.approve` | Gerencia |
 | `payment_order.pay` | Tesorería |
+| `rfq.read`, `supplier_quote.read` (solicitudes de cotización y cotizaciones) | Compras, Gerencia, Contabilidad, Tesorería, Impuestos, Depósito, Auditoría |
+| `rfq.create/cancel/award` (adjudicar), `supplier_quote.create/cancel` | Compras |
