@@ -43,6 +43,7 @@ export interface DB {
   rfqLines: T.RfqLine[]
   rfqSuppliers: T.RfqSupplier[]
   sqLines: T.SupplierQuoteLine[]
+  brLines: T.BankReconciliationLine[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -57,7 +58,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 6
+export const DB_VERSION = 7
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -99,6 +100,7 @@ const COLLECTIONS = [
   'rfqLines',
   'rfqSuppliers',
   'sqLines',
+  'brLines',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -125,6 +127,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   rfqLines: 6,
   rfqSuppliers: 6,
   sqLines: 6,
+  brLines: 7,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -188,6 +191,13 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.rfqLines ??= []
     db.rfqSuppliers ??= []
     db.sqLines ??= []
+  },
+  // v6 → v7: conciliaciones bancarias y medio de pago de las órdenes de pago (Fase 3d.2):
+  // las ya pagadas se toman como pagadas por transferencia.
+  6: (db) => {
+    db.brLines ??= []
+    for (const d of db.documents)
+      if (d.op) d.op = { ...d.op, payment_method: d.op.payment_method ?? (d.op.paid_on ? 'TRANSFERENCIA' : null) }
   },
 }
 

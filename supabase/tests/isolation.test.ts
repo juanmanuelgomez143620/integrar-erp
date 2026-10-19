@@ -84,6 +84,8 @@ async function snapshot(company: string) {
     'supplier_quotes',
     'supplier_quote_lines',
     'funds_transfers',
+    'bank_reconciliations',
+    'bank_reconciliation_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -117,7 +119,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                     ? B.quote
                     : fn.startsWith('ft_')
                       ? B.transfer
-                      : B.order
+                      : fn.startsWith('br_')
+                        ? B.reconciliation
+                        : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -160,6 +164,10 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     to_account_id: B.bank,
     amount: 1,
     reference: 'Intruso',
+    account_id: B.bank,
+    statement_date: '2027-12-31',
+    statement_balance: 0,
+    journal_line_ids: [B.bankLine],
     description: 'Asiento de un intruso',
     is_contra: false,
     id: B.product,
@@ -202,6 +210,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_supplier_id: B.supplier,
     p_rule_id: B.rule,
     p_quote_id: B.quote,
+    p_method: 'TRANSFERENCIA',
+    p_statement_date: '2027-12-31',
     p_period_id: B.period,
     p_status: 'CERRADO',
     p_year: 2028,
@@ -394,6 +404,25 @@ beforeAll(async () => {
       p_confirm: true,
     })
   ).id
+  // Una conciliación del banco de B con todos sus movimientos.
+  const bankLines = await db.admin<{ id: string; net: string }>(
+    `select l.id, l.debit - l.credit as net from public.journal_entry_lines l
+       join public.journal_entries je on je.document_id = l.document_id and je.entry_number is not null
+      where l.account_id = $1`,
+    [B.bank],
+  )
+  B.bankLine = bankLines[0].id
+  B.reconciliation = (
+    await rpc<{ id: string }>('docenteB', 'br_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        account_id: B.bank,
+        statement_date: (await one<{ d: string }>(`select private.business_date($1)::text as d`, [B.id])).d,
+        statement_balance: Math.round(bankLines.reduce((s, l) => s + Number(l.net), 0) * 100) / 100,
+        journal_line_ids: bankLines.map((l) => l.id),
+      }),
+    })
+  ).id
   B.period = (
     await one(`select id from public.fiscal_periods where company_id = $1 order by start_date limit 1`, [B.id])
   ).id
@@ -426,6 +455,7 @@ beforeAll(async () => {
          union select id::text from public.payment_order_lines where company_id = $1
          union select id::text from public.rfq_lines where company_id = $1
          union select id::text from public.supplier_quote_lines where company_id = $1
+         union select id::text from public.bank_reconciliation_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

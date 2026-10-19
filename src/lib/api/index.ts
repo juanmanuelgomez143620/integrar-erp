@@ -22,6 +22,7 @@ export type {
   CashFlowConcept,
   CashProjection,
   CashProjectionBucket,
+  ChequeStatus,
   CompanyContext,
   ComparisonQuote,
   Dashboard,
@@ -32,6 +33,7 @@ export type {
   FiscalYearView,
   FlowNode,
   InvoiceableOrder,
+  IssuedCheque,
   JournalBook,
   JournalBookEntry,
   JournalView,
@@ -51,6 +53,9 @@ export type {
   ProductRow,
   QuoteView,
   ReceivableOrder,
+  ReconciliationCandidates,
+  ReconciliationLineView,
+  ReconciliationView,
   RfqView,
   StockRow,
   SupplierAccount,
@@ -63,6 +68,7 @@ export type {
 } from '../mock/queries'
 export type {
   AccountInput,
+  BankReconciliationInput,
   ChangePasswordInput,
   CourseInput,
   FundsTransferInput,
@@ -176,6 +182,9 @@ const mockApi = {
   treasuryAccounts: (companyId: string) => query((db, u) => Q.treasuryAccounts(db, u, companyId)),
   cashFlow: (companyId: string, from: string, to: string) => query((db, u) => Q.cashFlow(db, u, companyId, from, to)),
   cashProjection: (companyId: string) => query((db, u) => Q.cashProjection(db, u, companyId)),
+  issuedCheques: (companyId: string) => query((db, u) => Q.issuedCheques(db, u, companyId)),
+  reconciliationCandidates: (companyId: string, accountId: string, statementDate: string) =>
+    query((db, u) => Q.reconciliationCandidates(db, u, companyId, accountId, statementDate)),
   paymentCandidates: (companyId: string, supplierId: string) =>
     query((db, u) => Q.paymentCandidates(db, u, companyId, supplierId)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
@@ -255,7 +264,8 @@ const mockCommands = {
   submitPaymentOrder: (docId: string) => command((c) => E.cmdSubmitPaymentOrder(c, docId)),
   approvePaymentOrder: (docId: string, comment: string) => command((c) => E.cmdApprovePaymentOrder(c, docId, comment)),
   rejectPaymentOrder: (docId: string, reason: string) => command((c) => E.cmdRejectPaymentOrder(c, docId, reason)),
-  payPaymentOrder: (docId: string, reference: string) => command((c) => E.cmdPayPaymentOrder(c, docId, reference)),
+  payPaymentOrder: (docId: string, reference: string, method: T.PaymentMethod) =>
+    command((c) => E.cmdPayPaymentOrder(c, docId, reference, method)),
   cancelPaymentOrder: (docId: string, reason: string) => command((c) => E.cmdCancelPaymentOrder(c, docId, reason)),
   createRfq: (companyId: string, input: E.RfqInput, send: boolean) =>
     command((c) => E.cmdCreateRfq(c, companyId, input, send)),
@@ -270,6 +280,10 @@ const mockCommands = {
     command((c) => E.cmdCreateFundsTransfer(c, companyId, input, confirm)),
   confirmFundsTransfer: (docId: string) => command((c) => E.cmdConfirmFundsTransfer(c, docId)),
   cancelFundsTransfer: (docId: string, reason: string) => command((c) => E.cmdCancelFundsTransfer(c, docId, reason)),
+  createBankReconciliation: (companyId: string, input: E.BankReconciliationInput) =>
+    command((c) => E.cmdCreateBankReconciliation(c, companyId, input)),
+  cancelBankReconciliation: (docId: string, reason: string) =>
+    command((c) => E.cmdCancelBankReconciliation(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

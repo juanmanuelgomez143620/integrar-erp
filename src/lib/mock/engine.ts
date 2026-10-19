@@ -2843,7 +2843,7 @@ export function cmdCreatePaymentOrder(ctx: Ctx, companyId: string, input: Paymen
   const doc = newDocument(ctx, companyId, 'PAYMENT_ORDER', actor, {
     supplier_id: supplier.id,
     notes: input.notes.trim(),
-    op: { treasury_account_id: account.id, payment_reference: '', paid_on: null },
+    op: { treasury_account_id: account.id, payment_reference: '', paid_on: null, payment_method: null },
   })
   lines.forEach((l, i) => {
     db.opLines.push({
@@ -2912,17 +2912,34 @@ export function cmdRejectPaymentOrder(ctx: Ctx, docId: string, reason: string) {
   decidePaymentOrder(ctx, docId, 'REJECT', reason)
 }
 
+/** Cómo se nombra cada medio de pago dentro de una frase: "por transferencia", "con cheque"… */
+const PAYMENT_VIA: Record<T.PaymentMethod, { phrase: string; noun: string }> = {
+  TRANSFERENCIA: { phrase: 'por transferencia', noun: 'transferencia' },
+  CHEQUE: { phrase: 'con cheque', noun: 'cheque' },
+  EFECTIVO: { phrase: 'en efectivo', noun: 'efectivo' },
+}
+
 /**
  * Tesorería paga: controla de nuevo los saldos de las facturas y el de la caja
  * o el banco, genera el asiento de pago y actualiza el estado de cada factura.
+ * Con cheque, la referencia es su número (obligatorio).
  */
-export function cmdPayPaymentOrder(ctx: Ctx, docId: string, reference: string) {
+export function cmdPayPaymentOrder(
+  ctx: Ctx,
+  docId: string,
+  reference: string,
+  method: T.PaymentMethod = 'TRANSFERENCIA',
+) {
   const { db } = ctx
   const doc = getDoc(db, docId, 'PAYMENT_ORDER')
   requireTransition(doc, 'PAY')
   const actor = requirePermission(ctx, doc.company_id, 'payment_order.pay')
   const ref = reference.trim()
   if (ref.length > 60) fail('DATO_INVALIDO', 'La referencia del pago tiene hasta 60 caracteres.')
+  if (!Object.hasOwn(PAYMENT_VIA, method))
+    fail('DATO_INVALIDO', 'Elegí el medio de pago: transferencia, cheque o efectivo.')
+  if (method === 'CHEQUE' && !/^\d{1,8}$/.test(ref))
+    fail('DATO_INVALIDO', 'Indicá el número del cheque (hasta 8 números).', 'Queda en el registro de cheques emitidos.')
   const company = getCompany(db, doc.company_id)
   const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
   const lines = orderLines(db, doc.id)
@@ -2953,17 +2970,19 @@ export function cmdPayPaymentOrder(ctx: Ctx, docId: string, reference: string) {
       'Antes de pagar hay que controlar que haya fondos; por ejemplo, depositar el efectivo en el banco.',
     )
   const supplier = db.suppliers.find((s) => s.id === doc.supplier_id)!
+  const via = PAYMENT_VIA[method]
+  const number = ref ? ` N.º ${ref}` : ''
   transition(ctx, doc, 'PAY', {
     actor,
-    summary: `Pagó ${doc.display_number}: ${money(doc.total)} a ${supplier.legal_name} desde ${accountLabel(account)}${ref ? ` (${ref})` : ''}`,
+    summary: `Pagó ${doc.display_number} ${via.phrase}${number}: ${money(doc.total)} a ${supplier.legal_name} desde ${accountLabel(account)}`,
   })
-  doc.op = { ...doc.op!, payment_reference: ref, paid_on: businessDate(company) }
+  doc.op = { ...doc.op!, payment_reference: ref, paid_on: businessDate(company), payment_method: method }
   postEvent(
     ctx,
     actor,
     doc,
     'PAGO',
-    `Pago a ${supplier.legal_name} según ${doc.display_number}${ref ? ` (${ref})` : ''}.`,
+    `Pago a ${supplier.legal_name} según ${doc.display_number} (${via.noun}${number}).`,
     [
       { key: 'PROVEEDORES', debit: doc.total, credit: 0 },
       { account_id: account.id, debit: 0, credit: doc.total },
@@ -3449,6 +3468,153 @@ export function cmdCancelFundsTransfer(ctx: Ctx, docId: string, reason: string) 
     actor,
     summary: `Anuló ${doc.display_number}${reversal ? ` y su asiento con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
   })
+}
+
+// ============================================================ Conciliación bancaria (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
+
+export interface BankReconciliationInput {
+  account_id: string
+  statement_date: string
+  statement_balance: number
+  /** Los movimientos del mayor que figuran en el extracto. */
+  journal_line_ids: string[]
+  notes: string
+}
+
+/** Un movimiento del mayor de una cuenta, con su asiento. */
+export interface AccountLine {
+  line: T.JournalEntryLine
+  doc: T.Document
+}
+
+/** Movimientos de una cuenta en asientos registrados hasta una fecha, en el orden del libro diario. */
+export function accountLinesUpTo(db: DB, accountId: string, upTo: string): AccountLine[] {
+  const docs = new Map(
+    db.documents
+      .filter((d) => d.doc_type === 'JOURNAL_ENTRY' && d.je?.entry_number != null && d.document_date <= upTo)
+      .map((d) => [d.id, d]),
+  )
+  return db.jeLines
+    .filter((l) => l.account_id === accountId && docs.has(l.document_id))
+    .map((line) => ({ line, doc: docs.get(line.document_id)! }))
+    .sort(
+      (a, b) =>
+        (a.doc.document_date < b.doc.document_date ? -1 : a.doc.document_date > b.doc.document_date ? 1 : 0) ||
+        a.doc.je!.entry_number! - b.doc.je!.entry_number! ||
+        a.line.line_no - b.line.line_no,
+    )
+}
+
+const confirmedReconciliations = (db: DB, accountId: string) =>
+  db.documents
+    .filter((d) => d.doc_type === 'BANK_RECONCILIATION' && d.status === 'CONFIRMADA' && d.br!.account_id === accountId)
+    .sort((a, b) => a.number - b.number)
+
+/** Movimientos conciliados por las conciliaciones confirmadas de una cuenta (hasta una, si se indica). */
+export function reconciledLineIds(db: DB, accountId: string, upToNumber = Infinity) {
+  const docs = new Set(
+    confirmedReconciliations(db, accountId)
+      .filter((d) => d.number <= upToNumber)
+      .map((d) => d.id),
+  )
+  return new Set(db.brLines.filter((l) => docs.has(l.document_id)).map((l) => l.journal_line_id))
+}
+
+/** La última conciliación confirmada de una cuenta. */
+export const lastReconciliation = (db: DB, accountId: string) => confirmedReconciliations(db, accountId).at(-1)
+
+/**
+ * Contabilidad concilia un banco: con el saldo del extracto y los movimientos
+ * del mayor que figuran en él, el saldo según libros menos lo que el banco
+ * todavía no acreditó, más lo que todavía no debitó, tiene que dar el del extracto.
+ */
+export function cmdCreateBankReconciliation(ctx: Ctx, companyId: string, input: BankReconciliationInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bank_reconciliation.create')
+  const account = db.accounts.find((a) => a.id === input.account_id && a.company_id === companyId)
+  if (!account || !account.is_imputable || !account.code.startsWith(`${TREASURY_RUBRO}.`))
+    fail('DATO_INVALIDO', 'Elegí el banco que se concilia (una cuenta de Caja y bancos).')
+  if (!isIsoDate(input.statement_date)) fail('DATO_INVALIDO', 'Indicá la fecha del extracto.')
+  if (input.statement_date > businessDate(getCompany(db, companyId)))
+    fail('DATO_INVALIDO', 'La fecha del extracto no puede ser posterior a hoy.')
+  const last = lastReconciliation(db, account.id)
+  if (last && input.statement_date <= last.br!.statement_date)
+    fail(
+      'DATO_INVALIDO',
+      `La fecha del extracto tiene que ser posterior a la de la última conciliación de la cuenta (${last.display_number}, al ${fmtDate(last.br!.statement_date)}).`,
+    )
+  if (!Number.isFinite(input.statement_balance) || round2(input.statement_balance) !== input.statement_balance)
+    fail('DATO_INVALIDO', 'El saldo del extracto es un importe con hasta 2 decimales.')
+  const lines = accountLinesUpTo(db, account.id, input.statement_date)
+  const reconciled = reconciledLineIds(db, account.id)
+  const open = lines.filter(({ line }) => !reconciled.has(line.id))
+  const marked = new Set<string>()
+  for (const id of input.journal_line_ids) {
+    if (marked.has(id)) fail('DATO_INVALIDO', 'Un movimiento está dos veces en la conciliación.')
+    if (!open.some(({ line }) => line.id === id))
+      fail(
+        'DATO_INVALIDO',
+        'Uno de los movimientos marcados no es de esta cuenta, es posterior al extracto o ya está conciliado.',
+      )
+    marked.add(id)
+  }
+  const pending = open.filter(({ line }) => !marked.has(line.id))
+  const book = round2(lines.reduce((s, { line }) => s + line.debit - line.credit, 0))
+  const pendingDebits = round2(pending.reduce((s, { line }) => s + line.debit, 0))
+  const pendingCredits = round2(pending.reduce((s, { line }) => s + line.credit, 0))
+  const expected = round2(book - pendingDebits + pendingCredits)
+  if (expected !== input.statement_balance)
+    fail(
+      'CONCILIACION_NO_CIERRA',
+      `No cierra: según libros, sin lo pendiente, el extracto tendría que decir ${money(expected)} y dice ${money(input.statement_balance)} (diferencia de ${money(round2(input.statement_balance - expected))}).`,
+      'Revisá qué movimientos figuran en el extracto. Si el banco registró algo que no está en los libros (comisiones, intereses), Contabilidad lo registra con un asiento y vuelve a conciliar.',
+    )
+  const doc = newDocument(ctx, companyId, 'BANK_RECONCILIATION', actor, {
+    status: 'CONFIRMADA',
+    notes: input.notes.trim(),
+    br: {
+      account_id: account.id,
+      statement_date: input.statement_date,
+      statement_balance: input.statement_balance,
+      book_balance: book,
+      pending_debits: pendingDebits,
+      pending_credits: pendingCredits,
+    },
+  })
+  lines
+    .filter(({ line }) => marked.has(line.id))
+    .forEach(({ line }, i) =>
+      db.brLines.push({
+        id: uid(),
+        company_id: companyId,
+        document_id: doc.id,
+        line_no: i + 1,
+        journal_line_id: line.id,
+      }),
+    )
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'bank_reconciliation',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'CONFIRMADA',
+    summary: `Concilió ${accountLabel(account)} al ${fmtDate(input.statement_date)} con ${doc.display_number}: ${marked.size} movimiento${marked.size === 1 ? '' : 's'} en el extracto, saldo ${money(input.statement_balance)}`,
+  })
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Anular una conciliación deja sus movimientos pendientes otra vez: sólo la última de cada cuenta. */
+export function cmdCancelBankReconciliation(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'BANK_RECONCILIATION')
+  requirePermission(ctx, doc.company_id, 'bank_reconciliation.cancel')
+  const last = lastReconciliation(db, doc.br!.account_id)
+  if (doc.status === 'CONFIRMADA' && last && last.id !== doc.id)
+    fail('TRANSICION_INVALIDA', `Sólo se anula la última conciliación de la cuenta (${last.display_number}).`)
+  transition(ctx, doc, 'CANCEL', { comment: reason })
 }
 
 // ============================================================ Tareas y notificaciones

@@ -10,7 +10,7 @@ Diseño corto. Sigue [ROADMAP.md §3](../ROADMAP.md) (Fase 3), [DATABASE.md §15
 | 3b | Tesorería: cajas y bancos, orden de pago con aprobación y pago | La deuda se cancela; el pago mueve el banco o la caja y genera su asiento | Hecho (simulador, pantallas y Supabase con paridad) |
 | 3c | Solicitud de cotización, cotizaciones y cuadro comparativo | La OC nace de la mejor cotización | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 3d.1 | Transferencias entre cajas y bancos y flujo de fondos (real y proyectado) | Tesorería mueve fondos y anticipa si alcanzan | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 3d.2 | Cheques propios y conciliación bancaria simplificada | Tesorería completa | Pendiente (diseño en §7) |
+| 3d.2 | Cheques propios y conciliación bancaria simplificada | Tesorería completa | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 
 ## 2. Motor de imputación (`posting_rules`)
 

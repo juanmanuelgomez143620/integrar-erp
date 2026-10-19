@@ -1,6 +1,6 @@
 # Base de datos (Supabase)
 
-Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTEGR-AR. En el proyecto `sapsimulado` están aplicadas las migraciones hasta `20261016120300` (16/10), con la versión de cada archivo en el historial de migraciones; el sitio publicado (GitHub Pages) usa esa base. **Pendientes de aplicar,** en este orden y antes de actualizar `main`: las dos de la Fase 3c (`20261018120000_cotizaciones` y `20261018120100_catalog_data_cotizaciones`) y las dos de la 3d.1 (`20261019120000_transferencias_flujo` y `20261019120100_catalog_data_transferencias`). Las migraciones que completan "las empresas que ya existían" (`…14120300`, `…15120300` y `…16120300`) les cargan la contabilidad, las reglas de imputación y la regla de los pagos a las empresas creadas antes de cada fase. La interfaz usa el backend simulado (`src/lib/mock`, la especificación ejecutable de estas reglas) salvo que se compile con `VITE_BACKEND=supabase`: entonces usa este backend a través de `src/lib/api/supabase.ts`, con el mismo contrato.
+Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTEGR-AR. En el proyecto `sapsimulado` están aplicadas las migraciones hasta `20261016120300` (16/10), con la versión de cada archivo en el historial de migraciones; el sitio publicado (GitHub Pages) usa esa base. **Pendientes de aplicar,** en este orden y antes de actualizar `main`: las dos de la Fase 3c (`20261018120000_cotizaciones` y `20261018120100_catalog_data_cotizaciones`) las dos de la 3d.1 (`20261019120000_transferencias_flujo` y `20261019120100_catalog_data_transferencias`) y las dos de la 3d.2 (`20261019130000_cheques_conciliacion` y `20261019130100_catalog_data_conciliacion`). Las migraciones que completan "las empresas que ya existían" (`…14120300`, `…15120300` y `…16120300`) les cargan la contabilidad, las reglas de imputación y la regla de los pagos a las empresas creadas antes de cada fase. La interfaz usa el backend simulado (`src/lib/mock`, la especificación ejecutable de estas reglas) salvo que se compile con `VITE_BACKEND=supabase`: entonces usa este backend a través de `src/lib/api/supabase.ts`, con el mismo contrato.
 
 ## Estructura
 
@@ -41,6 +41,7 @@ Migraciones, permisos (RLS), funciones RPC y la Edge Function de cuentas de INTE
 | Fase 3b: cajas y bancos (cuentas del rubro Caja y bancos) y órdenes de pago con aprobación, pago con su asiento y anulación con contraasiento | Listo (aplicado) |
 | Fase 3c: solicitudes de cotización a varios proveedores, cotizaciones, cuadro comparativo y adjudicación que genera la OC en borrador | Listo (falta aplicar) |
 | Fase 3d.1: transferencias entre cajas y bancos con su asiento, y flujo de fondos real y proyectado | Listo (falta aplicar) |
+| Fase 3d.2: medio de pago de las órdenes de pago, cheques emitidos y conciliación bancaria | Listo (falta aplicar) |
 | Adaptador de la interfaz (`src/lib/api/supabase.ts`): sesión con Auth, RPC, cuentas, sondeo cada 20 s | Listo |
 | Logo de la escuela (Storage), Realtime opcional | Pendiente |
 

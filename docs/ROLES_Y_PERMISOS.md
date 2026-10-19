@@ -58,7 +58,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | core | `company.read`, `company.update`, `member.read`, `sector.read` |
 | masters | `customer.read/create/update/export`, `supplier.read/create/update/export`, `product.read/create/update/export` |
 | purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export`; desde la Fase 3, `supplier_invoice.read/create/cancel` (facturas de proveedor); desde la 3c, `rfq.read/create/cancel/award` (solicitudes de cotización) y `supplier_quote.read/create/cancel` (cotizaciones) |
-| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos, flujo de fondos); desde la 3d, `funds_transfer.read/create/cancel` (transferencias entre cuentas) |
+| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos, flujo de fondos); desde la 3d, `funds_transfer.read/create/cancel` (transferencias entre cuentas) y `bank_reconciliation.read/create/cancel` (conciliaciones bancarias) |
 | inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel` |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
@@ -94,6 +94,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Orden de pago (Fase 3b) | L A⁶ | — | — | — | — | L C X | L C P X | — | — | — | L | Todo |
 | Cajas y bancos y flujo de fondos (Fase 3b y 3d) | L | — | — | — | — | L | L | — | — | — | L | Todo |
 | Transferencia entre cuentas (Fase 3d) | L | — | — | — | — | L | L C X | — | — | — | L | Todo |
+| Conciliación bancaria (Fase 3d) | L | — | — | — | — | L C X⁸ | L | — | — | — | L | Todo |
 | Solicitud de cotización (Fase 3c) | L | L C X J⁷ | — | L | — | L | L | — | L | — | L | Todo |
 | Cotización de proveedor (Fase 3c) | L | L C X | — | L | — | L | L | — | L | — | L | Todo |
 
@@ -104,6 +105,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ⁵ Gerencia anula recepciones que registró Depósito (SoD-3); no se anula una recepción ya facturada.
 ⁶ Gerencia autoriza (o rechaza) cada orden de pago; quien la preparó no la aprueba. Tesorería la paga si alcanza el saldo de la caja o el banco, y no paga facturas que registró (SoD-5).
 ⁷ Compras adjudica a una cotización vigente; si no es la más conveniente por precio, justifica la elección. La OC que nace de la adjudicación sigue su aprobación por monto: ahí aprueba Gerencia.
+⁸ Concilia Contabilidad y no Tesorería, que maneja los fondos (control por oposición); sólo se anula la última conciliación de cada banco. Tesorería elige el medio de pago al pagar una orden (transferencia, cheque con su número o efectivo).
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 

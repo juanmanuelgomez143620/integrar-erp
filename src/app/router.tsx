@@ -75,6 +75,10 @@ const PaymentOrderFormPage = lazyPage(() =>
 )
 const TransferFormPage = lazyPage(() => import('@/features/payables/transfer-form').then((m) => m.TransferFormPage))
 const CashFlowPage = lazyPage(() => import('@/features/payables/cash-flow-page').then((m) => m.CashFlowPage))
+const IssuedChequesPage = lazyPage(() => import('@/features/payables/payables-pages').then((m) => m.IssuedChequesPage))
+const ReconciliationFormPage = lazyPage(() =>
+  import('@/features/payables/reconciliation-form').then((m) => m.ReconciliationFormPage),
+)
 const RfqFormPage = lazyPage(() => import('@/features/purchasing/quotations/rfq-form').then((m) => m.RfqFormPage))
 const QuoteFormPage = lazyPage(() => import('@/features/purchasing/quotations/quote-form').then((m) => m.QuoteFormPage))
 
@@ -147,6 +151,16 @@ export const router = createBrowserRouter(
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },
                 { path: 'pagos/transferencias/:number', element: <DocumentPage key="ft" docType="FUNDS_TRANSFER" /> },
+                { path: 'pagos/cheques', element: <IssuedChequesPage /> },
+                {
+                  path: 'pagos/conciliaciones',
+                  element: <DocumentListPage key="br" docType="BANK_RECONCILIATION" />,
+                },
+                { path: 'pagos/conciliaciones/nueva', element: <ReconciliationFormPage /> },
+                {
+                  path: 'pagos/conciliaciones/:number',
+                  element: <DocumentPage key="br" docType="BANK_RECONCILIATION" />,
+                },
                 { path: 'contabilidad/imputacion', element: <PostingRulesPage /> },
                 { path: 'deposito/recepciones', element: <DocumentListPage key="gr" docType="GOODS_RECEIPT" /> },
                 { path: 'deposito/recepciones/nueva', element: <ReceiptFormPage /> },

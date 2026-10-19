@@ -10,6 +10,7 @@ import type {
   JournalEntryOrigin,
   ModuleCode,
   MovementType,
+  PaymentMethod,
   Priority,
   ProductType,
   RoleCode,
@@ -49,6 +50,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   payment_order: 'payables',
   treasury: 'payables',
   funds_transfer: 'payables',
+  bank_reconciliation: 'payables',
   account: 'accounting',
   posting_rule: 'accounting',
   journal_entry: 'accounting',
@@ -123,7 +125,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'goods_receipt.read', 'goods_receipt.cancel', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read',
-    'payment_order.read', 'payment_order.approve', 'treasury.read', 'funds_transfer.read',
+    'payment_order.read', 'payment_order.approve', 'treasury.read', 'funds_transfer.read', 'bank_reconciliation.read',
     'rfq.read', 'supplier_quote.read',
   ],
   COMPRAS: [
@@ -162,13 +164,14 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'ledger.export', 'fiscal_period.update',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
     'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read', 'funds_transfer.read',
+    'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
     'supplier_invoice.read', 'payable.read',
     'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
-    'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel',
+    'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel', 'bank_reconciliation.read',
     'rfq.read', 'supplier_quote.read',
   ],
   RRHH: [...CORE_READ],
@@ -185,7 +188,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
-    'funds_transfer.read', 'rfq.read', 'supplier_quote.read',
+    'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
   ],
   DOCENTE: [],
 }
@@ -254,6 +257,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'FUNDS_TRANSFER', prefix: 'TF', name: 'Transferencia entre cuentas', plural: 'Transferencias entre cuentas',
     resource: 'funds_transfer', module: 'payables', path: 'pagos/transferencias',
     description: 'Movimiento de fondos entre dos cajas o bancos de la empresa, por ejemplo, depositar el efectivo de la caja en el banco. Genera su asiento y no cambia el total de los fondos.',
+  },
+  BANK_RECONCILIATION: {
+    code: 'BANK_RECONCILIATION', prefix: 'CB', name: 'Conciliación bancaria', plural: 'Conciliaciones bancarias',
+    resource: 'bank_reconciliation', module: 'payables', path: 'pagos/conciliaciones',
+    description: 'Comparación del extracto del banco con el libro mayor a una fecha: la diferencia se explica por los movimientos que el banco todavía no registró, como los cheques sin debitar.',
   },
 }
 
@@ -332,6 +340,10 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Tesorería la está preparando: todavía no movió fondos.' },
     CONFIRMADA: { label: 'Confirmada', badge: 'success', final: true, description: 'Los fondos pasaron de una cuenta a la otra y el movimiento está en el libro diario.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba confirmada, un contraasiento devolvió los fondos a la cuenta de origen.' },
+  },
+  BANK_RECONCILIATION: {
+    CONFIRMADA: { label: 'Confirmada', badge: 'success', final: true, description: 'Cierra con el extracto: sus movimientos quedaron conciliados.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: sus movimientos volvieron a estar pendientes de conciliar.' },
   },
 }
 
@@ -443,6 +455,9 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('FUNDS_TRANSFER', 'BORRADOR', 'CONFIRM', 'CONFIRMADA', 'funds_transfer.create', 'Confirmar transferencia', 'Controla el saldo de la cuenta de origen y genera el asiento.'),
   t('FUNDS_TRANSFER', 'BORRADOR', 'CANCEL', 'ANULADA', 'funds_transfer.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
   t('FUNDS_TRANSFER', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'funds_transfer.cancel', 'Anular con contraasiento', 'Revierte el asiento: los fondos vuelven a la cuenta de origen.', true, 'destructive'),
+
+  // Conciliación bancaria
+  t('BANK_RECONCILIATION', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'bank_reconciliation.cancel', 'Anular', 'Sus movimientos vuelven a quedar pendientes de conciliar. Sólo se anula la última conciliación de cada banco.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -572,6 +587,12 @@ export const PRIORITIES: Record<Priority, string> = {
   NORMAL: 'Normal',
   ALTA: 'Alta',
   URGENTE: 'Urgente',
+}
+
+export const PAYMENT_METHODS: Record<PaymentMethod, string> = {
+  TRANSFERENCIA: 'Transferencia',
+  CHEQUE: 'Cheque',
+  EFECTIVO: 'Efectivo',
 }
 
 export const ADJUSTMENT_REASONS: Record<AdjustmentReason, string> = {

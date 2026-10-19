@@ -25,6 +25,11 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   RFQ: { area: 'Compras', newLabel: 'Nueva solicitud de cotización', createPerm: 'rfq.create' },
   SUPPLIER_QUOTE: { area: 'Compras', newLabel: 'Cargar cotización', createPerm: 'supplier_quote.create' },
   FUNDS_TRANSFER: { area: 'Pagos y tesorería', newLabel: 'Nueva transferencia', createPerm: 'funds_transfer.create' },
+  BANK_RECONCILIATION: {
+    area: 'Pagos y tesorería',
+    newLabel: 'Nueva conciliación',
+    createPerm: 'bank_reconciliation.create',
+  },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -217,6 +222,24 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         align: 'right',
         sort: (d) => d.total,
         cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
+  if (docType === 'BANK_RECONCILIATION') {
+    columns.push(
+      { key: 'bank', header: 'Banco y extracto', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      { key: 'moves', header: 'Conciliados', align: 'right', cell: (d) => d.line_count },
+      {
+        key: 'statement',
+        header: 'Saldo del extracto',
+        align: 'right',
+        cell: (d) => <span className="tabular">{money(d.br!.statement_balance)}</span>,
+      },
+      {
+        key: 'pending',
+        header: 'Pagos sin debitar',
+        align: 'right',
+        cell: (d) => <span className="tabular">{money(d.br!.pending_credits)}</span>,
       },
     )
   }

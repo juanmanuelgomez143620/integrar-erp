@@ -83,6 +83,7 @@ export function buildSeed(): DB {
     rfqLines: [],
     rfqSuppliers: [],
     sqLines: [],
+    brLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],

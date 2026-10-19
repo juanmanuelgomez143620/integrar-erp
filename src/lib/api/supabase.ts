@@ -256,6 +256,13 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     treasuryAccounts: (companyId) => rpc('treasury_accounts', company(companyId)),
     cashFlow: (companyId, from, to) => rpc('cash_flow', { ...company(companyId), p_from: from, p_to: to }),
     cashProjection: (companyId) => rpc('cash_projection', company(companyId)),
+    issuedCheques: (companyId) => rpc('issued_cheques', company(companyId)),
+    reconciliationCandidates: (companyId, accountId, statementDate) =>
+      rpc('reconciliation_candidates', {
+        ...company(companyId),
+        p_account_id: accountId,
+        p_statement_date: statementDate,
+      }),
     paymentCandidates: (companyId, supplierId) =>
       rpc('payment_candidates', { ...company(companyId), p_supplier_id: supplierId }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
@@ -327,7 +334,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     submitPaymentOrder: (docId) => rpc('op_submit', doc(docId)),
     approvePaymentOrder: (docId, comment) => rpc('op_approve', { ...doc(docId), p_comment: comment }),
     rejectPaymentOrder: (docId, reason) => rpc('op_reject', { ...doc(docId), p_reason: reason }),
-    payPaymentOrder: (docId, reference) => rpc('op_pay', { ...doc(docId), p_reference: reference }),
+    payPaymentOrder: (docId, reference, method) =>
+      rpc('op_pay', { ...doc(docId), p_reference: reference, p_method: method }),
     cancelPaymentOrder: (docId, reason) => rpc('op_cancel', { ...doc(docId), p_reason: reason }),
     createRfq: (companyId, input, send) => rpc('rfq_create', { ...company(companyId), p_input: input, p_send: send }),
     sendRfq: (docId) => rpc('rfq_submit', doc(docId)),
@@ -339,6 +347,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('ft_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
     confirmFundsTransfer: (docId) => rpc('ft_confirm', doc(docId)),
     cancelFundsTransfer: (docId, reason) => rpc('ft_cancel', { ...doc(docId), p_reason: reason }),
+    createBankReconciliation: (companyId, input) => rpc('br_create', { ...company(companyId), p_input: input }),
+    cancelBankReconciliation: (docId, reason) => rpc('br_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

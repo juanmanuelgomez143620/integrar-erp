@@ -20,7 +20,7 @@ export function PrintPage() {
   })
   if (isLoading || error) return <Loading error={error} />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
-  const { doc, lines, supplier, warehouse, journal, payment, rfq, quote, transfer } = data
+  const { doc, lines, supplier, warehouse, journal, payment, rfq, quote, transfer, reconciliation } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
   const priced =
@@ -165,6 +165,28 @@ export function PrintPage() {
                 {payment.paid_on
                   ? `${date(payment.paid_on)}${payment.payment_reference ? ` · ${payment.payment_reference}` : ''}`
                   : 'pendiente'}
+              </div>
+            </>
+          )}
+          {reconciliation && (
+            <>
+              <div>
+                <b>Banco:</b> {reconciliation.account.code} {reconciliation.account.name}
+              </div>
+              <div>
+                <b>Extracto al:</b> {date(reconciliation.statement_date)}
+              </div>
+              <div>
+                <b>Saldo según libros:</b> {money(reconciliation.book_balance)}
+              </div>
+              <div>
+                <b>Saldo según extracto:</b> {money(reconciliation.statement_balance)}
+              </div>
+              <div>
+                <b>Menos entradas sin acreditar:</b> {money(reconciliation.pending_debits)}
+              </div>
+              <div>
+                <b>Más pagos sin debitar:</b> {money(reconciliation.pending_credits)}
               </div>
             </>
           )}
@@ -340,7 +362,43 @@ export function PrintPage() {
           </table>
         )}
 
-        {!journal && !payment && !transfer && (
+        {reconciliation &&
+          (
+            [
+              ['Pendientes a la fecha del extracto', reconciliation.pending],
+              ['Figuraban en el extracto', reconciliation.reconciled],
+            ] as const
+          ).map(([title, rows]) => (
+            <div key={title}>
+              <h2 className="mt-5 text-[11px] font-semibold text-slate-600 uppercase">
+                {title} ({rows.length})
+              </h2>
+              <table className="mt-1 w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className={th}>Fecha</th>
+                    <th className={th}>Asiento</th>
+                    <th className={th}>Detalle</th>
+                    <th className={`${th} text-right`}>Entra</th>
+                    <th className={`${th} text-right`}>Sale</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((l) => (
+                    <tr key={l.line_id}>
+                      <td className={td}>{date(l.date)}</td>
+                      <td className={`${td} font-mono`}>N.º {l.entry_number}</td>
+                      <td className={td}>{l.description}</td>
+                      <td className={`${td} text-right`}>{l.debit ? money(l.debit) : ''}</td>
+                      <td className={`${td} text-right`}>{l.credit ? money(l.credit) : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+
+        {!journal && !payment && !transfer && !reconciliation && (
           <table className="mt-4 w-full border-collapse">
             <thead>
               <tr>

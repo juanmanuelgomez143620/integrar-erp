@@ -27,13 +27,22 @@ import { DocumentFlow } from '@/components/common/document-flow'
 import { AuditTimeline } from '@/components/common/audit-timeline'
 import { ActionDialog } from '@/components/common/dialogs'
 import { api, commands, type AvailableAction, type DocumentDetail } from '@/lib/api'
-import { ADJUSTMENT_REASONS, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
+import {
+  ADJUSTMENT_REASONS,
+  DOC_TYPES,
+  JOURNAL_ORIGINS,
+  PAYMENT_METHODS,
+  PRIORITIES,
+  VAT_CONDITIONS,
+} from '@/lib/domain/catalog'
 import type { DocType, TransitionAction } from '@/lib/domain/types'
 import { date, dateTime, money, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { AwardDialog, ComparisonSection } from '@/features/purchasing/quotations/quotation-views'
+import { PayDialog } from '@/features/payables/pay-dialog'
+import { ReconciliationLines } from '@/features/payables/reconciliation-views'
 
 type Runner = (docId: string, text: string) => Promise<unknown>
 
@@ -74,7 +83,7 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     SUBMIT: (id) => commands.submitPaymentOrder(id),
     APPROVE: (id, t) => commands.approvePaymentOrder(id, t),
     REJECT: (id, t) => commands.rejectPaymentOrder(id, t),
-    PAY: (id, t) => commands.payPaymentOrder(id, t),
+    // Pagar tiene su propio diálogo (PayDialog): hay que elegir el medio de pago.
     CANCEL: (id, t) => commands.cancelPaymentOrder(id, t),
   },
   // Adjudicar tiene su propio diálogo (AwardDialog): hay que elegir la cotización.
@@ -89,6 +98,9 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmFundsTransfer(id),
     CANCEL: (id, t) => commands.cancelFundsTransfer(id, t),
   },
+  BANK_RECONCILIATION: {
+    CANCEL: (id, t) => commands.cancelBankReconciliation(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -102,6 +114,7 @@ const AREA: Record<DocType, string> = {
   RFQ: 'Compras',
   SUPPLIER_QUOTE: 'Compras',
   FUNDS_TRANSFER: 'Pagos y tesorería',
+  BANK_RECONCILIATION: 'Pagos y tesorería',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -131,6 +144,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
   const info = DOC_TYPES[doc.doc_type]
   const [pending, setPending] = useState<AvailableAction | null>(null)
   const [awarding, setAwarding] = useState(false)
+  const [paying, setPaying] = useState(false)
   const run = useCommand(
     (action: AvailableAction, text: string) => RUNNERS[doc.doc_type][action.action]!(doc.id, text),
     {
@@ -176,7 +190,9 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
         key={a.action}
         variant={a.tone === 'destructive' ? 'destructive' : a.tone === 'outline' ? 'outline' : 'default'}
         disabled={!a.enabled}
-        onClick={() => (a.action === 'AWARD' ? setAwarding(true) : setPending(a))}
+        onClick={() =>
+          a.action === 'AWARD' ? setAwarding(true) : a.action === 'PAY' ? setPaying(true) : setPending(a)
+        }
       >
         {a.label}
       </Button>
@@ -413,6 +429,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
       </div>
 
       {awarding && <AwardDialog detail={detail} open={awarding} onOpenChange={setAwarding} />}
+      {paying && <PayDialog detail={detail} open={paying} onOpenChange={setPaying} />}
       {pending && (
         <ActionDialog
           open={!!pending}
@@ -421,15 +438,9 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
           description={pending.help}
           confirmLabel={pending.label}
           tone={pending.tone === 'destructive' ? 'destructive' : 'default'}
-          reason={pending.requires_comment || pending.action === 'APPROVE' || pending.action === 'PAY'}
+          reason={pending.requires_comment || pending.action === 'APPROVE'}
           reasonRequired={pending.requires_comment}
-          reasonLabel={
-            pending.action === 'APPROVE'
-              ? 'Comentario'
-              : pending.action === 'PAY'
-                ? 'Referencia (número de transferencia o de cheque)'
-                : 'Motivo'
-          }
+          reasonLabel={pending.action === 'APPROVE' ? 'Comentario' : 'Motivo'}
           busy={run.isPending}
           onConfirm={(text) => run.mutate([pending, text])}
         />
@@ -513,10 +524,36 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
         <InfoRow label="Pago">
           {payment.paid_on
-            ? `${date(payment.paid_on)}${payment.payment_reference ? ` · ${payment.payment_reference}` : ''}`
+            ? `${date(payment.paid_on)}${payment.payment_method ? ` · ${PAYMENT_METHODS[payment.payment_method]}` : ''}${payment.payment_reference ? ` N.º ${payment.payment_reference}` : ''}`
             : 'Todavía no se pagó'}
         </InfoRow>
         <InfoRow label="Preparó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'BANK_RECONCILIATION' && detail.reconciliation) {
+    const r = detail.reconciliation
+    return (
+      <dl className={grid}>
+        <InfoRow label="Banco">
+          {company.can('ledger.read') ? (
+            <Link className="hover:underline" to={company.to(`contabilidad/mayor?cuenta=${r.account.id}`)}>
+              {r.account.name}
+            </Link>
+          ) : (
+            r.account.name
+          )}{' '}
+          <span className="font-mono text-xs text-muted-foreground">{r.account.code}</span>
+        </InfoRow>
+        <InfoRow label="Extracto al">{date(r.statement_date)}</InfoRow>
+        <InfoRow label="Saldo según extracto">{money(r.statement_balance)}</InfoRow>
+        <InfoRow label="Saldo según libros">{money(r.book_balance)}</InfoRow>
+        <InfoRow label="Entradas sin acreditar">{money(r.pending_debits)}</InfoRow>
+        <InfoRow label="Pagos sin debitar">{money(r.pending_credits)}</InfoRow>
+        <InfoRow label="Concilió">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
@@ -863,6 +900,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
   if (detail.journal) return <JournalLines journal={detail.journal} />
   if (detail.payment) return <PaymentLines payment={detail.payment} total={doc.total} />
   if (detail.transfer) return <TransferLines transfer={detail.transfer} total={doc.total} />
+  if (detail.reconciliation) return <ReconciliationLines view={detail.reconciliation} />
   const product = (l: (typeof lines)[number]) => (
     <Link to={company.to(`productos/${l.product.code}`)} className="hover:underline">
       <span className="font-mono text-xs font-semibold text-navy">{l.product.code}</span> {l.product.name}

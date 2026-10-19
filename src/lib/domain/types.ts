@@ -38,6 +38,10 @@ export type DocType =
   | 'RFQ'
   | 'SUPPLIER_QUOTE'
   | 'FUNDS_TRANSFER'
+  | 'BANK_RECONCILIATION'
+
+/** Cómo se pagó una orden de pago. */
+export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
 
 export type TransitionAction =
   | 'SUBMIT'
@@ -285,6 +289,8 @@ export interface PaymentOrderHeader {
   payment_reference: string
   /** Fecha del pago (la del asiento). */
   paid_on: string | null
+  /** Medio con que se pagó (al pagarse). */
+  payment_method: PaymentMethod | null
 }
 
 /** Solicitud de cotización (tabla rfqs, 1 a 1 con documents): qué se pide cotizar, hasta cuándo y dónde se entregaría. */
@@ -318,6 +324,33 @@ export interface FundsTransferHeader {
   transferred_on: string | null
 }
 
+/**
+ * Conciliación bancaria (tabla bank_reconciliations, 1 a 1 con documents): el
+ * extracto de un banco a una fecha contra su mayor. Los importes calculados se
+ * guardan como quedaron al confirmarla.
+ */
+export interface BankReconciliationHeader {
+  account_id: string
+  statement_date: string
+  /** Saldo según el extracto del banco. */
+  statement_balance: number
+  /** Saldo según libros (el mayor) a la fecha del extracto. */
+  book_balance: number
+  /** Entradas registradas que el banco todavía no acreditó. */
+  pending_debits: number
+  /** Pagos registrados (cheques, transferencias) que el banco todavía no debitó. */
+  pending_credits: number
+}
+
+/** Un movimiento del mayor que figura en el extracto (tabla bank_reconciliation_lines). */
+export interface BankReconciliationLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  journal_line_id: string
+}
+
 /** Cabecera común de todo comprobante (tabla `documents`) + detalle por tipo. */
 export interface Document extends Audited {
   id: string
@@ -345,6 +378,7 @@ export interface Document extends Audited {
   rq?: RfqHeader
   sq?: SupplierQuoteHeader
   ft?: FundsTransferHeader
+  br?: BankReconciliationHeader
 }
 
 export interface RequisitionLine {

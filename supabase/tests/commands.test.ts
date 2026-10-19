@@ -124,6 +124,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['payment_order_lines', mock.opLines],
     ['rfq_lines', mock.rfqLines],
     ['supplier_quote_lines', mock.sqLines],
+    ['bank_reconciliation_lines', mock.brLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -1149,12 +1150,18 @@ describe('paridad de comandos', () => {
         (c) => E.cmdApprovePaymentOrder(c, id, 'Autorizado'),
         (b) => b.commands.approvePaymentOrder(pg(id), 'Autorizado'),
       )
-    const pay = (label: string, username: string, id: string, reference = '') =>
+    const pay = (
+      label: string,
+      username: string,
+      id: string,
+      reference = '',
+      method: 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO' = 'TRANSFERENCIA',
+    ) =>
       step(
         label,
         username,
-        (c) => E.cmdPayPaymentOrder(c, id, reference),
-        (b) => b.commands.payPaymentOrder(pg(id), reference),
+        (c) => E.cmdPayPaymentOrder(c, id, reference, method),
+        (b) => b.commands.payPaymentOrder(pg(id), reference, method),
       )
     const cancel = (label: string, username: string, id: string, reason: string) =>
       step(
@@ -1216,7 +1223,8 @@ describe('paridad de comandos', () => {
 
     // Tesorería paga (asiento automático) y la factura queda pagada en parte.
     expect(await pay('Gerencia no paga', 'gerencia', partial)).toBeNull()
-    expect(await pay('pagar', 'tesoreria', partial, 'Transferencia 000777')).not.toBeNull()
+    expect(await pay('un medio de pago que no existe', 'tesoreria', partial, '1', 'GIRO' as never)).toBeNull()
+    expect(await pay('pagar', 'tesoreria', partial, '000777')).not.toBeNull()
     expect(await pay('pagar otra vez', 'tesoreria', partial)).toBeNull()
 
     // Separación de funciones: compras2 registró la factura; con el rol de Tesorería tampoco la puede pagar.
@@ -1230,7 +1238,9 @@ describe('paridad de comandos', () => {
     const balance = await createdOrder('el resto, otra vez', 'contabilidad', payment(service.id, rest), true)
     expect(await approve('aprobar el resto', 'gerencia', balance)).not.toBeNull()
     expect(await pay('pagar una factura que registró', 'compras2', balance)).toBeNull()
-    expect(await pay('pagar el resto', 'tesoreria', balance, 'Cheque 000321')).not.toBeNull()
+    expect(await pay('cheque sin número', 'tesoreria', balance, '', 'CHEQUE')).toBeNull()
+    expect(await pay('cheque con letras', 'tesoreria', balance, 'Cheque 1', 'CHEQUE')).toBeNull()
+    expect(await pay('pagar el resto con cheque', 'tesoreria', balance, '000321', 'CHEQUE')).not.toBeNull()
     expect(
       await step(
         'anular una factura pagada',
@@ -1596,6 +1606,113 @@ describe('paridad de comandos', () => {
     expect(await cancel('anular cuando volvió el saldo', 'tesoreria', spent, 'Era para otra caja')).not.toBeNull()
   })
 
+  it('conciliación bancaria: cierra con lo pendiente, controles y anulación de la última', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const bank = account('1.1.01.03')
+    const today = todayAR()
+    const open = () => {
+      const reconciled = E.reconciledLineIds(mock, bank)
+      return E.accountLinesUpTo(mock, bank, today).filter(({ line }) => !reconciled.has(line.id))
+    }
+    // Las líneas de asientos creados en otras pruebas no están vinculadas: se buscan por asiento y número de línea.
+    const pgLine = async (lineId: string) => {
+      const line = mock.jeLines.find((l) => l.id === lineId)!
+      const entry = mock.documents.find((d) => d.id === line.document_id)!
+      const [row] = await db.admin<{ id: string }>(
+        `select l.id from public.journal_entry_lines l join public.documents d on d.id = l.document_id
+          where d.company_id = $1 and d.display_number = $2 and l.line_no = $3`,
+        [companyPg, entry.display_number, line.line_no],
+      )
+      return row.id
+    }
+    const input = async (over: Partial<E.BankReconciliationInput>) => {
+      const value: E.BankReconciliationInput = {
+        account_id: bank,
+        statement_date: today,
+        statement_balance: 0,
+        journal_line_ids: [],
+        notes: '',
+        ...over,
+      }
+      const ids: string[] = []
+      for (const id of value.journal_line_ids) ids.push(await pgLine(id))
+      return { value, pgValue: { ...value, account_id: pg(value.account_id), journal_line_ids: ids } }
+    }
+    const reconcile = async (label: string, username: string, over: Partial<E.BankReconciliationInput>) => {
+      const r = await input(over)
+      return step(
+        label,
+        username,
+        (c) => E.cmdCreateBankReconciliation(c, company, r.value),
+        (b) => b.commands.createBankReconciliation(companyPg, r.pgValue),
+      )
+    }
+    // El cheque de la demo sigue sin debitar: todo lo demás figura en el extracto.
+    const cheque = mock.documents.find((d) => d.doc_type === 'PAYMENT_ORDER' && d.op?.payment_reference === '00000451')!
+    const lines = open()
+    const pendingCheque = lines.find(
+      ({ doc, line }) => line.credit === cheque.total && doc.je!.description.includes('00000451'),
+    )!
+    const marked = lines.filter((l) => l !== pendingCheque).map(({ line }) => line.id)
+    const book = E.round2(
+      E.accountLinesUpTo(mock, bank, today).reduce((s, { line }) => s + line.debit - line.credit, 0),
+    )
+    const statement = E.round2(book + cheque.total)
+
+    for (const [label, username, over] of [
+      ['Tesorería no concilia', 'tesoreria', { statement_balance: statement, journal_line_ids: marked }],
+      ['un extracto a futuro', 'contabilidad', { statement_date: '2999-12-31' }],
+      ['antes de la última conciliación', 'contabilidad', { statement_date: `${today.slice(0, 4)}-01-01` }],
+      ['saldo con tres decimales', 'contabilidad', { statement_balance: 10.005 }],
+      [
+        'una línea de otra cuenta',
+        'contabilidad',
+        { journal_line_ids: [E.accountLinesUpTo(mock, account('1.1.01.01'), today)[0].line.id] },
+      ],
+      ['la misma línea dos veces', 'contabilidad', { journal_line_ids: [marked[0], marked[0]] }],
+      ['no cierra', 'contabilidad', { statement_balance: statement + 100, journal_line_ids: marked }],
+      ['una cuenta que no es caja ni banco', 'contabilidad', { account_id: account('2.1.01.01') }],
+    ] as const)
+      expect(await reconcile(label, username, over as Partial<E.BankReconciliationInput>), label).toBeNull()
+
+    const r = await input({ statement_balance: statement, journal_line_ids: marked, notes: 'Extracto de octubre' })
+    const reconciliation = await created(
+      'conciliar con el cheque pendiente',
+      'contabilidad',
+      (c) => E.cmdCreateBankReconciliation(c, company, r.value),
+      (b) => b.commands.createBankReconciliation(companyPg, r.pgValue),
+    )
+    const first = mock.documents.find(
+      (d) => d.doc_type === 'BANK_RECONCILIATION' && d.br?.account_id === bank && d.id !== reconciliation,
+    )!
+    const cancel = (label: string, id: string, reason: string) =>
+      step(
+        label,
+        'contabilidad',
+        (c) => E.cmdCancelBankReconciliation(c, id, reason),
+        (b) => b.commands.cancelBankReconciliation(pg(id), reason),
+      )
+    expect(await cancel('anular una que no es la última', first.id, 'Error')).toBeNull()
+    expect(await cancel('anular sin motivo', reconciliation, '')).toBeNull()
+    expect(
+      await step(
+        'Tesorería no anula conciliaciones',
+        'tesoreria',
+        (c) => E.cmdCancelBankReconciliation(c, reconciliation, 'Error'),
+        (b) => b.commands.cancelBankReconciliation(pg(reconciliation), 'Error'),
+      ),
+    ).toBeNull()
+    // Se lee antes de anularla: el cheque figura como pendiente en esta conciliación.
+    await sameRead(
+      'cheques emitidos con la conciliación confirmada',
+      'tesoreria',
+      (b) => b.api.issuedCheques(companyPg),
+      (u) => Q.issuedCheques(mock, u, company),
+    )
+    expect(await cancel('anular la última', reconciliation, 'Se tomó el extracto de otra cuenta')).not.toBeNull()
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -1609,6 +1726,7 @@ describe('paridad de comandos', () => {
       'RFQ',
       'SUPPLIER_QUOTE',
       'FUNDS_TRANSFER',
+      'BANK_RECONCILIATION',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`
@@ -1767,6 +1885,19 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.cashProjection(companyPg),
         (u) => Q.cashProjection(mock, u, company),
+      )
+      await sameRead(
+        `cheques emitidos (${username})`,
+        username,
+        (b) => b.api.issuedCheques(companyPg),
+        (u) => Q.issuedCheques(mock, u, company),
+      )
+      const bank = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
+      await sameRead(
+        `movimientos para conciliar (${username})`,
+        username,
+        (b) => b.api.reconciliationCandidates(companyPg, pg(bank), todayAR()),
+        (u) => Q.reconciliationCandidates(mock, u, company, bank, todayAR()),
       )
     }
   })

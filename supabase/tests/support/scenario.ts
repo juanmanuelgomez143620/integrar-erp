@@ -145,7 +145,7 @@ export function buildScenario(): DB {
   })
   const demoPayment = db.documents.find((d) => d.company_id === company && d.doc_type === 'PAYMENT_ORDER')!
   E.cmdApprovePaymentOrder(as('gerencia'), demoPayment.id, 'Vence este mes')
-  E.cmdPayPaymentOrder(as('tesoreria'), demoPayment.id, 'Transferencia 000451')
+  E.cmdPayPaymentOrder(as('tesoreria'), demoPayment.id, '00000451', 'CHEQUE')
   const partial = E.cmdCreatePaymentOrder(as('contabilidad'), company, payment(overdue.id, 10000), true)
   E.cmdApprovePaymentOrder(as('gerencia'), partial.id, '')
   E.cmdPayPaymentOrder(as('tesoreria'), partial.id, '')
@@ -154,7 +154,7 @@ export function buildScenario(): DB {
   E.cmdRejectPaymentOrder(as('gerencia'), rejectedPayment.id, 'Primero se paga lo vencido de otros proveedores')
   const reverted = E.cmdCreatePaymentOrder(as('contabilidad'), company, payment(overdue.id, 2000), true)
   E.cmdApprovePaymentOrder(as('gerencia'), reverted.id, '')
-  E.cmdPayPaymentOrder(as('tesoreria'), reverted.id, 'Cheque 12345')
+  E.cmdPayPaymentOrder(as('tesoreria'), reverted.id, '12345', 'CHEQUE')
   E.cmdCancelPaymentOrder(as('tesoreria'), reverted.id, 'El cheque fue rechazado')
   const servicePayment = E.cmdCreatePaymentOrder(
     as('tesoreria'),
@@ -265,6 +265,26 @@ export function buildScenario(): DB {
   E.cmdCancelFundsTransfer(as('tesoreria'), twice.id, 'Se cargó dos veces')
   E.cmdCreateFundsTransfer(as('tesoreria'), company, funds('1.1.01.03', '1.1.01.01', 80000, 'Cheque 000045'), true)
   E.cmdCreateFundsTransfer(as('tesoreria'), company, funds('1.1.01.01', '1.1.01.03', 30000), false)
+
+  // Conciliaciones a la fecha de la apertura (sólo ella figura en el extracto):
+  // la del banco queda confirmada; una de la caja, anulada. Lo de hoy queda sin
+  // conciliar para las pruebas de comandos (y el cheque de la demo, sin debitar).
+  const opening = `${todayAR().slice(0, 4)}-01-01`
+  const openingLines = (code: string) => E.accountLinesUpTo(db, treasury(code), opening).map(({ line }) => line.id)
+  const reconciliation = (code: string, balance: number, notes = ''): E.BankReconciliationInput => ({
+    account_id: treasury(code),
+    statement_date: opening,
+    statement_balance: balance,
+    journal_line_ids: openingLines(code),
+    notes,
+  })
+  E.cmdCreateBankReconciliation(as('contabilidad'), company, reconciliation('1.1.01.03', 12500000))
+  const count = E.cmdCreateBankReconciliation(
+    as('contabilidad'),
+    company,
+    reconciliation('1.1.01.01', 850000, 'Arqueo de prueba'),
+  )
+  E.cmdCancelBankReconciliation(as('contabilidad'), count.id, 'Era un arqueo, no un extracto')
 
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(

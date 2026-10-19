@@ -47,6 +47,7 @@ const DOC_TYPES: DocType[] = [
   'RFQ',
   'SUPPLIER_QUOTE',
   'FUNDS_TRANSFER',
+  'BANK_RECONCILIATION',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -222,6 +223,22 @@ describe('tesorería', () => {
   it('cajas y bancos con su saldo', async () => {
     for (const u of USERS)
       await same(u, () => Q.treasuryAccounts(mock, userId(u), company), 'treasury_accounts', [companyPg])
+  })
+
+  it('cheques emitidos y movimientos para conciliar', async () => {
+    const year = new Date().getFullYear()
+    const accountId = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    for (const u of USERS) {
+      await same(u, () => Q.issuedCheques(mock, userId(u), company), 'issued_cheques', [companyPg])
+      for (const code of ['1.1.01.03', '1.1.01.01', '2.1.01.01'])
+        for (const date of [todayAR(), `${year}-01-01`, 'no-es-fecha'])
+          await same(
+            u,
+            () => Q.reconciliationCandidates(mock, userId(u), company, accountId(code), date),
+            'reconciliation_candidates',
+            [companyPg, loaded.pg(accountId(code)), date],
+          )
+    }
   })
 
   it('flujo de fondos real en distintos períodos y proyectado', async () => {

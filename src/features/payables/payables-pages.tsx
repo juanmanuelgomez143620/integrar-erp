@@ -6,7 +6,7 @@ import { DataTable } from '@/components/common/data-table'
 import { EmptyState, KpiCard, Loading, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, type PayableRow, type TreasuryAccountRow } from '@/lib/api'
+import { api, type IssuedCheque, type PayableRow, type TreasuryAccountRow } from '@/lib/api'
 import { VAT_CONDITIONS } from '@/lib/domain/catalog'
 import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -171,6 +171,91 @@ export function TreasuryPage() {
           Tocá una cuenta para ver sus movimientos en el libro mayor.
         </p>
       )}
+    </>
+  )
+}
+
+const CHEQUE_BADGE = {
+  PENDIENTE: ['Pendiente de débito', 'warning'],
+  DEBITADO: ['Debitado', 'success'],
+  ANULADO: ['Anulado', 'neutral'],
+} as const
+
+/** Cheques emitidos: los pagos con cheque y si el banco ya los debitó (según las conciliaciones). */
+export function IssuedChequesPage() {
+  const company = useCompany()
+  const navigate = useNavigate()
+  const {
+    data = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['issued-cheques', company.companyId],
+    queryFn: () => api.issuedCheques(company.companyId),
+  })
+  const pending = data.filter((c) => c.status === 'PENDIENTE')
+  return (
+    <>
+      <PageHeader
+        crumbs={[{ label: 'Inicio', to: company.to() }, { label: 'Pagos y tesorería' }, { label: 'Cheques emitidos' }]}
+        title="Cheques emitidos"
+        description="Los pagos con cheque propio. Un cheque está pendiente de débito hasta que una conciliación bancaria lo encuentra en el extracto: mientras tanto, el saldo del banco es menor al que muestra el extracto."
+      />
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <KpiCard
+          label="Pendientes de débito"
+          value={money(pending.reduce((s, c) => s + c.amount, 0))}
+          hint={`${pending.length} cheque${pending.length === 1 ? '' : 's'}`}
+          icon={Banknote}
+        />
+      </div>
+      <DataTable<IssuedCheque>
+        rows={data}
+        loading={isLoading}
+        error={error}
+        rowKey={(c) => c.payment.id}
+        search={(c) => `${c.number} ${c.supplier_name} ${c.payment.display_number}`}
+        searchPlaceholder="Buscar por número, proveedor u orden de pago…"
+        onRowClick={(c) => navigate(c.payment.path)}
+        empty="Todavía no se pagó ninguna orden con cheque."
+        columns={[
+          { key: 'number', header: 'Cheque N.º', sort: (c) => c.number, cell: (c) => <Mono>{c.number}</Mono> },
+          { key: 'date', header: 'Fecha', sort: (c) => c.date, cell: (c) => date(c.date) },
+          {
+            key: 'supplier',
+            header: 'A la orden de',
+            sort: (c) => c.supplier_name,
+            cell: (c) => <span className="font-medium">{c.supplier_name}</span>,
+          },
+          { key: 'op', header: 'Orden de pago', cell: (c) => <Mono>{c.payment.display_number}</Mono> },
+          { key: 'bank', header: 'Banco', cell: (c) => <span className="text-xs">{c.account.name}</span> },
+          {
+            key: 'status',
+            header: 'Estado',
+            cell: (c) => (
+              <span className="flex flex-wrap items-center gap-1.5">
+                <StatusBadge label={CHEQUE_BADGE[c.status][0]} badge={CHEQUE_BADGE[c.status][1]} />
+                {c.reconciliation && (
+                  <Link
+                    to={c.reconciliation.path}
+                    className="font-mono text-xs hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {c.reconciliation.display_number}
+                  </Link>
+                )}
+              </span>
+            ),
+          },
+          {
+            key: 'amount',
+            header: 'Importe',
+            align: 'right',
+            sort: (c) => c.amount,
+            cell: (c) => <span className="tabular font-semibold">{money(c.amount)}</span>,
+          },
+        ]}
+      />
     </>
   )
 }

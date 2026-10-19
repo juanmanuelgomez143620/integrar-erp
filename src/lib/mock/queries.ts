@@ -17,6 +17,7 @@ import type { DB } from './db'
 import {
   accountBalance,
   accountLabel,
+  accountLinesUpTo,
   bestQuote,
   can,
   docPath,
@@ -34,14 +35,17 @@ import {
   isInstanceAdmin,
   isPosted,
   isSchoolAdmin,
+  lastReconciliation,
   orderFromQuote,
   quoteIsValid,
   quotesOf,
+  reconciledLineIds,
   requirePermission,
   requisitionAvailableQuantity,
   rfqLinesOf,
   round2,
   round3,
+  type AccountLine,
 } from './engine'
 
 export type PublicProfile = Omit<T.Profile, 'password'>
@@ -349,6 +353,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.sqLines.filter((l) => l.document_id === doc.id).length
     case 'FUNDS_TRANSFER':
       return 0
+    case 'BANK_RECONCILIATION':
+      return db.brLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -365,6 +371,7 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     case 'JOURNAL_ENTRY':
     case 'PAYMENT_ORDER':
     case 'FUNDS_TRANSFER':
+    case 'BANK_RECONCILIATION':
       return []
     case 'SUPPLIER_INVOICE':
       return db.siLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
@@ -404,7 +411,9 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
       ? doc.je.description
       : doc.ft
         ? `${db.accounts.find((a) => a.id === doc.ft!.from_account_id)?.name} → ${db.accounts.find((a) => a.id === doc.ft!.to_account_id)?.name}`
-        : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+        : doc.br
+          ? `${db.accounts.find((a) => a.id === doc.br!.account_id)?.name} al ${date(doc.br.statement_date)}`
+          : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -454,6 +463,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'SUPPLIER_INVOICE',
     'PAYMENT_ORDER',
     'FUNDS_TRANSFER',
+    'BANK_RECONCILIATION',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -559,6 +569,11 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       const from = db.accounts.find((a) => a.id === doc.ft!.from_account_id)!
       const balance = accountBalance(db, from.id)
       if (doc.total > balance + 1e-9) reason = `No alcanza el saldo de ${accountLabel(from)}: hay ${money(balance)}.`
+    }
+    if (doc.doc_type === 'BANK_RECONCILIATION' && tr.action === 'CANCEL') {
+      const last = lastReconciliation(db, doc.br!.account_id)
+      if (last && last.id !== doc.id)
+        reason = `Sólo se anula la última conciliación de la cuenta (${last.display_number}).`
     }
     if (doc.doc_type === 'FUNDS_TRANSFER' && doc.status === 'CONFIRMADA' && tr.action === 'CANCEL') {
       const to = db.accounts.find((a) => a.id === doc.ft!.to_account_id)!
@@ -723,6 +738,11 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: '—',
         text: `Fue la elegida en ${rfqNumber(db, doc)}: de ella nació ${orderFromQuote(db, doc.id)?.display_number ?? 'la orden de compra'}.`,
       }
+    case 'BANK_RECONCILIATION:CONFIRMADA':
+      return {
+        who: '—',
+        text: `Cierra con el extracto al ${date(doc.br?.statement_date)}. Lo pendiente (${money(doc.br?.pending_credits ?? 0)} en pagos sin debitar y ${money(doc.br?.pending_debits ?? 0)} en entradas sin acreditar) se controla en la próxima conciliación.`,
+      }
     case 'FUNDS_TRANSFER:BORRADOR':
       return {
         who: 'Tesorería',
@@ -830,6 +850,7 @@ export interface PaymentView {
   treasury_account: { id: string; code: string; name: string }
   payment_reference: string
   paid_on: string | null
+  payment_method: T.PaymentMethod | null
   lines: PaymentLineView[]
 }
 
@@ -896,6 +917,33 @@ export interface TransferView {
   transferred_on: string | null
 }
 
+/** Un movimiento del mayor de una caja o un banco, para conciliarlo. */
+export interface ReconciliationLineView {
+  line_id: string
+  document_id: string
+  display_number: string
+  path: string
+  entry_number: number
+  date: string
+  description: string
+  debit: number
+  credit: number
+}
+
+/** Conciliación bancaria: el extracto contra el mayor, y lo que quedó pendiente. */
+export interface ReconciliationView {
+  account: { id: string; code: string; name: string }
+  statement_date: string
+  statement_balance: number
+  book_balance: number
+  pending_debits: number
+  pending_credits: number
+  /** Los movimientos que figuraban en el extracto. */
+  reconciled: ReconciliationLineView[]
+  /** Los que no figuraban todavía: entradas sin acreditar y pagos sin debitar. */
+  pending: ReconciliationLineView[]
+}
+
 export interface DocumentDetail {
   doc: DocumentListItem
   lines: DetailLine[]
@@ -904,6 +952,7 @@ export interface DocumentDetail {
   rfq: RfqView | null
   quote: QuoteView | null
   transfer: TransferView | null
+  reconciliation: ReconciliationView | null
   supplier: T.Supplier | null
   warehouse: T.Warehouse | null
   related_order: DocumentListItem | null
@@ -1120,10 +1169,15 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                       { label: 'Preparó', ...firstBy(['CREATE']) },
                       { label: 'Confirmó', ...firstBy(['CONFIRM']) },
                     ]
-                  : [
-                      { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                      { label: 'Controló', name: '', sector: '', at: '' },
-                    ]
+                  : doc.doc_type === 'BANK_RECONCILIATION'
+                    ? [
+                        { label: 'Concilió', ...firstBy(['CREATE']) },
+                        { label: 'Revisó', name: '', sector: '', at: '' },
+                      ]
+                    : [
+                        { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                        { label: 'Controló', name: '', sector: '', at: '' },
+                      ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1132,6 +1186,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     rfq: doc.rq ? rfqView(db, doc) : null,
     quote: doc.sq ? quoteView(db, doc) : null,
     transfer: doc.ft ? transferView(db, doc) : null,
+    reconciliation: doc.br ? reconciliationView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     warehouse: db.warehouses.find((w) => w.id === warehouseId) ?? null,
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
@@ -1159,6 +1214,7 @@ function paymentView(db: DB, doc: T.Document): PaymentView {
     treasury_account: { id: account.id, code: account.code, name: account.name },
     payment_reference: op.payment_reference,
     paid_on: op.paid_on,
+    payment_method: op.payment_method,
     lines: db.opLines
       .filter((l) => l.document_id === doc.id)
       .sort(byLineNo)
@@ -1258,6 +1314,39 @@ function rfqView(db: DB, doc: T.Document): RfqView {
     best_quote_id: best?.id ?? null,
     awarded_quote_id: awarded?.id ?? null,
     order: order ? docRef(db, order) : null,
+  }
+}
+
+const reconciliationLine = (db: DB, { line, doc }: AccountLine): ReconciliationLineView => ({
+  line_id: line.id,
+  document_id: doc.id,
+  display_number: doc.display_number,
+  path: docPath(db, doc),
+  entry_number: doc.je!.entry_number!,
+  date: doc.document_date,
+  description: line.notes || doc.je!.description,
+  debit: line.debit,
+  credit: line.credit,
+})
+
+function reconciliationView(db: DB, doc: T.Document): ReconciliationView {
+  const br = doc.br!
+  const account = db.accounts.find((a) => a.id === br.account_id)!
+  const own = new Set(db.brLines.filter((l) => l.document_id === doc.id).map((l) => l.journal_line_id))
+  // Lo pendiente a la fecha de esta conciliación: ni lo concilió ella ni una anterior.
+  const before = reconciledLineIds(db, account.id, doc.number - 1)
+  const lines = accountLinesUpTo(db, account.id, br.statement_date)
+  return {
+    account: { id: account.id, code: account.code, name: account.name },
+    statement_date: br.statement_date,
+    statement_balance: br.statement_balance,
+    book_balance: br.book_balance,
+    pending_debits: br.pending_debits,
+    pending_credits: br.pending_credits,
+    reconciled: lines.filter(({ line }) => own.has(line.id)).map((l) => reconciliationLine(db, l)),
+    pending: lines
+      .filter(({ line }) => !own.has(line.id) && !before.has(line.id))
+      .map((l) => reconciliationLine(db, l)),
   }
 }
 
@@ -2056,6 +2145,101 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
   })
   return { today, balance, buckets, shortfall: buckets.find((b) => b.balance < 0)?.key ?? null }
 }
+
+// ============================================================ Cheques y conciliación (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
+
+export interface ReconciliationCandidates {
+  account: { id: string; code: string; name: string }
+  /** La última conciliación confirmada de la cuenta. */
+  last: { display_number: string; path: string; statement_date: string; statement_balance: number } | null
+  /** Saldo según libros a la fecha del extracto. */
+  book_balance: number
+  /** Los movimientos todavía sin conciliar hasta esa fecha, en el orden del libro diario. */
+  lines: ReconciliationLineView[]
+}
+
+/** Lo que hace falta para conciliar un banco a una fecha (null si la cuenta no es una caja o un banco). */
+export function reconciliationCandidates(
+  db: DB,
+  userId: string,
+  companyId: string,
+  accountId: string,
+  statementDate: string,
+): ReconciliationCandidates | null {
+  assertPerm(db, userId, companyId, 'bank_reconciliation.create')
+  if (!isDate(statementDate)) fail('DATO_INVALIDO', 'Indicá la fecha del extracto.')
+  const account = treasuryAccountsOf(db, companyId).find((a) => a.id === accountId)
+  if (!account) return null
+  const last = lastReconciliation(db, account.id)
+  const lines = accountLinesUpTo(db, account.id, statementDate)
+  const reconciled = reconciledLineIds(db, account.id)
+  return {
+    account: { id: account.id, code: account.code, name: account.name },
+    last: last
+      ? {
+          display_number: last.display_number,
+          path: docPath(db, last),
+          statement_date: last.br!.statement_date,
+          statement_balance: last.br!.statement_balance,
+        }
+      : null,
+    book_balance: round2(lines.reduce((s, { line }) => s + line.debit - line.credit, 0)),
+    lines: lines.filter(({ line }) => !reconciled.has(line.id)).map((l) => reconciliationLine(db, l)),
+  }
+}
+
+export type ChequeStatus = 'PENDIENTE' | 'DEBITADO' | 'ANULADO'
+
+export interface IssuedCheque {
+  payment: DocRef
+  number: string
+  date: string
+  supplier_name: string
+  account: { id: string; code: string; name: string }
+  amount: number
+  /** Pendiente de débito hasta que una conciliación lo encuentra en el extracto. */
+  status: ChequeStatus
+  reconciliation: DocRef | null
+}
+
+/** Cheques emitidos: los pagos con cheque, con su estado según las conciliaciones. */
+export function issuedCheques(db: DB, userId: string, companyId: string): IssuedCheque[] {
+  assertPerm(db, userId, companyId, 'treasury.read')
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PAYMENT_ORDER' &&
+        d.op?.payment_method === 'CHEQUE' &&
+        ['PAGADA', 'ANULADA'].includes(d.status),
+    )
+    .sort((a, b) => compareCodes(a.op!.paid_on!, b.op!.paid_on!) || a.number - b.number)
+    .map((d) => {
+      const account = db.accounts.find((a) => a.id === d.op!.treasury_account_id)!
+      // La línea del banco en el asiento del pago, y la conciliación que la encontró.
+      const entry = db.docLinks
+        .filter((l) => l.from_document_id === d.id)
+        .map((l) => db.documents.find((x) => x.id === l.to_document_id))
+        .find((x) => x?.je?.origin === 'AUTOMATICO')
+      const line =
+        entry && db.jeLines.find((l) => l.document_id === entry.id && l.account_id === account.id && l.credit > 0)
+      const brLine = line && db.brLines.find((l) => l.journal_line_id === line.id && isConfirmedReconciliation(db, l))
+      const reconciliation = brLine ? db.documents.find((x) => x.id === brLine.document_id) : undefined
+      return {
+        payment: docRef(db, d),
+        number: d.op!.payment_reference,
+        date: d.op!.paid_on!,
+        supplier_name: db.suppliers.find((s) => s.id === d.supplier_id)?.legal_name ?? '',
+        account: { id: account.id, code: account.code, name: account.name },
+        amount: d.total,
+        status: d.status === 'ANULADA' ? 'ANULADO' : reconciliation ? 'DEBITADO' : 'PENDIENTE',
+        reconciliation: d.status !== 'ANULADA' && reconciliation ? docRef(db, reconciliation) : null,
+      }
+    })
+}
+
+const isConfirmedReconciliation = (db: DB, l: T.BankReconciliationLine) =>
+  db.documents.some((d) => d.id === l.document_id && d.status === 'CONFIRMADA')
 
 // ============================================================ Imputación automática
 
