@@ -9,7 +9,8 @@ Diseño corto. Sigue [ROADMAP.md §3](../ROADMAP.md) (Fase 3), [DATABASE.md §15
 | 3a | Motor de imputación, factura de proveedor y cuenta corriente | La compra termina en un asiento automático y en la deuda con el proveedor | Hecho (simulador, pantallas y Supabase con paridad) |
 | 3b | Tesorería: cajas y bancos, orden de pago con aprobación y pago | La deuda se cancela; el pago mueve el banco o la caja y genera su asiento | Hecho (simulador, pantallas y Supabase con paridad) |
 | 3c | Solicitud de cotización, cotizaciones y cuadro comparativo | La OC nace de la mejor cotización | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 3d | Transferencias entre cuentas, cheques, conciliación simplificada y flujo de fondos | Tesorería completa | Pendiente |
+| 3d.1 | Transferencias entre cajas y bancos y flujo de fondos (real y proyectado) | Tesorería mueve fondos y anticipa si alcanzan | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
+| 3d.2 | Cheques propios y conciliación bancaria simplificada | Tesorería completa | Pendiente (diseño en §7) |
 
 ## 2. Motor de imputación (`posting_rules`)
 
@@ -55,7 +56,20 @@ El circuito enseña a **pedir precio antes de comprar** y a **justificar la elec
 - La aprobación de Gerencia (la **A** de la matriz de ROLES_Y_PERMISOS.md §7) ocurre en la OC, por monto: Gerencia ve de qué cotización nace y, en la solicitud, la justificación.
 - Tareas: "Enviar SCT-00001 a los proveedores" (a quien la preparó, si quedó en borrador) y "Comparar y adjudicar SCT-00001" (a Compras, mientras está enviada).
 
-## 7. Permisos (a validar)
+## 7. Tesorería completa (3d)
+
+**3d.1 — Transferencias y flujo de fondos**
+
+- **Transferencia entre cuentas (`TF-00001`)**: Tesorería mueve fondos entre dos cajas o bancos de la empresa (depositar el efectivo en el banco, extraer para la caja, reponer el fondo fijo, depositar valores), con importe y referencia (número de boleta o de transferencia). **Borrador → Confirmada**: al confirmarse controla que alcance el saldo de la cuenta de origen y genera el asiento automático (la cuenta de destino al debe, la de origen al haber). Una confirmada se anula con el contraasiento. No es para gastos ni intereses del banco: esos los registra Contabilidad con un asiento.
+- **Flujo de fondos real** (pantalla "Flujo de fondos", por período): saldo inicial de cajas y bancos, entradas y salidas agrupadas por concepto según el documento que las originó (pagos a proveedores, movimientos entre cajas y bancos, saldos de apertura y otros asientos de Contabilidad) y saldo final, por cuenta y en total. Sale del libro mayor: nunca se carga a mano.
+- **Flujo de fondos proyectado**: desde el saldo de hoy, resta lo que vence de las facturas de proveedores (lo que les falta pagar), agrupado por vencimiento (vencidas, próximos 7 días, 8 a 15, 16 a 30 y más de 30), con el saldo que quedaría después de cada tramo. Si en algún tramo no alcanza, lo avisa: es el escenario "problema de liquidez" (conseguir fondos o negociar plazos). Los cobros a clientes se sumarán con Ventas (Fase 4).
+
+**3d.2 — Cheques y conciliación**
+
+- **Cheques propios**: al pagar una orden de pago desde un banco, Tesorería elige el medio, transferencia o cheque (con su número, obligatorio); desde una caja, efectivo. La pantalla "Cheques emitidos" lista los pagos con cheque y su estado: pendiente de débito, debitado (cuando una conciliación lo encuentra en el extracto) o anulado.
+- **Conciliación bancaria simplificada (`CB-00001`)**: con el extracto del banco que da el docente, **Contabilidad** (no Tesorería, que maneja los fondos: control por oposición **(a validar)**) elige el banco, la fecha y el saldo del extracto, y marca qué movimientos del mayor figuran en el extracto. La pantalla calcula el saldo según libros, los movimientos pendientes (depósitos no acreditados y cheques o pagos no debitados) y la diferencia con el extracto; sólo se confirma si la diferencia es cero. Si no cierra, faltan registrar movimientos del banco (comisiones, intereses): Contabilidad los registra con un asiento y vuelve a conciliar. Confirmada, sus movimientos quedan conciliados; se anula sólo la última de cada banco.
+
+## 8. Permisos (a validar)
 
 | Permiso | Roles |
 |---|---|
@@ -69,3 +83,7 @@ El circuito enseña a **pedir precio antes de comprar** y a **justificar la elec
 | `payment_order.pay` | Tesorería |
 | `rfq.read`, `supplier_quote.read` (solicitudes de cotización y cotizaciones) | Compras, Gerencia, Contabilidad, Tesorería, Impuestos, Depósito, Auditoría |
 | `rfq.create/cancel/award` (adjudicar), `supplier_quote.create/cancel` | Compras |
+| `funds_transfer.read` (transferencias entre cuentas) | Tesorería, Contabilidad, Gerencia, Auditoría |
+| `funds_transfer.create/cancel` | Tesorería |
+| `bank_reconciliation.read` (conciliaciones, 3d.2) | Tesorería, Contabilidad, Gerencia, Auditoría |
+| `bank_reconciliation.create/cancel` | Contabilidad |

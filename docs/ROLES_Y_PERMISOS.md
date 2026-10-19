@@ -58,7 +58,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | core | `company.read`, `company.update`, `member.read`, `sector.read` |
 | masters | `customer.read/create/update/export`, `supplier.read/create/update/export`, `product.read/create/update/export` |
 | purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export`; desde la Fase 3, `supplier_invoice.read/create/cancel` (facturas de proveedor); desde la 3c, `rfq.read/create/cancel/award` (solicitudes de cotización) y `supplier_quote.read/create/cancel` (cotizaciones) |
-| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos) |
+| payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos, flujo de fondos); desde la 3d, `funds_transfer.read/create/cancel` (transferencias entre cuentas) |
 | inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel` |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
@@ -92,7 +92,8 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Cuenta corriente de proveedores (Fase 3) | L | L | — | — | — | L | L | — | — | — | L | Todo |
 | Imputación automática (Fase 3) | L | — | — | — | — | L M | — | — | — | — | L | Todo |
 | Orden de pago (Fase 3b) | L A⁶ | — | — | — | — | L C X | L C P X | — | — | — | L | Todo |
-| Cajas y bancos (Fase 3b) | L | — | — | — | — | L | L | — | — | — | L | Todo |
+| Cajas y bancos y flujo de fondos (Fase 3b y 3d) | L | — | — | — | — | L | L | — | — | — | L | Todo |
+| Transferencia entre cuentas (Fase 3d) | L | — | — | — | — | L | L C X | — | — | — | L | Todo |
 | Solicitud de cotización (Fase 3c) | L | L C X J⁷ | — | L | — | L | L | — | L | — | L | Todo |
 | Cotización de proveedor (Fase 3c) | L | L C X | — | L | — | L | L | — | L | — | L | Todo |
 

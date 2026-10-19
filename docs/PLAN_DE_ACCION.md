@@ -39,7 +39,8 @@ Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 pro
 | D1 | Fase 3a (`docs/FASE_3_COMPRAS_Y_TESORERIA.md`): imputación automática, factura de proveedor contra lo recibido con su asiento, cuentas corrientes de proveedores | Hecho y aplicado en Supabase (16/10); falta que el docente valide las reglas de imputación |
 | D2 | Fase 3b: cajas y bancos, orden de pago con aprobación de Gerencia y pago (asiento `PAGO`, SoD-5) | Hecho y aplicado en Supabase (16/10) |
 | D3 | Fase 3c: solicitud de cotización a varios proveedores, cotizaciones, cuadro comparativo y adjudicación que genera la OC | Hecho (18/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
-| D4 | Fase 3d: transferencias entre cuentas, cheques, conciliación simplificada y flujo de fondos | Pendiente |
+| D4 | Fase 3d.1: transferencias entre cajas y bancos, flujo de fondos real y proyectado | Hecho (19/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
+| D5 | Fase 3d.2: cheques propios y conciliación bancaria simplificada | Pendiente |
 
 ## Reglas para quien ejecute el plan
 
