@@ -48,6 +48,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   payable: 'payables',
   payment_order: 'payables',
   treasury: 'payables',
+  funds_transfer: 'payables',
   account: 'accounting',
   posting_rule: 'accounting',
   journal_entry: 'accounting',
@@ -122,7 +123,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'goods_receipt.read', 'goods_receipt.cancel', 'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read',
-    'payment_order.read', 'payment_order.approve', 'treasury.read',
+    'payment_order.read', 'payment_order.approve', 'treasury.read', 'funds_transfer.read',
     'rfq.read', 'supplier_quote.read',
   ],
   COMPRAS: [
@@ -160,13 +161,14 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'journal_entry.create', 'journal_entry.update', 'journal_entry.cancel', 'journal_entry.export',
     'ledger.export', 'fiscal_period.update',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
-    'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read',
+    'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read', 'funds_transfer.read',
     'rfq.read', 'supplier_quote.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
     'supplier_invoice.read', 'payable.read',
     'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
+    'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel',
     'rfq.read', 'supplier_quote.read',
   ],
   RRHH: [...CORE_READ],
@@ -183,7 +185,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'dashboard.read', 'task.read', 'audit.read', 'audit.export',
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
-    'rfq.read', 'supplier_quote.read',
+    'funds_transfer.read', 'rfq.read', 'supplier_quote.read',
   ],
   DOCENTE: [],
 }
@@ -247,6 +249,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'SUPPLIER_QUOTE', prefix: 'COT', name: 'Cotización de proveedor', plural: 'Cotizaciones',
     resource: 'supplier_quote', module: 'purchasing', path: 'compras/cotizaciones',
     description: 'Respuesta de un proveedor a una solicitud de cotización: precios, plazo de entrega, condición de pago y validez de la oferta. Se compara con las demás antes de elegir.',
+  },
+  FUNDS_TRANSFER: {
+    code: 'FUNDS_TRANSFER', prefix: 'TF', name: 'Transferencia entre cuentas', plural: 'Transferencias entre cuentas',
+    resource: 'funds_transfer', module: 'payables', path: 'pagos/transferencias',
+    description: 'Movimiento de fondos entre dos cajas o bancos de la empresa, por ejemplo, depositar el efectivo de la caja en el banco. Genera su asiento y no cambia el total de los fondos.',
   },
 }
 
@@ -320,6 +327,11 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     ADJUDICADA: { label: 'Adjudicada', badge: 'success', final: true, description: 'Fue la elegida: de ella nació la orden de compra.' },
     DESCARTADA: { label: 'Descartada', badge: 'neutral', final: true, description: 'No fue elegida, o la solicitud se anuló.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: por ejemplo, se cargó mal o el proveedor cambió su oferta.' },
+  },
+  FUNDS_TRANSFER: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Tesorería la está preparando: todavía no movió fondos.' },
+    CONFIRMADA: { label: 'Confirmada', badge: 'success', final: true, description: 'Los fondos pasaron de una cuenta a la otra y el movimiento está en el libro diario.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba confirmada, un contraasiento devolvió los fondos a la cuenta de origen.' },
   },
 }
 
@@ -426,6 +438,11 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('SUPPLIER_QUOTE', 'RECIBIDA', 'CANCEL', 'ANULADA', 'supplier_quote.cancel', 'Anular', 'Sale del cuadro comparativo. Si el proveedor cambió su oferta, cargá la nueva.', true, 'destructive'),
   t('SUPPLIER_QUOTE', 'RECIBIDA', 'SYSTEM', 'ADJUDICADA', null, '', ''),
   t('SUPPLIER_QUOTE', 'RECIBIDA', 'SYSTEM', 'DESCARTADA', null, '', ''),
+
+  // Transferencia entre cuentas
+  t('FUNDS_TRANSFER', 'BORRADOR', 'CONFIRM', 'CONFIRMADA', 'funds_transfer.create', 'Confirmar transferencia', 'Controla el saldo de la cuenta de origen y genera el asiento.'),
+  t('FUNDS_TRANSFER', 'BORRADOR', 'CANCEL', 'ANULADA', 'funds_transfer.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('FUNDS_TRANSFER', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'funds_transfer.cancel', 'Anular con contraasiento', 'Revierte el asiento: los fondos vuelven a la cuenta de origen.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -487,6 +504,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'PAYMENT_ORDER', status: 'APROBADA', taskType: 'PAGAR', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Hacer la transferencia o entregar el cheque o el efectivo, y registrar el pago.' },
   { docType: 'RFQ', status: 'BORRADOR', taskType: 'ENVIAR_SCT', assignee: 'CREATOR', title: 'Enviar {number} a los proveedores', description: 'Revisar los ítems, las cantidades y los proveedores invitados, y enviar la solicitud.' },
   { docType: 'RFQ', status: 'ENVIADA', taskType: 'ADJUDICAR_SCT', assignee: 'ROLE', role: 'COMPRAS', title: 'Comparar y adjudicar {number}', description: 'Cargar las cotizaciones que lleguen, compararlas en el cuadro y adjudicar la más conveniente, o anular la solicitud con motivo.' },
+  { docType: 'FUNDS_TRANSFER', status: 'BORRADOR', taskType: 'CONFIRMAR_TRANSFERENCIA', assignee: 'CREATOR', title: 'Confirmar {number} por {total}', description: 'Revisar las cuentas y el importe, y confirmar la transferencia.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -504,6 +522,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   PAGAR: 'Pagar',
   ENVIAR_SCT: 'Enviar solicitud de cotización',
   ADJUDICAR_SCT: 'Adjudicar cotización',
+  CONFIRMAR_TRANSFERENCIA: 'Confirmar transferencia',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }

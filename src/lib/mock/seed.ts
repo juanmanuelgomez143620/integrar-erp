@@ -9,6 +9,7 @@ import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
 import {
   cmdApprovePurchaseOrder,
+  cmdCreateFundsTransfer,
   cmdCreateGoodsReceipt,
   cmdCreateJournalEntry,
   cmdCreatePaymentOrder,
@@ -571,6 +572,20 @@ export function buildSeed(): DB {
   })
   cmdCreateSupplierQuote(ctx(users.compras2, 27), companyId, quote('PRV-002', [95000, 104000], 7, 30, 15, 'P-2231'))
   cmdCreateSupplierQuote(ctx(users.compras1, 26), companyId, quote('PRV-001', [89500, 108000], 12, 15, 10, ''))
+
+  // Tesorería dejó preparado el depósito en el banco de lo cobrado en efectivo: falta confirmarlo.
+  cmdCreateFundsTransfer(
+    ctx(users.tesoreria, 25.5),
+    companyId,
+    {
+      from_account_id: account('1.1.01.01'),
+      to_account_id: account('1.1.01.03'),
+      amount: 200000,
+      reference: 'Boleta de depósito 0001-4587',
+      notes: '',
+    },
+    false,
+  )
 
   // El historial previo no debe aparecer como "no leído".
   for (const n of db.notifications) n.read_at = now

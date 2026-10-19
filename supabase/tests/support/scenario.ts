@@ -243,6 +243,29 @@ export function buildScenario(): DB {
   E.cmdCreateSupplierQuote(as('compras2'), company, quote(droppedRfq.id, 'PRV-004', [17500]))
   E.cmdCancelRfq(as('compras1'), droppedRfq.id, 'Producción ya no necesita el barniz este mes')
 
+  // Transferencias, sólo entre la caja y el banco (otras pruebas necesitan el
+  // fondo fijo y los valores a depositar sin saldo): se confirma el depósito de
+  // la demo, una extracción se confirma y se anula, otra queda confirmada y una
+  // en borrador.
+  const funds = (from: string, to: string, amount: number, reference = ''): E.FundsTransferInput => ({
+    from_account_id: treasury(from),
+    to_account_id: treasury(to),
+    amount,
+    reference,
+    notes: '',
+  })
+  const demoTransfer = db.documents.find((d) => d.company_id === company && d.doc_type === 'FUNDS_TRANSFER')!
+  E.cmdConfirmFundsTransfer(as('tesoreria'), demoTransfer.id)
+  const twice = E.cmdCreateFundsTransfer(
+    as('tesoreria'),
+    company,
+    funds('1.1.01.03', '1.1.01.01', 50000, 'Extracción por ventanilla'),
+    true,
+  )
+  E.cmdCancelFundsTransfer(as('tesoreria'), twice.id, 'Se cargó dos veces')
+  E.cmdCreateFundsTransfer(as('tesoreria'), company, funds('1.1.01.03', '1.1.01.01', 80000, 'Cheque 000045'), true)
+  E.cmdCreateFundsTransfer(as('tesoreria'), company, funds('1.1.01.01', '1.1.01.03', 30000), false)
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

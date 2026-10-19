@@ -3331,6 +3331,126 @@ export function cmdAwardRfq(ctx: Ctx, docId: string, quoteId: string, reason: st
   return order
 }
 
+// ============================================================ Transferencias entre cuentas (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
+
+export interface FundsTransferInput {
+  from_account_id: string
+  to_account_id: string
+  amount: number
+  /** Número de la boleta de depósito o de la transferencia. */
+  reference: string
+  notes: string
+}
+
+/** Una caja o un banco de la empresa para transferir: cuenta imputable y activa del rubro Caja y bancos. */
+function fundsAccount(db: DB, companyId: string, accountId: string, side: 'origen' | 'destino') {
+  const account = db.accounts.find((a) => a.id === accountId && a.company_id === companyId)
+  if (!account || !account.is_imputable || !account.code.startsWith(`${TREASURY_RUBRO}.`))
+    fail('DATO_INVALIDO', `Elegí la cuenta de ${side}: una caja o un banco de la empresa.`)
+  if (!account.is_active) fail('DATO_INVALIDO', `La cuenta ${accountLabel(account)} está desactivada.`)
+  return account
+}
+
+export function cmdCreateFundsTransfer(ctx: Ctx, companyId: string, input: FundsTransferInput, confirm: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'funds_transfer.create')
+  const from = fundsAccount(db, companyId, input.from_account_id, 'origen')
+  const to = fundsAccount(db, companyId, input.to_account_id, 'destino')
+  if (from.id === to.id) fail('DATO_INVALIDO', 'La cuenta de origen y la de destino tienen que ser distintas.')
+  if (!Number.isFinite(input.amount) || !(input.amount > 0) || round2(input.amount) !== input.amount)
+    fail('DATO_INVALIDO', 'El importe debe ser mayor que cero y tener hasta 2 decimales.')
+  const reference = input.reference.trim()
+  if (reference.length > 60) fail('DATO_INVALIDO', 'La referencia tiene hasta 60 caracteres.')
+  const doc = newDocument(ctx, companyId, 'FUNDS_TRANSFER', actor, {
+    notes: input.notes.trim(),
+    subtotal: input.amount,
+    total: input.amount,
+    ft: { from_account_id: from.id, to_account_id: to.id, reference, transferred_on: null },
+  })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'funds_transfer',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: ${money(doc.total)} de ${accountLabel(from)} a ${accountLabel(to)}`,
+  })
+  if (confirm) confirmFundsTransfer(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Confirma la transferencia: controla el saldo de la cuenta de origen y genera el asiento. */
+function confirmFundsTransfer(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'CONFIRM')
+  const from = fundsAccount(db, doc.company_id, doc.ft!.from_account_id, 'origen')
+  const to = fundsAccount(db, doc.company_id, doc.ft!.to_account_id, 'destino')
+  const balance = accountBalance(db, from.id)
+  if (doc.total > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No alcanza el saldo de ${accountLabel(from)}: hay ${money(balance)} y la transferencia es por ${money(doc.total)}.`,
+      'Transferí un importe menor o desde otra cuenta.',
+    )
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    summary: `Confirmó ${doc.display_number}: ${money(doc.total)} de ${accountLabel(from)} a ${accountLabel(to)}`,
+  })
+  const reference = doc.ft!.reference
+  doc.ft = { ...doc.ft!, transferred_on: businessDate(getCompany(db, doc.company_id)) }
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    'TRANSFERENCIA',
+    `Transferencia de ${from.name} a ${to.name} según ${doc.display_number}${reference ? ` (${reference})` : ''}.`,
+    [
+      { account_id: to.id, debit: doc.total, credit: 0 },
+      { account_id: from.id, debit: 0, credit: doc.total },
+    ],
+  )
+}
+
+export function cmdConfirmFundsTransfer(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'FUNDS_TRANSFER')
+  requirePermission(ctx, doc.company_id, 'funds_transfer.create')
+  confirmFundsTransfer(ctx, doc)
+}
+
+/**
+ * El borrador se anula sin más. Una transferencia confirmada se anula con el
+ * contraasiento de su asiento, si los fondos todavía están en la cuenta de destino.
+ */
+export function cmdCancelFundsTransfer(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'FUNDS_TRANSFER')
+  if (doc.status !== 'CONFIRMADA') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'funds_transfer.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const to = db.accounts.find((a) => a.id === doc.ft!.to_account_id)!
+  const balance = accountBalance(db, to.id)
+  if (doc.total > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No se puede anular: en ${accountLabel(to)} hay ${money(balance)} y la transferencia fue por ${money(doc.total)}.`,
+      'Los fondos ya se usaron: para devolverlos, prepará otra transferencia.',
+    )
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? ` y su asiento con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
+  })
+}
+
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {

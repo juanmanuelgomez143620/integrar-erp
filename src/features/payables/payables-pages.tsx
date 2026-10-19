@@ -1,6 +1,6 @@
 import { Link, useNavigate, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Banknote, Landmark, Wallet } from 'lucide-react'
+import { ArrowLeftRight, Banknote, Landmark, TrendingUp, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/common/data-table'
 import { EmptyState, KpiCard, Loading, Mono, Section } from '@/components/common/blocks'
@@ -112,6 +112,22 @@ export function TreasuryPage() {
         crumbs={[{ label: 'Inicio', to: company.to() }, { label: 'Pagos y tesorería' }, { label: 'Cajas y bancos' }]}
         title="Cajas y bancos"
         description="El dinero de la empresa. El saldo de cada caja y cada banco sale del libro mayor: no se edita. Para abrir otra cuenta bancaria, Contabilidad la agrega en el plan de cuentas, dentro de Caja y bancos."
+        actions={
+          <>
+            <Button variant="outline" asChild>
+              <Link to={company.to('pagos/flujo-de-fondos')}>
+                <TrendingUp /> Flujo de fondos
+              </Link>
+            </Button>
+            {company.can('funds_transfer.create') && (
+              <Button asChild>
+                <Link to={company.docPath('FUNDS_TRANSFER', 'nueva')}>
+                  <ArrowLeftRight /> Transferir entre cuentas
+                </Link>
+              </Button>
+            )}
+          </>
+        }
       />
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         <KpiCard label="Disponible en total" value={money(total)} icon={Landmark} />

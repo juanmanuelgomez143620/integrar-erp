@@ -3,6 +3,7 @@
 
 import type { ComponentType } from 'react'
 import {
+  ArrowLeftRight,
   Banknote,
   Bell,
   BookMarked,
@@ -26,6 +27,7 @@ import {
   ShoppingCart,
   SlidersHorizontal,
   Tags,
+  TrendingUp,
   Truck,
   Users,
   Wallet,
@@ -86,6 +88,13 @@ export const NAV: NavGroup[] = [
       { label: 'Cuentas corrientes', path: 'pagos/proveedores', icon: Wallet, permission: 'payable.read' },
       { label: 'Órdenes de pago', path: 'pagos/ordenes', icon: Banknote, permission: 'payment_order.read' },
       { label: 'Cajas y bancos', path: 'pagos/cajas-y-bancos', icon: Landmark, permission: 'treasury.read' },
+      {
+        label: 'Transferencias',
+        path: 'pagos/transferencias',
+        icon: ArrowLeftRight,
+        permission: 'funds_transfer.read',
+      },
+      { label: 'Flujo de fondos', path: 'pagos/flujo-de-fondos', icon: TrendingUp, permission: 'treasury.read' },
     ],
   },
   {

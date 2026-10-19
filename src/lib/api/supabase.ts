@@ -254,6 +254,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('supplier_account', { ...company(companyId), p_supplier_id: supplierId }),
     postingRules: (companyId) => rpc('posting_rules_list', company(companyId)),
     treasuryAccounts: (companyId) => rpc('treasury_accounts', company(companyId)),
+    cashFlow: (companyId, from, to) => rpc('cash_flow', { ...company(companyId), p_from: from, p_to: to }),
+    cashProjection: (companyId) => rpc('cash_projection', company(companyId)),
     paymentCandidates: (companyId, supplierId) =>
       rpc('payment_candidates', { ...company(companyId), p_supplier_id: supplierId }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
@@ -333,6 +335,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     awardRfq: (docId, quoteId, reason) => rpc('rfq_award', { ...doc(docId), p_quote_id: quoteId, p_reason: reason }),
     createSupplierQuote: (companyId, input) => rpc('sq_create', { ...company(companyId), p_input: input }),
     cancelSupplierQuote: (docId, reason) => rpc('sq_cancel', { ...doc(docId), p_reason: reason }),
+    createFundsTransfer: (companyId, input, confirm) =>
+      rpc('ft_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    confirmFundsTransfer: (docId) => rpc('ft_confirm', doc(docId)),
+    cancelFundsTransfer: (docId, reason) => rpc('ft_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

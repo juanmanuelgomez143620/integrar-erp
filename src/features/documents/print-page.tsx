@@ -20,7 +20,7 @@ export function PrintPage() {
   })
   if (isLoading || error) return <Loading error={error} />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
-  const { doc, lines, supplier, warehouse, journal, payment, rfq, quote } = data
+  const { doc, lines, supplier, warehouse, journal, payment, rfq, quote, transfer } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
   const priced =
@@ -165,6 +165,25 @@ export function PrintPage() {
                 {payment.paid_on
                   ? `${date(payment.paid_on)}${payment.payment_reference ? ` · ${payment.payment_reference}` : ''}`
                   : 'pendiente'}
+              </div>
+            </>
+          )}
+          {transfer && (
+            <>
+              <div>
+                <b>Desde:</b> {transfer.from_account.code} {transfer.from_account.name}
+              </div>
+              <div>
+                <b>Hacia:</b> {transfer.to_account.code} {transfer.to_account.name}
+              </div>
+              <div>
+                <b>Importe:</b> {money(doc.total)}
+              </div>
+              <div>
+                <b>Referencia:</b> {transfer.reference || '—'}
+              </div>
+              <div>
+                <b>Transferida:</b> {transfer.transferred_on ? date(transfer.transferred_on) : 'pendiente (borrador)'}
               </div>
             </>
           )}
@@ -321,7 +340,7 @@ export function PrintPage() {
           </table>
         )}
 
-        {!journal && !payment && (
+        {!journal && !payment && !transfer && (
           <table className="mt-4 w-full border-collapse">
             <thead>
               <tr>

@@ -85,6 +85,10 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
   SUPPLIER_QUOTE: {
     CANCEL: (id, t) => commands.cancelSupplierQuote(id, t),
   },
+  FUNDS_TRANSFER: {
+    CONFIRM: (id) => commands.confirmFundsTransfer(id),
+    CANCEL: (id, t) => commands.cancelFundsTransfer(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -97,6 +101,7 @@ const AREA: Record<DocType, string> = {
   PAYMENT_ORDER: 'Pagos y tesorería',
   RFQ: 'Compras',
   SUPPLIER_QUOTE: 'Compras',
+  FUNDS_TRANSFER: 'Pagos y tesorería',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -518,6 +523,39 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
       </dl>
     )
   }
+  if (doc.doc_type === 'FUNDS_TRANSFER' && detail.transfer) {
+    const { transfer } = detail
+    const account = (a: typeof transfer.from_account) =>
+      company.can('ledger.read') ? (
+        <Link className="hover:underline" to={company.to(`contabilidad/mayor?cuenta=${a.id}`)}>
+          {a.name}
+        </Link>
+      ) : (
+        a.name
+      )
+    return (
+      <dl className={grid}>
+        <InfoRow label="Desde">
+          {account(transfer.from_account)}{' '}
+          <span className="font-mono text-xs text-muted-foreground">{transfer.from_account.code}</span>
+        </InfoRow>
+        <InfoRow label="Hacia">
+          {account(transfer.to_account)}{' '}
+          <span className="font-mono text-xs text-muted-foreground">{transfer.to_account.code}</span>
+        </InfoRow>
+        <InfoRow label="Importe">{money(doc.total)}</InfoRow>
+        <InfoRow label="Referencia">{transfer.reference || '—'}</InfoRow>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Transferida">
+          {transfer.transferred_on ? date(transfer.transferred_on) : 'Todavía no (borrador)'}
+        </InfoRow>
+        <InfoRow label="Preparó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
   if (doc.doc_type === 'RFQ' && detail.rfq) {
     const { rfq } = detail
     return (
@@ -786,11 +824,45 @@ function PaymentLines({ payment, total }: { payment: NonNullable<DocumentDetail[
   )
 }
 
+/** Los dos lados de una transferencia: lo que entra a una cuenta sale de la otra. */
+function TransferLines({ transfer, total }: { transfer: NonNullable<DocumentDetail['transfer']>; total: number }) {
+  const head = 'h-9 text-xs font-semibold text-slate-600'
+  const rows = [
+    ['Entra a', transfer.to_account],
+    ['Sale de', transfer.from_account],
+  ] as const
+  return (
+    <div className="overflow-x-auto rounded-xl border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableHead className={head}>Movimiento</TableHead>
+            <TableHead className={head}>Caja o banco</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Importe</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map(([label, a]) => (
+            <TableRow key={label}>
+              <TableCell className="text-sm text-muted-foreground">{label}</TableCell>
+              <TableCell className="text-sm">
+                {a.name} <span className="font-mono text-xs text-muted-foreground">{a.code}</span>
+              </TableCell>
+              <TableCell className="tabular text-right">{money(total)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
 function Lines({ detail }: { detail: DocumentDetail }) {
   const company = useCompany()
   const { doc, lines } = detail
   if (detail.journal) return <JournalLines journal={detail.journal} />
   if (detail.payment) return <PaymentLines payment={detail.payment} total={doc.total} />
+  if (detail.transfer) return <TransferLines transfer={detail.transfer} total={doc.total} />
   const product = (l: (typeof lines)[number]) => (
     <Link to={company.to(`productos/${l.product.code}`)} className="hover:underline">
       <span className="font-mono text-xs font-semibold text-navy">{l.product.code}</span> {l.product.name}

@@ -347,6 +347,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.rfqLines.filter((l) => l.document_id === doc.id).length
     case 'SUPPLIER_QUOTE':
       return db.sqLines.filter((l) => l.document_id === doc.id).length
+    case 'FUNDS_TRANSFER':
+      return 0
   }
 }
 
@@ -362,6 +364,7 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return db.saLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
     case 'JOURNAL_ENTRY':
     case 'PAYMENT_ORDER':
+    case 'FUNDS_TRANSFER':
       return []
     case 'SUPPLIER_INVOICE':
       return db.siLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
@@ -399,7 +402,9 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
     line_count: lineCount(db, doc),
     summary: doc.je
       ? doc.je.description
-      : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+      : doc.ft
+        ? `${db.accounts.find((a) => a.id === doc.ft!.from_account_id)?.name} → ${db.accounts.find((a) => a.id === doc.ft!.to_account_id)?.name}`
+        : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -448,6 +453,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'GOODS_RECEIPT',
     'SUPPLIER_INVOICE',
     'PAYMENT_ORDER',
+    'FUNDS_TRANSFER',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -548,6 +554,17 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     }
     if (doc.doc_type === 'RFQ' && tr.action === 'AWARD' && !quotesOf(db, doc.id).some((q) => quoteIsValid(db, q))) {
       reason = 'Todavía no hay cotizaciones vigentes para adjudicar.'
+    }
+    if (doc.doc_type === 'FUNDS_TRANSFER' && tr.action === 'CONFIRM') {
+      const from = db.accounts.find((a) => a.id === doc.ft!.from_account_id)!
+      const balance = accountBalance(db, from.id)
+      if (doc.total > balance + 1e-9) reason = `No alcanza el saldo de ${accountLabel(from)}: hay ${money(balance)}.`
+    }
+    if (doc.doc_type === 'FUNDS_TRANSFER' && doc.status === 'CONFIRMADA' && tr.action === 'CANCEL') {
+      const to = db.accounts.find((a) => a.id === doc.ft!.to_account_id)!
+      const balance = accountBalance(db, to.id)
+      if (doc.total > balance + 1e-9)
+        reason = `Los fondos ya se usaron: en ${accountLabel(to)} hay ${money(balance)}. Para devolverlos, prepará otra transferencia.`
     }
     result.push({
       action: tr.action,
@@ -706,6 +723,19 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: '—',
         text: `Fue la elegida en ${rfqNumber(db, doc)}: de ella nació ${orderFromQuote(db, doc.id)?.display_number ?? 'la orden de compra'}.`,
       }
+    case 'FUNDS_TRANSFER:BORRADOR':
+      return {
+        who: 'Tesorería',
+        text: 'Revisar las cuentas y el importe, y confirmar la transferencia: se controla el saldo de la cuenta de origen y se genera el asiento.',
+      }
+    case 'FUNDS_TRANSFER:CONFIRMADA': {
+      const from = db.accounts.find((a) => a.id === doc.ft?.from_account_id)
+      const to = db.accounts.find((a) => a.id === doc.ft?.to_account_id)
+      return {
+        who: '—',
+        text: `Se transfirió el ${date(doc.ft?.transferred_on)} de ${from?.name ?? '—'} a ${to?.name ?? '—'}: el movimiento está en el libro diario y no cambia el total de los fondos.`,
+      }
+    }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -858,6 +888,14 @@ export interface QuoteView {
   order: DocRef | null
 }
 
+/** Transferencia entre cuentas: de qué caja o banco a cuál. */
+export interface TransferView {
+  from_account: { id: string; code: string; name: string }
+  to_account: { id: string; code: string; name: string }
+  reference: string
+  transferred_on: string | null
+}
+
 export interface DocumentDetail {
   doc: DocumentListItem
   lines: DetailLine[]
@@ -865,6 +903,7 @@ export interface DocumentDetail {
   payment: PaymentView | null
   rfq: RfqView | null
   quote: QuoteView | null
+  transfer: TransferView | null
   supplier: T.Supplier | null
   warehouse: T.Warehouse | null
   related_order: DocumentListItem | null
@@ -1076,10 +1115,15 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                     { label: 'Cargó', ...firstBy(['CREATE']) },
                     { label: 'Controló', name: '', sector: '', at: '' },
                   ]
-                : [
-                    { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                    { label: 'Controló', name: '', sector: '', at: '' },
-                  ]
+                : doc.doc_type === 'FUNDS_TRANSFER'
+                  ? [
+                      { label: 'Preparó', ...firstBy(['CREATE']) },
+                      { label: 'Confirmó', ...firstBy(['CONFIRM']) },
+                    ]
+                  : [
+                      { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                      { label: 'Controló', name: '', sector: '', at: '' },
+                    ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1087,6 +1131,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     payment: doc.op ? paymentView(db, doc) : null,
     rfq: doc.rq ? rfqView(db, doc) : null,
     quote: doc.sq ? quoteView(db, doc) : null,
+    transfer: doc.ft ? transferView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     warehouse: db.warehouses.find((w) => w.id === warehouseId) ?? null,
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
@@ -1213,6 +1258,19 @@ function rfqView(db: DB, doc: T.Document): RfqView {
     best_quote_id: best?.id ?? null,
     awarded_quote_id: awarded?.id ?? null,
     order: order ? docRef(db, order) : null,
+  }
+}
+
+function transferView(db: DB, doc: T.Document): TransferView {
+  const ref = (id: string) => {
+    const a = db.accounts.find((x) => x.id === id)!
+    return { id: a.id, code: a.code, name: a.name }
+  }
+  return {
+    from_account: ref(doc.ft!.from_account_id),
+    to_account: ref(doc.ft!.to_account_id),
+    reference: doc.ft!.reference,
+    transferred_on: doc.ft!.transferred_on,
   }
 }
 
@@ -1828,6 +1886,175 @@ export function paymentCandidates(db: DB, userId: string, companyId: string, sup
       const committed = invoiceCommitted(db, d.id)
       return { invoice, committed, available: round2(invoice.pending - committed) }
     })
+}
+
+// ============================================================ Flujo de fondos (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
+
+export type CashConceptKey = 'APERTURA' | 'PAGOS' | 'TRANSFERENCIAS' | 'OTROS'
+
+export interface CashFlowConcept {
+  key: CashConceptKey
+  label: string
+  inflow: number
+  outflow: number
+}
+
+export interface CashFlowAccount {
+  account: { id: string; code: string; name: string }
+  opening: number
+  inflow: number
+  outflow: number
+  closing: number
+}
+
+export interface CashFlow {
+  from: string
+  to: string
+  opening: number
+  inflow: number
+  outflow: number
+  closing: number
+  concepts: CashFlowConcept[]
+  accounts: CashFlowAccount[]
+}
+
+const CASH_CONCEPTS: [CashConceptKey, string][] = [
+  ['APERTURA', 'Saldos de apertura'],
+  ['PAGOS', 'Pagos a proveedores'],
+  ['TRANSFERENCIAS', 'Movimientos entre cajas y bancos'],
+  ['OTROS', 'Otros asientos de Contabilidad'],
+]
+
+const treasuryAccountsOf = (db: DB, companyId: string) =>
+  db.accounts
+    .filter((a) => a.company_id === companyId && a.is_imputable && a.code.startsWith(`${TREASURY_RUBRO}.`))
+    .sort((a, b) => compareCodes(a.code, b.code))
+
+/**
+ * De dónde viene un movimiento de fondos: el documento que generó su asiento
+ * (en un contraasiento, el del asiento que anula) o, si es manual, su origen.
+ */
+function cashConcept(db: DB, entry: T.Document): CashConceptKey {
+  const base = (entry.je?.reverses_id && db.documents.find((d) => d.id === entry.je!.reverses_id)) || entry
+  const source = db.docLinks
+    .filter((l) => l.to_document_id === base.id)
+    .map((l) => db.documents.find((d) => d.id === l.from_document_id))
+    .find((d) => d && d.doc_type !== 'JOURNAL_ENTRY')
+  if (source?.doc_type === 'PAYMENT_ORDER') return 'PAGOS'
+  if (source?.doc_type === 'FUNDS_TRANSFER') return 'TRANSFERENCIAS'
+  return base.je?.origin === 'APERTURA' ? 'APERTURA' : 'OTROS'
+}
+
+/** Flujo de fondos real de un período: saldo inicial, entradas y salidas por concepto y por cuenta, y saldo final. */
+export function cashFlow(db: DB, userId: string, companyId: string, from: string, to: string): CashFlow {
+  assertPerm(db, userId, companyId, 'treasury.read')
+  assertRange(from, to)
+  const treasury = treasuryAccountsOf(db, companyId)
+  const ids = new Set(treasury.map((a) => a.id))
+  const lines = postedLines(db, companyId).filter(({ line }) => ids.has(line.account_id))
+  const before = lines.filter(({ doc }) => doc.document_date < from)
+  const within = lines.filter(({ doc }) => from <= doc.document_date && doc.document_date <= to)
+  const total = (rows: typeof lines, value: (row: (typeof lines)[number]) => number) =>
+    round2(rows.reduce((sum, row) => sum + value(row), 0))
+  const accounts = treasury.map((a) => {
+    const opening = total(
+      before.filter(({ line }) => line.account_id === a.id),
+      ({ line }) => line.debit - line.credit,
+    )
+    const own = within.filter(({ line }) => line.account_id === a.id)
+    const inflow = total(own, ({ line }) => line.debit)
+    const outflow = total(own, ({ line }) => line.credit)
+    return {
+      account: { id: a.id, code: a.code, name: a.name },
+      opening,
+      inflow,
+      outflow,
+      closing: round2(opening + inflow - outflow),
+    }
+  })
+  const opening = round2(accounts.reduce((sum, a) => sum + a.opening, 0))
+  const inflow = total(within, ({ line }) => line.debit)
+  const outflow = total(within, ({ line }) => line.credit)
+  return {
+    from,
+    to,
+    opening,
+    inflow,
+    outflow,
+    closing: round2(opening + inflow - outflow),
+    concepts: CASH_CONCEPTS.map(([key, label]) => {
+      const rows = within.filter(({ doc }) => cashConcept(db, doc) === key)
+      return {
+        key,
+        label,
+        inflow: total(rows, ({ line }) => line.debit),
+        outflow: total(rows, ({ line }) => line.credit),
+      }
+    }),
+    accounts,
+  }
+}
+
+export type CashBucketKey = 'VENCIDAS' | 'SEMANA' | 'QUINCENA' | 'MES' | 'DESPUES'
+
+export interface CashProjectionBucket {
+  key: CashBucketKey
+  label: string
+  /** Lo que falta pagar de las facturas que vencen en el tramo. */
+  payments: number
+  invoices: number
+  /** Saldo de cajas y bancos que quedaría después de pagar hasta este tramo. */
+  balance: number
+}
+
+export interface CashProjection {
+  today: string
+  /** Saldo de hoy de cajas y bancos. */
+  balance: number
+  buckets: CashProjectionBucket[]
+  /** El primer tramo en que no alcanzan los fondos (null si alcanzan). */
+  shortfall: CashBucketKey | null
+}
+
+/** Tramos por días hasta el vencimiento: [clave, etiqueta, hasta cuántos días]. */
+const CASH_BUCKETS: [CashBucketKey, string, number][] = [
+  ['VENCIDAS', 'Vencidas', -1],
+  ['SEMANA', 'Próximos 7 días', 7],
+  ['QUINCENA', 'De 8 a 15 días', 15],
+  ['MES', 'De 16 a 30 días', 30],
+  ['DESPUES', 'A más de 30 días', Infinity],
+]
+
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000)
+
+/**
+ * Flujo de fondos proyectado: desde el saldo de hoy, lo que falta pagar de las
+ * facturas de proveedores por vencimiento, y el saldo que quedaría tras cada tramo.
+ */
+export function cashProjection(db: DB, userId: string, companyId: string): CashProjection {
+  assertPerm(db, userId, companyId, 'treasury.read')
+  const today = todayAR()
+  const ids = new Set(treasuryAccountsOf(db, companyId).map((a) => a.id))
+  const balance = round2(
+    postedLines(db, companyId)
+      .filter(({ line }) => ids.has(line.account_id))
+      .reduce((sum, { line }) => sum + line.debit - line.credit, 0),
+  )
+  const pending = registeredInvoices(db, companyId)
+    .map((d) => payableInvoice(db, d, today))
+    .filter((i) => i.pending > 0)
+  let running = balance
+  const buckets = CASH_BUCKETS.map(([key, label, upTo], i) => {
+    const after = i === 0 ? -Infinity : CASH_BUCKETS[i - 1][2]
+    const inBucket = pending.filter((inv) => {
+      const days = daysBetween(today, inv.due_date)
+      return days > after && days <= upTo
+    })
+    const payments = round2(inBucket.reduce((sum, inv) => sum + inv.pending, 0))
+    running = round2(running - payments)
+    return { key, label, payments, invoices: inBucket.length, balance: running }
+  })
+  return { today, balance, buckets, shortfall: buckets.find((b) => b.balance < 0)?.key ?? null }
 }
 
 // ============================================================ Imputación automática

@@ -83,6 +83,7 @@ async function snapshot(company: string) {
     'rfq_suppliers',
     'supplier_quotes',
     'supplier_quote_lines',
+    'funds_transfers',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -114,7 +115,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                   ? B.rfq
                   : fn.startsWith('sq_')
                     ? B.quote
-                    : B.order
+                    : fn.startsWith('ft_')
+                      ? B.transfer
+                      : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -153,6 +156,10 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     valid_until: '2099-12-31',
     delivery_days: 1,
     supplier_reference: 'Intruso',
+    from_account_id: B.account,
+    to_account_id: B.bank,
+    amount: 1,
+    reference: 'Intruso',
     description: 'Asiento de un intruso',
     is_contra: false,
     id: B.product,
@@ -374,6 +381,19 @@ beforeAll(async () => {
   B.notification = (await one(`select id from public.notifications where company_id = $1 limit 1`, [B.id])).id
   B.memberRole = (await one(`select id from public.member_roles where company_id = $1 limit 1`, [B.id])).id
   B.account = (await one(`select id from public.accounts where company_id = $1 and code = '1.1.01.01'`, [B.id])).id
+  B.bank = (await one(`select id from public.accounts where company_id = $1 and code = '1.1.01.03'`, [B.id])).id
+  B.transfer = (
+    await rpc<{ id: string }>('docenteB', 'ft_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        from_account_id: B.account,
+        to_account_id: B.bank,
+        amount: 1000,
+        reference: 'Boleta 1',
+      }),
+      p_confirm: true,
+    })
+  ).id
   B.period = (
     await one(`select id from public.fiscal_periods where company_id = $1 order by start_date limit 1`, [B.id])
   ).id

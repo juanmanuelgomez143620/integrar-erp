@@ -24,6 +24,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   PAYMENT_ORDER: { area: 'Pagos y tesorería', newLabel: 'Nueva orden de pago', createPerm: 'payment_order.create' },
   RFQ: { area: 'Compras', newLabel: 'Nueva solicitud de cotización', createPerm: 'rfq.create' },
   SUPPLIER_QUOTE: { area: 'Compras', newLabel: 'Cargar cotización', createPerm: 'supplier_quote.create' },
+  FUNDS_TRANSFER: { area: 'Pagos y tesorería', newLabel: 'Nueva transferencia', createPerm: 'funds_transfer.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -196,6 +197,23 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       {
         key: 'total',
         header: 'Total',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
+  if (docType === 'FUNDS_TRANSFER') {
+    columns.push(
+      { key: 'accounts', header: 'Cuentas', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      {
+        key: 'reference',
+        header: 'Referencia',
+        cell: (d) => <span className="text-xs">{d.ft?.reference || '—'}</span>,
+      },
+      {
+        key: 'total',
+        header: 'Importe',
         align: 'right',
         sort: (d) => d.total,
         cell: (d) => <span className="tabular">{money(d.total)}</span>,

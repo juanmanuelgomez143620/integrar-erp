@@ -113,10 +113,10 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert(
       'documents',
       mock.documents.map(
-        ({ pr: _pr, po: _po, gr: _gr, sa: _sa, je: _je, si: _si, op: _op, rq: _rq, sq: _sq, ...d }) => d,
+        ({ pr: _pr, po: _po, gr: _gr, sa: _sa, je: _je, si: _si, op: _op, rq: _rq, sq: _sq, ft: _ft, ...d }) => d,
       ),
     )
-    const sub = (key: 'pr' | 'po' | 'gr' | 'sa' | 'je' | 'si' | 'op' | 'rq' | 'sq') =>
+    const sub = (key: 'pr' | 'po' | 'gr' | 'sa' | 'je' | 'si' | 'op' | 'rq' | 'sq' | 'ft') =>
       mock.documents.filter((d) => d[key]).map((d) => ({ ...d[key], document_id: d.id, company_id: d.company_id }))
     await insert('purchase_requisitions', sub('pr'))
     await insert('purchase_orders', sub('po'))
@@ -127,6 +127,7 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('payment_orders', sub('op'))
     await insert('rfqs', sub('rq'))
     await insert('supplier_quotes', sub('sq'))
+    await insert('funds_transfers', sub('ft'))
     await insert('purchase_requisition_lines', mock.prLines as unknown as Row[])
     await insert('purchase_order_lines', mock.poLines as unknown as Row[])
     await insert('goods_receipt_lines', mock.grLines as unknown as Row[])

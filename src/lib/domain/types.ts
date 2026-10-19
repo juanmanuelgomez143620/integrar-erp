@@ -37,6 +37,7 @@ export type DocType =
   | 'PAYMENT_ORDER'
   | 'RFQ'
   | 'SUPPLIER_QUOTE'
+  | 'FUNDS_TRANSFER'
 
 export type TransitionAction =
   | 'SUBMIT'
@@ -307,6 +308,16 @@ export interface SupplierQuoteHeader {
   payment_terms_days: number
 }
 
+/** Transferencia entre cuentas (tabla funds_transfers, 1 a 1 con documents): de una caja o un banco a otro. */
+export interface FundsTransferHeader {
+  from_account_id: string
+  to_account_id: string
+  /** Número de la boleta de depósito o de la transferencia. */
+  reference: string
+  /** Fecha en que se confirmó (la del asiento). */
+  transferred_on: string | null
+}
+
 /** Cabecera común de todo comprobante (tabla `documents`) + detalle por tipo. */
 export interface Document extends Audited {
   id: string
@@ -333,6 +344,7 @@ export interface Document extends Audited {
   op?: PaymentOrderHeader
   rq?: RfqHeader
   sq?: SupplierQuoteHeader
+  ft?: FundsTransferHeader
 }
 
 export interface RequisitionLine {

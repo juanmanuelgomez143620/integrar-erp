@@ -4,6 +4,7 @@
 // equivalente, para cada usuario. Así la interfaz no cambia al pasar a Supabase.
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { todayAR } from '../../src/lib/format'
 import type { DB } from '../../src/lib/mock/db'
 import * as Q from '../../src/lib/mock/queries'
 import type { DocType } from '../../src/lib/domain/types'
@@ -45,6 +46,7 @@ const DOC_TYPES: DocType[] = [
   'PAYMENT_ORDER',
   'RFQ',
   'SUPPLIER_QUOTE',
+  'FUNDS_TRANSFER',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -220,6 +222,23 @@ describe('tesorería', () => {
   it('cajas y bancos con su saldo', async () => {
     for (const u of USERS)
       await same(u, () => Q.treasuryAccounts(mock, userId(u), company), 'treasury_accounts', [companyPg])
+  })
+
+  it('flujo de fondos real en distintos períodos y proyectado', async () => {
+    const year = new Date().getFullYear()
+    const today = todayAR()
+    const ranges = [
+      [`${year}-01-01`, `${year}-12-31`],
+      [today, today],
+      [`${year}-01-01`, `${year}-01-31`],
+      ['no-es-fecha', today],
+      [`${year}-12-31`, `${year}-01-01`],
+    ]
+    for (const u of USERS) {
+      await same(u, () => Q.cashProjection(mock, userId(u), company), 'cash_projection', [companyPg])
+      for (const [from, to] of ranges)
+        await same(u, () => Q.cashFlow(mock, userId(u), company, from, to), 'cash_flow', [companyPg, from, to])
+    }
   })
 
   it('facturas para pagar, con lo reservado en otras órdenes', async () => {

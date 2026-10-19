@@ -1509,6 +1509,93 @@ describe('paridad de comandos', () => {
     ).toBeNull()
   })
 
+  it('transferencias entre cuentas: saldo, asiento, borrador y anulación con contraasiento', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const transfer = (from: string, to: string, amount: number, over: Partial<E.FundsTransferInput> = {}) => {
+      const input: E.FundsTransferInput = {
+        from_account_id: account(from),
+        to_account_id: account(to),
+        amount,
+        reference: 'Boleta 0002-0001',
+        notes: '',
+        ...over,
+      }
+      return {
+        input,
+        pgInput: { ...input, from_account_id: pg(input.from_account_id), to_account_id: pg(input.to_account_id) },
+      }
+    }
+    const create = (label: string, username: string, t: ReturnType<typeof transfer>, confirm: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateFundsTransfer(c, company, t.input, confirm),
+        (b) => b.commands.createFundsTransfer(companyPg, t.pgInput, confirm),
+      )
+    const createdTransfer = (label: string, username: string, t: ReturnType<typeof transfer>, confirm: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateFundsTransfer(c, company, t.input, confirm),
+        (b) => b.commands.createFundsTransfer(companyPg, t.pgInput, confirm),
+      )
+    const cancel = (label: string, username: string, id: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelFundsTransfer(c, id, reason),
+        (b) => b.commands.cancelFundsTransfer(pg(id), reason),
+      )
+
+    // Controles: cuentas, importe, referencia, saldo y permisos.
+    for (const [label, username, t] of [
+      ['la misma cuenta', 'tesoreria', transfer('1.1.01.01', '1.1.01.01', 1000)],
+      ['a una cuenta que no es caja ni banco', 'tesoreria', transfer('1.1.01.01', '2.1.01.01', 1000)],
+      ['importe cero', 'tesoreria', transfer('1.1.01.01', '1.1.01.03', 0)],
+      ['importe con tres decimales', 'tesoreria', transfer('1.1.01.01', '1.1.01.03', 10.005)],
+      ['referencia muy larga', 'tesoreria', transfer('1.1.01.01', '1.1.01.03', 1000, { reference: 'x'.repeat(61) })],
+      ['más que el saldo de la caja', 'tesoreria', transfer('1.1.01.01', '1.1.01.03', 999999999)],
+      ['Contabilidad no transfiere', 'contabilidad', transfer('1.1.01.01', '1.1.01.03', 1000)],
+    ] as const)
+      expect(await create(label, username, t, true), label).toBeNull()
+
+    // Un borrador sin saldo se guarda pero no se confirma; uno con saldo, sí.
+    const short = await createdTransfer(
+      'borrador sin saldo',
+      'tesoreria',
+      transfer('1.1.01.01', '1.1.01.03', 999999999),
+      false,
+    )
+    expect(
+      await step(
+        'confirmar sin saldo',
+        'tesoreria',
+        (c) => E.cmdConfirmFundsTransfer(c, short),
+        (b) => b.commands.confirmFundsTransfer(pg(short)),
+      ),
+    ).toBeNull()
+    expect(await cancel('anular el borrador', 'tesoreria', short, 'Importe mal cargado')).not.toBeNull()
+    const draft = await createdTransfer('borrador', 'tesoreria', transfer('1.1.01.03', '1.1.01.01', 120000), false)
+    await ok(
+      'confirmarlo',
+      'tesoreria',
+      (c) => E.cmdConfirmFundsTransfer(c, draft),
+      (b) => b.commands.confirmFundsTransfer(pg(draft)),
+    )
+
+    // Anular una confirmada: con motivo y si los fondos siguen en el destino.
+    expect(await cancel('anular sin motivo', 'tesoreria', draft, '')).toBeNull()
+    expect(await cancel('Contabilidad no anula transferencias', 'contabilidad', draft, 'Error')).toBeNull()
+    expect(await cancel('anular con contraasiento', 'tesoreria', draft, 'Se extrajo de más')).not.toBeNull()
+    const spent = await createdTransfer('a la caja', 'tesoreria', transfer('1.1.01.03', '1.1.01.01', 10000), true)
+    const caja = E.accountBalance(mock, account('1.1.01.01'))
+    await createdTransfer('vaciar la caja', 'tesoreria', transfer('1.1.01.01', '1.1.01.03', caja), true)
+    expect(await cancel('anular cuando los fondos ya se usaron', 'tesoreria', spent, 'Era para otra caja')).toBeNull()
+    await createdTransfer('devolver a la caja', 'tesoreria', transfer('1.1.01.03', '1.1.01.01', 10000), true)
+    expect(await cancel('anular cuando volvió el saldo', 'tesoreria', spent, 'Era para otra caja')).not.toBeNull()
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -1521,6 +1608,7 @@ describe('paridad de comandos', () => {
       'PAYMENT_ORDER',
       'RFQ',
       'SUPPLIER_QUOTE',
+      'FUNDS_TRANSFER',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`
@@ -1668,6 +1756,18 @@ describe('paridad de comandos', () => {
           (b) => b.api.paymentCandidates(companyPg, pg(supplier(code))),
           (u) => Q.paymentCandidates(mock, u, company, supplier(code)),
         )
+      await sameRead(
+        `flujo de fondos (${username})`,
+        username,
+        (b) => b.api.cashFlow(companyPg, `${year}-01-01`, `${year}-12-31`),
+        (u) => Q.cashFlow(mock, u, company, `${year}-01-01`, `${year}-12-31`),
+      )
+      await sameRead(
+        `flujo de fondos proyectado (${username})`,
+        username,
+        (b) => b.api.cashProjection(companyPg),
+        (u) => Q.cashProjection(mock, u, company),
+      )
     }
   })
 })

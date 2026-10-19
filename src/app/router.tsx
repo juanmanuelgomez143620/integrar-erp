@@ -73,6 +73,8 @@ const TreasuryPage = lazyPage(() => import('@/features/payables/payables-pages')
 const PaymentOrderFormPage = lazyPage(() =>
   import('@/features/payables/payment-order-form').then((m) => m.PaymentOrderFormPage),
 )
+const TransferFormPage = lazyPage(() => import('@/features/payables/transfer-form').then((m) => m.TransferFormPage))
+const CashFlowPage = lazyPage(() => import('@/features/payables/cash-flow-page').then((m) => m.CashFlowPage))
 const RfqFormPage = lazyPage(() => import('@/features/purchasing/quotations/rfq-form').then((m) => m.RfqFormPage))
 const QuoteFormPage = lazyPage(() => import('@/features/purchasing/quotations/quote-form').then((m) => m.QuoteFormPage))
 
@@ -141,6 +143,10 @@ export const router = createBrowserRouter(
                 { path: 'pagos/ordenes/nueva', element: <PaymentOrderFormPage /> },
                 { path: 'pagos/ordenes/:number', element: <DocumentPage key="op" docType="PAYMENT_ORDER" /> },
                 { path: 'pagos/cajas-y-bancos', element: <TreasuryPage /> },
+                { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
+                { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
+                { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },
+                { path: 'pagos/transferencias/:number', element: <DocumentPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'contabilidad/imputacion', element: <PostingRulesPage /> },
                 { path: 'deposito/recepciones', element: <DocumentListPage key="gr" docType="GOODS_RECEIPT" /> },
                 { path: 'deposito/recepciones/nueva', element: <ReceiptFormPage /> },

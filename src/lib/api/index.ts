@@ -17,6 +17,11 @@ export { BusinessError } from '../mock/engine'
 export type {
   AccountRow,
   AvailableAction,
+  CashFlow,
+  CashFlowAccount,
+  CashFlowConcept,
+  CashProjection,
+  CashProjectionBucket,
   CompanyContext,
   ComparisonQuote,
   Dashboard,
@@ -52,6 +57,7 @@ export type {
   SupplierAccountMovement,
   TaskItem,
   TreasuryAccountRow,
+  TransferView,
   TrialBalance,
   TrialBalanceRow,
 } from '../mock/queries'
@@ -59,6 +65,7 @@ export type {
   AccountInput,
   ChangePasswordInput,
   CourseInput,
+  FundsTransferInput,
   GoodsReceiptInput,
   JournalEntryInput,
   PaymentOrderInput,
@@ -167,6 +174,8 @@ const mockApi = {
     query((db, u) => Q.supplierAccount(db, u, companyId, supplierId)),
   postingRules: (companyId: string) => query((db, u) => Q.listPostingRules(db, u, companyId)),
   treasuryAccounts: (companyId: string) => query((db, u) => Q.treasuryAccounts(db, u, companyId)),
+  cashFlow: (companyId: string, from: string, to: string) => query((db, u) => Q.cashFlow(db, u, companyId, from, to)),
+  cashProjection: (companyId: string) => query((db, u) => Q.cashProjection(db, u, companyId)),
   paymentCandidates: (companyId: string, supplierId: string) =>
     query((db, u) => Q.paymentCandidates(db, u, companyId, supplierId)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
@@ -257,6 +266,10 @@ const mockCommands = {
   createSupplierQuote: (companyId: string, input: E.SupplierQuoteInput) =>
     command((c) => E.cmdCreateSupplierQuote(c, companyId, input)),
   cancelSupplierQuote: (docId: string, reason: string) => command((c) => E.cmdCancelSupplierQuote(c, docId, reason)),
+  createFundsTransfer: (companyId: string, input: E.FundsTransferInput, confirm: boolean) =>
+    command((c) => E.cmdCreateFundsTransfer(c, companyId, input, confirm)),
+  confirmFundsTransfer: (docId: string) => command((c) => E.cmdConfirmFundsTransfer(c, docId)),
+  cancelFundsTransfer: (docId: string, reason: string) => command((c) => E.cmdCancelFundsTransfer(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),
