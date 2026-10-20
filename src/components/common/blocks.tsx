@@ -20,7 +20,8 @@ export function Section({
   bodyClassName?: string
 }) {
   return (
-    <section className={cn('rounded-xl border bg-card', className)}>
+    // min-w-0: dentro de una grilla o un flex, una tabla o un texto largo no estira la tarjeta más allá de la pantalla.
+    <section className={cn('min-w-0 rounded-xl border bg-card', className)}>
       {(title || actions) && (
         <header className="flex flex-wrap items-start justify-between gap-2 border-b px-4 py-3">
           <div>

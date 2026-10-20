@@ -35,6 +35,9 @@ export function PayDialog({
     onSuccess: () => onOpenChange(false),
   })
   const invalid = cheque && !/^\d{1,8}$/.test(reference.trim())
+  // Con el campo vacío alcanza la ayuda; el error aparece cuando lo escrito no es un número de cheque.
+  const chequeError =
+    invalid && reference.trim() !== '' ? 'El número del cheque lleva sólo números (hasta 8).' : undefined
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -60,6 +63,7 @@ export function PayDialog({
             label={cheque ? 'Número del cheque' : 'Referencia'}
             required={cheque}
             hint={cheque ? 'Hasta 8 números: queda en los cheques emitidos.' : 'Número de transferencia (opcional).'}
+            error={chequeError}
           >
             <Input
               value={reference}
