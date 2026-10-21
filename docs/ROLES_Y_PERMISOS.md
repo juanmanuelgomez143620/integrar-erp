@@ -99,6 +99,8 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Cotización de proveedor (Fase 3c) | L | L C X | — | L | — | L | L | — | L | — | L | Todo |
 | Pedido de venta (Fase 4a) | L A⁹ | — | L C X | L | — | L | L | — | L | L | L | Todo |
 | Remito (Fase 4a) | L X¹⁰ | — | L | L C X | — | L | L | — | L | L | L | Todo |
+| Factura de venta (Fase 4b) | L | — | L C X¹¹ | — | — | L | L | — | L | — | L | Todo |
+| Cuenta corriente de clientes (Fase 4b) | L | — | L | — | — | L | L | — | L | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
@@ -110,6 +112,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ⁸ Concilia Contabilidad y no Tesorería, que maneja los fondos (control por oposición); sólo se anula la última conciliación de cada banco. Tesorería elige el medio de pago al pagar una orden (transferencia, cheque con su número o efectivo).
 ⁹ Ventas confirma el pedido (se reserva el stock) y lo anula o cierra con saldo; Gerencia autoriza (o rechaza) los que superan el crédito del cliente, y quien cargó el pedido no lo autoriza (SoD-8).
 ¹⁰ Depósito prepara y despacha el remito (baja el stock y se registra el costo de lo vendido); Gerencia anula los que despachó Depósito, porque quien despachó un remito no lo anula (SoD-3).
+¹¹ Ventas factura lo entregado (nunca más de lo que salió) y anula una factura registrada sólo si no tiene cobros; el asiento de venta se genera solo. No se anula un remito ya facturado.
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 

@@ -9,7 +9,7 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
 | 4a | Pedido de venta con control de crédito y reserva de stock; remito que descuenta el stock y genera el costo de lo vendido | El pedido del cliente llega a Depósito y la mercadería sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 4b | Factura de venta contra lo entregado, con su asiento; cuenta corriente de clientes | La venta termina en la contabilidad y en la deuda del cliente | Pendiente |
+| 4b | Factura de venta contra lo entregado, con su asiento; cuenta corriente de clientes | La venta termina en la contabilidad y en la deuda del cliente | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 4c | Recibo de cobro, antigüedad de saldos (clientes morosos) y cobros en el flujo de fondos proyectado | El circuito vuelve a la caja y al banco | Pendiente |
 | 4d | Listas de precios y presupuestos | El pedido nace de un presupuesto aceptado, con los precios de la lista del cliente | Pendiente |
 
@@ -32,7 +32,7 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 
 ## 4. Factura de venta y cuenta corriente de clientes (4b)
 
-- **Factura de venta (`FV-00001`)**: la emite **Ventas** contra un pedido, por lo entregado y todavía no facturado (control por oposición: no se factura lo que no salió). Como la empresa es responsable inscripta, la letra depende del cliente: **A** a responsables inscriptos y monotributistas (desde la Ley 27.618 y la RG 5003/2021, el monotributista recibe factura A) y **B** a exentos y consumidores finales; en la A el IVA se discrimina, en la B está incluido en los precios **(a validar)**. Lleva un número de comprobante simulado (punto de venta y número correlativo por letra) y vence según la condición de pago del pedido.
+- **Factura de venta (`FV-00001`)**: la emite **Ventas** contra un pedido, por lo entregado y todavía no facturado (control por oposición: no se factura lo que no salió). Como la empresa es responsable inscripta, la letra depende del cliente: **A** a responsables inscriptos y monotributistas (desde la Ley 27.618 y la RG 5003/2021, el monotributista recibe factura A) y **B** a exentos y consumidores finales; en la A el IVA se discrimina, en la B está incluido en los precios **(a validar)**. Lleva un número de comprobante simulado (punto de venta 00001 y número correlativo por letra, que se asigna al registrarla: un borrador no consume número y una anulada conserva el suyo), toma la fecha del día en que se registra y vence según la condición de pago del pedido. Los precios son los del pedido.
 - **Registrar** genera el asiento automático **`VENTA`** (Deudores por ventas al debe; Ventas de productos terminados, de mercaderías o de servicios e IVA débito fiscal al haber) y la deuda del cliente. Se anula con contraasiento si no tiene cobros. Nunca imita una factura oficial: sin CAE, sin código QR, con la leyenda de simulación.
 - **Cuenta corriente de clientes**: por cliente, las facturas (debe) y los cobros (haber), con el saldo acumulado y las facturas pendientes con su vencimiento. Se calcula, nunca se edita; la suma de los saldos coincide con el mayor de Deudores por ventas.
 
@@ -67,6 +67,9 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 | `sales_order.approve` (autorizar el crédito) | Gerencia |
 | `delivery_note.read` (remitos) | Depósito, Ventas, Logística, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
 | `delivery_note.create/cancel` | Depósito |
-| Facturas de venta, cuenta corriente y cobros (4b–4c) | Se detallan al hacerlos: Ventas factura, Tesorería cobra, Contabilidad y Gerencia consultan |
+| `sales_invoice.read` (facturas de venta, 4b) | Ventas, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
+| `sales_invoice.create/cancel` | Ventas (sólo se anula una registrada sin cobros) |
+| `receivable.read` (cuenta corriente de clientes) | Ventas, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
+| Cobros (4c) | Se detallan al hacerlos: Tesorería cobra; Contabilidad y Gerencia consultan |
 
 Separación de funciones nueva: **SoD-8**, quien prepara un pedido de venta no autoriza su crédito; **SoD-9**, quien emite la factura no registra su cobro. Depósito despacha y Ventas factura: lo que se factura se controla contra lo que salió.
