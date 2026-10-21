@@ -30,6 +30,8 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
     newLabel: 'Nueva conciliación',
     createPerm: 'bank_reconciliation.create',
   },
+  SALES_ORDER: { area: 'Ventas', newLabel: 'Nuevo pedido', createPerm: 'sales_order.create' },
+  DELIVERY_NOTE: { area: 'Depósito', newLabel: 'Preparar remito', createPerm: 'delivery_note.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -243,6 +245,36 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'SALES_ORDER') {
+    columns.push(
+      { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
+      { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      { key: 'delivery', header: 'Entrega pedida', cell: (d) => date(d.so?.delivery_date) },
+      {
+        key: 'total',
+        header: 'Total',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
+  if (docType === 'DELIVERY_NOTE') {
+    columns.push(
+      {
+        key: 'ref',
+        header: 'Pedido',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
+      { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      {
+        key: 'carrier',
+        header: 'Transportista',
+        cell: (d) => <span className="text-xs">{d.dn?.carrier_name || '—'}</span>,
+      },
+    )
+  }
   if (docType === 'JOURNAL_ENTRY') {
     columns.push(
       {
@@ -276,7 +308,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
 
   const newPath = company.docPath(
     docType,
-    docType === 'STOCK_ADJUSTMENT' || docType === 'JOURNAL_ENTRY' ? 'nuevo' : 'nueva',
+    ['STOCK_ADJUSTMENT', 'JOURNAL_ENTRY', 'SALES_ORDER', 'DELIVERY_NOTE'].includes(docType) ? 'nuevo' : 'nueva',
   )
 
   return (
@@ -320,10 +352,14 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         columns={columns}
         rowKey={(d) => d.id}
         search={(d) =>
-          `${d.display_number} ${d.supplier_name} ${d.summary} ${d.sector_name} ${d.created_by_name} ${d.reference_label ?? ''}`
+          `${d.display_number} ${d.supplier_name} ${d.customer_name} ${d.summary} ${d.sector_name} ${d.created_by_name} ${d.reference_label ?? ''}`
         }
         searchPlaceholder={
-          docType === 'JOURNAL_ENTRY' ? 'Buscar por número o leyenda…' : 'Buscar por número, proveedor, producto…'
+          docType === 'JOURNAL_ENTRY'
+            ? 'Buscar por número o leyenda…'
+            : docType === 'SALES_ORDER' || docType === 'DELIVERY_NOTE'
+              ? 'Buscar por número, cliente, producto…'
+              : 'Buscar por número, proveedor, producto…'
         }
         onRowClick={(d) => navigate(d.path)}
         empty={`Todavía no hay ${info.plural.toLowerCase()}.`}

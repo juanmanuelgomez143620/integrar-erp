@@ -1,9 +1,18 @@
 // Comparación entre lo que devuelve la base y lo que devuelve el simulador.
 
-/** Deja en `actual` sólo las claves que tiene `expected` (la base puede traer columnas de más). */
+const idOf = (x: unknown) => (x && typeof x === 'object' && 'id' in x ? (x as { id: unknown }).id : undefined)
+
+/**
+ * Deja en `actual` sólo las claves que tiene `expected` (la base puede traer
+ * columnas de más). En una lista, cada elemento se proyecta sobre el esperado
+ * con su mismo id (dos creados en el mismo instante pueden venir en otro
+ * orden) o, si no lo hay, sobre el de su misma posición.
+ */
 export function project(actual: unknown, expected: unknown): unknown {
-  if (Array.isArray(actual) && Array.isArray(expected))
-    return actual.map((a, i) => project(a, expected[Math.min(i, expected.length - 1)]))
+  if (Array.isArray(actual) && Array.isArray(expected)) {
+    const byId = new Map(expected.filter((e) => idOf(e) !== undefined).map((e) => [idOf(e), e]))
+    return actual.map((a, i) => project(a, byId.get(idOf(a)) ?? expected[Math.min(i, expected.length - 1)]))
+  }
   if (actual && expected && typeof actual === 'object' && typeof expected === 'object' && !Array.isArray(actual))
     return Object.fromEntries(
       Object.keys(expected as object)

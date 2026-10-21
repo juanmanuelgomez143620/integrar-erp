@@ -24,6 +24,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   core: { name: 'Núcleo', lockable: false },
   masters: { name: 'Maestros (clientes, proveedores, productos)', lockable: true },
   purchasing: { name: 'Compras', lockable: true },
+  sales: { name: 'Ventas y cobranzas', lockable: true },
   inventory: { name: 'Depósito y stock', lockable: true },
   payables: { name: 'Pagos y tesorería', lockable: true },
   accounting: { name: 'Contabilidad', lockable: true },
@@ -42,7 +43,9 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   purchase_order: 'purchasing',
   rfq: 'purchasing',
   supplier_quote: 'purchasing',
+  sales_order: 'sales',
   goods_receipt: 'inventory',
+  delivery_note: 'inventory',
   stock: 'inventory',
   stock_adjustment: 'inventory',
   supplier_invoice: 'purchasing',
@@ -81,13 +84,13 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   GERENCIA: { code: 'GERENCIA', name: 'Gerencia', island: 1, defaultSector: 'GER', isSupervisor: false, description: 'Aprueba operaciones relevantes y supervisa indicadores y alertas.' },
   AUDITOR: { code: 'AUDITOR', name: 'Auditoría interna', island: 1, defaultSector: 'CGE', isSupervisor: false, description: 'Consulta todo y revisa la auditoría. No modifica nada.' },
   COMPRAS: { code: 'COMPRAS', name: 'Compras', island: 2, defaultSector: 'COM', isSupervisor: false, description: 'Atiende solicitudes, gestiona proveedores y emite órdenes de compra.' },
-  VENTAS: { code: 'VENTAS', name: 'Ventas', island: 3, defaultSector: 'VEN', isSupervisor: false, description: 'Administra la cartera de clientes.' },
+  VENTAS: { code: 'VENTAS', name: 'Ventas', island: 3, defaultSector: 'VEN', isSupervisor: false, description: 'Administra la cartera de clientes y carga los pedidos de venta.' },
   CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Registra los asientos, lleva los libros contables y cierra los meses.' },
   IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones y libros contables (obligaciones en fases siguientes).' },
   TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Prepara y ejecuta los pagos a proveedores y controla los saldos de caja y bancos.' },
   RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Legajos y sueldos en fases siguientes.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Detecta necesidades de materiales y las solicita a Compras.' },
-  DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe mercadería, controla el stock y pide reposición.' },
+  DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, controla el stock y pide reposición.' },
   LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Consulta recepciones y stock (despachos en fases siguientes).' },
   DOCENTE: { code: 'DOCENTE', name: 'Docente (supervisor)', island: null, defaultSector: null, isSupervisor: true, description: 'Todos los permisos en la empresa; puede actuar como supervisor.' },
 }
@@ -127,6 +130,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read',
     'payment_order.read', 'payment_order.approve', 'treasury.read', 'funds_transfer.read', 'bank_reconciliation.read',
     'rfq.read', 'supplier_quote.read',
+    // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
+    'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -140,7 +145,10 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'rfq.create', 'rfq.cancel', 'rfq.award',
     'supplier_quote.read', 'supplier_quote.create', 'supplier_quote.cancel',
   ],
-  VENTAS: [...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read'],
+  VENTAS: [
+    ...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read',
+    'sales_order.read', 'sales_order.create', 'sales_order.cancel', 'delivery_note.read',
+  ],
   DEPOSITO: [
     ...CORE_READ,
     'supplier.read', 'product.read', 'product.create', 'product.update', 'stock.read', 'stock.export',
@@ -148,6 +156,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_requisition.read', 'purchase_requisition.create', 'purchase_requisition.update', 'purchase_requisition.cancel',
     'purchase_order.read', 'goods_receipt.read', 'goods_receipt.create', 'goods_receipt.cancel',
     'rfq.read', 'supplier_quote.read',
+    'sales_order.read', 'delivery_note.read', 'delivery_note.create', 'delivery_note.cancel',
   ],
   PRODUCCION: [
     ...CORE_READ,
@@ -165,21 +174,24 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
     'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read', 'funds_transfer.read',
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
-    'rfq.read', 'supplier_quote.read',
+    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
     'supplier_invoice.read', 'payable.read',
     'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
     'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel', 'bank_reconciliation.read',
-    'rfq.read', 'supplier_quote.read',
+    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read',
   ],
   RRHH: [...CORE_READ],
   IMPUESTOS: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
-    'rfq.read', 'supplier_quote.read',
+    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read',
   ],
-  LOGISTICA: [...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read'],
+  LOGISTICA: [
+    ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
+    'sales_order.read', 'delivery_note.read',
+  ],
   AUDITOR: [
     ...CORE_READ,
     'customer.read', 'customer.export', 'supplier.read', 'supplier.export', 'product.read', 'product.export',
@@ -189,6 +201,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
+    'sales_order.read', 'delivery_note.read',
   ],
   DOCENTE: [],
 }
@@ -262,6 +275,16 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'BANK_RECONCILIATION', prefix: 'CB', name: 'Conciliación bancaria', plural: 'Conciliaciones bancarias',
     resource: 'bank_reconciliation', module: 'payables', path: 'pagos/conciliaciones',
     description: 'Comparación del extracto del banco con el libro mayor a una fecha: la diferencia se explica por los movimientos que el banco todavía no registró, como los cheques sin debitar.',
+  },
+  SALES_ORDER: {
+    code: 'SALES_ORDER', prefix: 'PV', name: 'Pedido de venta', plural: 'Pedidos de venta',
+    resource: 'sales_order', module: 'sales', path: 'ventas/pedidos',
+    description: 'Lo que compra un cliente: productos, cantidades, precios y condición de pago. Al confirmarse controla el crédito del cliente y reserva el stock para la entrega.',
+  },
+  DELIVERY_NOTE: {
+    code: 'DELIVERY_NOTE', prefix: 'REM', name: 'Remito', plural: 'Remitos',
+    resource: 'delivery_note', module: 'inventory', path: 'deposito/remitos',
+    description: 'Constancia de la mercadería que sale del depósito para un cliente, contra su pedido de venta. Descuenta el stock y registra el costo de lo vendido.',
   },
 }
 
@@ -344,6 +367,21 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
   BANK_RECONCILIATION: {
     CONFIRMADA: { label: 'Confirmada', badge: 'success', final: true, description: 'Cierra con el extracto: sus movimientos quedaron conciliados.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: sus movimientos volvieron a estar pendientes de conciliar.' },
+  },
+  SALES_ORDER: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Ventas lo está cargando: todavía no reservó stock.' },
+    PENDIENTE_APROBACION: { label: 'Pendiente de aprobación', badge: 'warning', final: false, description: 'Supera el crédito del cliente o el cliente tiene facturas vencidas: espera la autorización de Gerencia. El stock ya está reservado.' },
+    CONFIRMADO: { label: 'Confirmado', badge: 'info', final: false, description: 'El stock está reservado: Depósito tiene que prepararlo y despacharlo.' },
+    ENTREGADO_PARCIAL: { label: 'Entregado parcialmente', badge: 'info', final: false, description: 'Salió una parte; lo que falta sigue reservado.' },
+    ENTREGADO: { label: 'Entregado', badge: 'success', final: true, description: 'Se entregó todo lo pedido.' },
+    CERRADO: { label: 'Cerrado con saldo', badge: 'neutral', final: true, description: 'Se dio por terminado con saldo sin entregar: la reserva de ese saldo se liberó.' },
+    RECHAZADO: { label: 'Rechazado', badge: 'danger', final: true, description: 'Gerencia no autorizó el crédito: la reserva de stock se liberó.' },
+    ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto: si había stock reservado, se liberó.' },
+  },
+  DELIVERY_NOTE: {
+    BORRADOR: { label: 'En preparación', badge: 'neutral', final: false, description: 'Depósito prepara la mercadería: todavía no movió stock.' },
+    CONFIRMADO: { label: 'Despachado', badge: 'success', final: true, description: 'La mercadería salió del depósito: bajó el stock y se registró el costo de lo vendido.' },
+    ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba despachado, la mercadería volvió al depósito y un contraasiento revirtió su costo.' },
   },
 }
 
@@ -458,6 +496,27 @@ export const TRANSITIONS: TransitionInfo[] = [
 
   // Conciliación bancaria
   t('BANK_RECONCILIATION', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'bank_reconciliation.cancel', 'Anular', 'Sus movimientos vuelven a quedar pendientes de conciliar. Sólo se anula la última conciliación de cada banco.', true, 'destructive'),
+
+  // Pedido de venta: confirmar lleva a Confirmado o, si supera el crédito, a Pendiente de aprobación.
+  t('SALES_ORDER', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'sales_order.create', 'Confirmar pedido', 'Controla el stock disponible y el crédito del cliente, y reserva la mercadería. Si supera el crédito, lo autoriza Gerencia.'),
+  t('SALES_ORDER', 'BORRADOR', 'CONFIRM', 'PENDIENTE_APROBACION', 'sales_order.create', 'Confirmar pedido', 'Controla el stock disponible y el crédito del cliente, y reserva la mercadería. Si supera el crédito, lo autoriza Gerencia.'),
+  t('SALES_ORDER', 'BORRADOR', 'CANCEL', 'ANULADO', 'sales_order.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('SALES_ORDER', 'PENDIENTE_APROBACION', 'APPROVE', 'CONFIRMADO', 'sales_order.approve', 'Autorizar crédito', 'El pedido queda confirmado: Depósito recibe la tarea de prepararlo.'),
+  t('SALES_ORDER', 'PENDIENTE_APROBACION', 'REJECT', 'RECHAZADO', 'sales_order.approve', 'Rechazar', 'No se le vende a crédito: la reserva de stock se libera.', true, 'destructive'),
+  t('SALES_ORDER', 'PENDIENTE_APROBACION', 'CANCEL', 'ANULADO', 'sales_order.cancel', 'Anular', 'Queda sin efecto y la reserva de stock se libera.', true, 'destructive'),
+  t('SALES_ORDER', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'sales_order.cancel', 'Anular', 'Sólo si todavía no salió nada: la reserva de stock se libera.', true, 'destructive'),
+  t('SALES_ORDER', 'ENTREGADO_PARCIAL', 'CLOSE', 'CERRADO', 'sales_order.cancel', 'Cerrar saldo', 'Se da por terminado: lo que falta no se entrega y su reserva se libera.', true, 'outline'),
+  t('SALES_ORDER', 'CONFIRMADO', 'SYSTEM', 'ENTREGADO_PARCIAL', null, '', ''),
+  t('SALES_ORDER', 'CONFIRMADO', 'SYSTEM', 'ENTREGADO', null, '', ''),
+  t('SALES_ORDER', 'ENTREGADO_PARCIAL', 'SYSTEM', 'ENTREGADO', null, '', ''),
+  t('SALES_ORDER', 'ENTREGADO_PARCIAL', 'SYSTEM', 'CONFIRMADO', null, '', ''),
+  t('SALES_ORDER', 'ENTREGADO', 'SYSTEM', 'ENTREGADO_PARCIAL', null, '', ''),
+  t('SALES_ORDER', 'ENTREGADO', 'SYSTEM', 'CONFIRMADO', null, '', ''),
+
+  // Remito
+  t('DELIVERY_NOTE', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'delivery_note.create', 'Despachar', 'La mercadería sale del depósito: baja el stock, se libera la reserva y se registra el costo de lo vendido.'),
+  t('DELIVERY_NOTE', 'BORRADOR', 'CANCEL', 'ANULADO', 'delivery_note.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('DELIVERY_NOTE', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'delivery_note.cancel', 'Anular con contramovimiento', 'La mercadería vuelve al depósito y un contraasiento revierte su costo. Debe hacerlo otro usuario.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -520,6 +579,11 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'RFQ', status: 'BORRADOR', taskType: 'ENVIAR_SCT', assignee: 'CREATOR', title: 'Enviar {number} a los proveedores', description: 'Revisar los ítems, las cantidades y los proveedores invitados, y enviar la solicitud.' },
   { docType: 'RFQ', status: 'ENVIADA', taskType: 'ADJUDICAR_SCT', assignee: 'ROLE', role: 'COMPRAS', title: 'Comparar y adjudicar {number}', description: 'Cargar las cotizaciones que lleguen, compararlas en el cuadro y adjudicar la más conveniente, o anular la solicitud con motivo.' },
   { docType: 'FUNDS_TRANSFER', status: 'BORRADOR', taskType: 'CONFIRMAR_TRANSFERENCIA', assignee: 'CREATOR', title: 'Confirmar {number} por {total}', description: 'Revisar las cuentas y el importe, y confirmar la transferencia.' },
+  { docType: 'SALES_ORDER', status: 'BORRADOR', taskType: 'CONFIRMAR_PV', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar el cliente, los ítems y los precios, y confirmar el pedido para reservar la mercadería.' },
+  { docType: 'SALES_ORDER', status: 'PENDIENTE_APROBACION', taskType: 'AUTORIZAR_CREDITO', assignee: 'ROLE', role: 'GERENCIA', title: 'Autorizar el crédito de {number} por {total}', description: 'Revisar la deuda del cliente y su límite de crédito; autorizar el pedido o rechazarlo con motivo.' },
+  { docType: 'SALES_ORDER', status: 'CONFIRMADO', taskType: 'DESPACHAR_PEDIDO', assignee: 'ROLE', role: 'DEPOSITO', title: 'Preparar y despachar {number}', description: 'Preparar la mercadería reservada, cargar el remito y despacharlo.' },
+  { docType: 'SALES_ORDER', status: 'ENTREGADO_PARCIAL', taskType: 'DESPACHAR_PEDIDO', assignee: 'ROLE', role: 'DEPOSITO', title: 'Despachar el saldo de {number}', description: 'Queda mercadería reservada pendiente de entrega.' },
+  { docType: 'DELIVERY_NOTE', status: 'BORRADOR', taskType: 'DESPACHAR_REMITO', assignee: 'CREATOR', title: 'Despachar {number}', description: 'Controlar la mercadería preparada contra el remito y despacharlo.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -538,6 +602,10 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   ENVIAR_SCT: 'Enviar solicitud de cotización',
   ADJUDICAR_SCT: 'Adjudicar cotización',
   CONFIRMAR_TRANSFERENCIA: 'Confirmar transferencia',
+  CONFIRMAR_PV: 'Confirmar pedido',
+  AUTORIZAR_CREDITO: 'Autorizar crédito',
+  DESPACHAR_PEDIDO: 'Despachar pedido',
+  DESPACHAR_REMITO: 'Despachar remito',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -551,6 +619,8 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   OC_APROBADA: 'Orden aprobada',
   OC_RECIBIDA: 'Orden recibida',
   MATERIAL_DISPONIBLE: 'Material disponible',
+  PEDIDO_AUTORIZADO: 'Pedido autorizado',
+  PEDIDO_DESPACHADO: 'Pedido despachado',
 }
 
 // ---------------------------------------------------------------- Etiquetas
@@ -609,7 +679,12 @@ export const MOVEMENT_TYPES: Record<MovementType, string> = {
   ANULACION_RECEPCION: 'Anulación de recepción',
   AJUSTE_POSITIVO: 'Ajuste positivo',
   AJUSTE_NEGATIVO: 'Ajuste negativo',
+  DESPACHO_VENTA: 'Despacho por venta',
+  ANULACION_DESPACHO: 'Anulación de despacho',
 }
+
+/** Lo que se vende (docs/FASE_4_VENTAS_Y_CLIENTES.md §2, a validar): las materias primas y los insumos, no. */
+export const SELLABLE_PRODUCT_TYPES: ProductType[] = ['PRODUCTO_TERMINADO', 'MERCADERIA_REVENTA', 'SERVICIO']
 
 export const VAT_RATES = [21, 10.5, 27, 0]
 
@@ -640,6 +715,15 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     keys: {
       // La contrapartida es la caja o el banco de la orden, no una regla.
       PROVEEDORES: 'Deuda con el proveedor que se cancela',
+    },
+  },
+  COSTO_VENTA: {
+    label: 'Costo de lo vendido (remito despachado)',
+    keys: {
+      COSTO_PRODUCTO_TERMINADO: 'Costo de los productos terminados vendidos',
+      COSTO_MERCADERIA_REVENTA: 'Costo de las mercaderías de reventa vendidas',
+      PRODUCTO_TERMINADO: 'Productos terminados que salen del inventario',
+      MERCADERIA_REVENTA: 'Mercaderías de reventa que salen del inventario',
     },
   },
 }

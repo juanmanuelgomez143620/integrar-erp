@@ -14,6 +14,7 @@ import {
   ROLES,
   ROLE_ORDER,
   ROLE_PERMISSIONS,
+  SELLABLE_PRODUCT_TYPES,
   TASK_RULES,
   TRANSITIONS,
   UNITS,
@@ -576,7 +577,6 @@ export function postMovement(ctx: Ctx, m: MovementInput) {
       product_id: m.product_id,
       warehouse_id: m.warehouse_id,
       qty_on_hand: 0,
-      qty_reserved: 0,
       avg_unit_cost: 0,
       last_movement_at: null,
     }
@@ -3615,6 +3615,560 @@ export function cmdCancelBankReconciliation(ctx: Ctx, docId: string, reason: str
   if (doc.status === 'CONFIRMADA' && last && last.id !== doc.id)
     fail('TRANSICION_INVALIDA', `Sólo se anula la última conciliación de la cuenta (${last.display_number}).`)
   transition(ctx, doc, 'CANCEL', { comment: reason })
+}
+
+// ============================================================ Pedidos de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2)
+
+export interface SalesOrderInput {
+  customer_id: string
+  /** Depósito desde el que se entrega: ahí se controla y se reserva el stock. */
+  warehouse_id: string
+  delivery_date: string | null
+  payment_terms_days: number
+  customer_reference: string
+  notes: string
+  /** Precio unitario sin IVA: se propone el de venta del producto. */
+  lines: { product_id: string; quantity: number; unit_price: number }[]
+}
+
+/** Pedidos en curso: lo que les falta entregar está reservado en su depósito. */
+export const ACTIVE_SALES_STATUSES = ['PENDIENTE_APROBACION', 'CONFIRMADO', 'ENTREGADO_PARCIAL']
+
+/** Pedidos que ya usan el crédito del cliente: los en curso y los terminados, mientras no se facturen (4b). */
+const CREDIT_STATUSES = [...ACTIVE_SALES_STATUSES, 'ENTREGADO', 'CERRADO']
+
+export const salesOrderLines = (db: DB, docId: string) =>
+  db.soLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+export const deliveryNoteLines = (db: DB, docId: string) =>
+  db.dnLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** Lo que hay de un producto en un depósito. */
+export function onHandQuantity(db: DB, productId: string, warehouseId: string) {
+  return db.stockBalances.find((b) => b.product_id === productId && b.warehouse_id === warehouseId)?.qty_on_hand ?? 0
+}
+
+/** Lo reservado de un producto en un depósito: lo que les falta entregar a los pedidos en curso (salvo uno). */
+export function reservedQuantity(db: DB, productId: string, warehouseId: string, exceptDocId?: string) {
+  const orders = new Set(
+    db.documents
+      .filter(
+        (d) =>
+          d.doc_type === 'SALES_ORDER' &&
+          ACTIVE_SALES_STATUSES.includes(d.status) &&
+          d.so!.warehouse_id === warehouseId &&
+          d.id !== exceptDocId,
+      )
+      .map((d) => d.id),
+  )
+  return round3(
+    db.soLines
+      .filter((l) => l.product_id === productId && orders.has(l.document_id))
+      .reduce((s, l) => s + Math.max(l.quantity - l.qty_delivered, 0), 0),
+  )
+}
+
+/** Importe con IVA de una cantidad de un ítem, redondeado como las líneas: neto e IVA por separado. */
+const amountWithVat = (quantity: number, unitPrice: number, vatRate: number) => {
+  const net = round2(quantity * unitPrice)
+  return round2(net + round2((net * vatRate) / 100))
+}
+
+/**
+ * Lo que un pedido usa del crédito del cliente, con IVA: lo pedido (si sigue en
+ * curso) o lo entregado (si terminó). La factura (4b) lo pasa a la deuda.
+ */
+function creditUsedByOrder(db: DB, order: T.Document) {
+  const finished = !ACTIVE_SALES_STATUSES.includes(order.status)
+  return round2(
+    salesOrderLines(db, order.id).reduce(
+      (s, l) => s + amountWithVat(finished ? l.qty_delivered : l.quantity, l.unit_price, l.vat_rate),
+      0,
+    ),
+  )
+}
+
+/** El crédito que usa un cliente: sus pedidos todavía sin facturar (salvo uno). */
+export function customerCreditUsed(db: DB, customerId: string, exceptDocId?: string) {
+  return round2(
+    db.documents
+      .filter(
+        (d) =>
+          d.doc_type === 'SALES_ORDER' &&
+          d.customer_id === customerId &&
+          CREDIT_STATUSES.includes(d.status) &&
+          d.id !== exceptDocId,
+      )
+      .reduce((s, d) => s + creditUsedByOrder(db, d), 0),
+  )
+}
+
+/** Por qué el pedido necesita la autorización de Gerencia; vacío si alcanza el crédito. */
+function creditReason(db: DB, doc: T.Document) {
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  if (customer.credit_limit == null) return ''
+  const used = round2(customerCreditUsed(db, customer.id, doc.id) + doc.total)
+  if (used <= customer.credit_limit + EPS) return ''
+  return `Supera el límite de crédito de ${customer.legal_name} (${money(customer.credit_limit)}): con este pedido llegaría a ${money(used)} entre lo que debe y lo pedido sin facturar.`
+}
+
+function validateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrderInput) {
+  const { db } = ctx
+  const company = getCompany(db, companyId)
+  const customer = db.customers.find((c) => c.id === input.customer_id && c.company_id === companyId)
+  if (!customer) fail('DATO_INVALIDO', 'Elegí el cliente.')
+  if (!customer.is_active) fail('DATO_INVALIDO', `El cliente ${customer.legal_name} está inactivo.`)
+  if (!db.warehouses.some((w) => w.id === input.warehouse_id && w.company_id === companyId))
+    fail('DATO_INVALIDO', 'Elegí el depósito desde el que se entrega.')
+  if (!Number.isInteger(input.payment_terms_days) || input.payment_terms_days < 0 || input.payment_terms_days > 365)
+    fail('DATO_INVALIDO', 'La condición de pago es una cantidad entera de días, de 0 (contado) a 365.')
+  if (input.delivery_date !== null) {
+    if (!isIsoDate(input.delivery_date)) fail('DATO_INVALIDO', 'La fecha de entrega no es válida.')
+    if (input.delivery_date < businessDate(company))
+      fail('DATO_INVALIDO', 'La fecha de entrega pedida no puede ser anterior a hoy.')
+  }
+  if (input.customer_reference.trim().length > 60)
+    fail('DATO_INVALIDO', 'La referencia del cliente tiene hasta 60 caracteres.')
+  const seen = new Set<string>()
+  const lines = input.lines
+    .filter((l) => l.product_id)
+    .map((l) => {
+      const p = getProduct(db, companyId, l.product_id)
+      if (!p.is_active) fail('DATO_INVALIDO', `${productLabel(p)} está inactivo.`)
+      if (!SELLABLE_PRODUCT_TYPES.includes(p.product_type))
+        fail(
+          'DATO_INVALIDO',
+          `${p.code} es ${PRODUCT_TYPES[p.product_type].toLowerCase()}: no se vende.`,
+          'Se venden los productos terminados, las mercaderías de reventa y los servicios.',
+        )
+      if (seen.has(p.id)) fail('DATO_INVALIDO', `${p.code} está dos veces: sumá las cantidades en un solo ítem.`)
+      seen.add(p.id)
+      if (!Number.isFinite(l.quantity) || !(l.quantity > 0) || round3(l.quantity) !== l.quantity)
+        fail('DATO_INVALIDO', `La cantidad de ${p.code} debe ser mayor que cero y tener hasta 3 decimales.`)
+      if (!Number.isFinite(l.unit_price) || !(l.unit_price > 0) || round4(l.unit_price) !== l.unit_price)
+        fail('DATO_INVALIDO', `El precio de ${p.code} debe ser mayor que cero y tener hasta 4 decimales.`)
+      // Quien no es responsable inscripto no factura IVA: su precio es el final.
+      const vatRate = company.vat_condition === 'RESPONSABLE_INSCRIPTO' ? p.vat_rate : 0
+      if (!Number.isFinite(l.quantity * l.unit_price * (1 + vatRate / 100)))
+        fail('DATO_INVALIDO', `El importe de ${p.code} es demasiado grande.`)
+      return { product: p, quantity: l.quantity, unit_price: l.unit_price, vat_rate: vatRate }
+    })
+  if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un ítem.')
+  return { customer, lines }
+}
+
+export function cmdCreateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrderInput, confirm: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'sales_order.create')
+  const { customer, lines } = validateSalesOrder(ctx, companyId, input)
+  const doc = newDocument(ctx, companyId, 'SALES_ORDER', actor, {
+    customer_id: customer.id,
+    notes: input.notes.trim(),
+    so: {
+      warehouse_id: input.warehouse_id,
+      delivery_date: input.delivery_date,
+      payment_terms_days: input.payment_terms_days,
+      customer_reference: input.customer_reference.trim(),
+      credit_reason: '',
+      confirmed_at: null,
+    },
+  })
+  lines.forEach((l, i) => {
+    const subtotal = round2(l.quantity * l.unit_price)
+    const tax = round2((subtotal * l.vat_rate) / 100)
+    db.soLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: l.product.id,
+      quantity: l.quantity,
+      list_price: l.product.sale_price ?? 0,
+      unit_price: l.unit_price,
+      vat_rate: l.vat_rate,
+      line_subtotal: subtotal,
+      line_tax: tax,
+      line_total: round2(subtotal + tax),
+      qty_delivered: 0,
+    })
+  })
+  const docLines = salesOrderLines(db, doc.id)
+  doc.subtotal = round2(docLines.reduce((s, l) => s + l.line_subtotal, 0))
+  doc.tax_total = round2(docLines.reduce((s, l) => s + l.line_tax, 0))
+  doc.total = round2(doc.subtotal + doc.tax_total)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'sales_order',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number} a ${customer.legal_name} por ${money(doc.total)}`,
+  })
+  if (confirm) confirmSalesOrder(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/**
+ * Confirmar: controla el stock disponible de cada ítem (lo que hay menos lo
+ * reservado para otros pedidos) y el crédito del cliente. Si alcanza el
+ * crédito, queda confirmado; si no, espera la autorización de Gerencia. En los
+ * dos casos lo que falta entregar queda reservado.
+ */
+function confirmSalesOrder(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'CONFIRM')
+  const company = getCompany(db, doc.company_id)
+  const warehouse = db.warehouses.find((w) => w.id === doc.so!.warehouse_id)!
+  if (!company.settings.allow_negative_stock) {
+    for (const l of salesOrderLines(db, doc.id)) {
+      const p = getProduct(db, doc.company_id, l.product_id)
+      if (!p.is_stockable) continue
+      const onHand = onHandQuantity(db, p.id, warehouse.id)
+      const reserved = reservedQuantity(db, p.id, warehouse.id, doc.id)
+      const available = round3(onHand - reserved)
+      if (l.quantity > available + EPS)
+        fail(
+          'STOCK_INSUFICIENTE',
+          `${p.code}: hay ${fmtQty(onHand, p.uom_code)} en ${warehouse.name}${reserved > 0 ? ` y ${fmtQty(reserved, p.uom_code)} están reservados para otros pedidos` : ''}; quedan ${fmtQty(Math.max(available, 0), p.uom_code)} disponibles y el pedido lleva ${fmtQty(l.quantity, p.uom_code)}.`,
+          'Falta stock: pedí lo disponible y el resto en otro pedido cuando haya mercadería (la repone Compras o la fabrica Producción).',
+        )
+    }
+  }
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  const reason = creditReason(db, doc)
+  doc.so = { ...doc.so!, credit_reason: reason, confirmed_at: reason ? null : ctx.now }
+  transition(ctx, doc, 'CONFIRM', {
+    to: reason ? 'PENDIENTE_APROBACION' : 'CONFIRMADO',
+    summary: reason
+      ? `Confirmó ${doc.display_number} a ${customer.legal_name} por ${money(doc.total)}: supera el crédito del cliente y lo autoriza Gerencia`
+      : `Confirmó ${doc.display_number} a ${customer.legal_name} por ${money(doc.total)} y reservó la mercadería`,
+  })
+}
+
+export function cmdConfirmSalesOrder(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'SALES_ORDER')
+  requirePermission(ctx, doc.company_id, 'sales_order.create')
+  confirmSalesOrder(ctx, doc)
+}
+
+/** Gerencia autoriza o rechaza el crédito; quien cargó el pedido no decide sobre él (SoD-8). */
+function decideSalesOrder(ctx: Ctx, docId: string, action: 'APPROVE' | 'REJECT', comment: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'SALES_ORDER')
+  requireTransition(doc, action)
+  const actor = requirePermission(ctx, doc.company_id, 'sales_order.approve')
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  if (!eff.supervisor && getCompany(db, doc.company_id).settings.sod_enabled && doc.created_by === ctx.userId)
+    fail(
+      'SEPARACION_FUNCIONES',
+      'No podés autorizar ni rechazar el crédito de un pedido que cargaste vos.',
+      'Separación de funciones: quien vende no autoriza su propia excepción de crédito.',
+    )
+  const text = comment.trim()
+  if (action === 'APPROVE') doc.so = { ...doc.so!, confirmed_at: ctx.now }
+  transition(ctx, doc, action, {
+    actor,
+    comment,
+    summary:
+      action === 'APPROVE'
+        ? `Autorizó el crédito de ${doc.display_number} por ${money(doc.total)}${text ? ` — ${text}` : ''}`
+        : undefined,
+  })
+  notifyUsers(
+    ctx,
+    doc.company_id,
+    doc.created_by ? [doc.created_by] : [],
+    {
+      type: action === 'APPROVE' ? 'PEDIDO_AUTORIZADO' : 'PEDIDO_RECHAZADO',
+      title: `${doc.display_number} ${action === 'APPROVE' ? 'fue autorizado' : 'fue rechazado'}`,
+      body:
+        action === 'APPROVE'
+          ? `Gerencia autorizó el crédito: Depósito ya puede despacharlo.`
+          : `Gerencia no autorizó el crédito: ${text}`,
+      link_path: docPath(db, doc),
+      document_id: doc.id,
+    },
+    ctx.userId,
+  )
+}
+
+export function cmdApproveSalesOrder(ctx: Ctx, docId: string, comment: string) {
+  decideSalesOrder(ctx, docId, 'APPROVE', comment)
+}
+
+export function cmdRejectSalesOrder(ctx: Ctx, docId: string, reason: string) {
+  decideSalesOrder(ctx, docId, 'REJECT', reason)
+}
+
+/** Un remito en preparación de un pedido: hay que despacharlo o anularlo antes de anular o cerrar el pedido. */
+function draftDeliveryOf(db: DB, orderId: string) {
+  return db.documents
+    .filter((d) => d.doc_type === 'DELIVERY_NOTE' && d.status === 'BORRADOR' && d.dn!.sales_order_id === orderId)
+    .sort((a, b) => a.number - b.number)[0]
+}
+
+function assertNoDraftDelivery(db: DB, order: T.Document) {
+  const draft = draftDeliveryOf(db, order.id)
+  if (draft)
+    fail(
+      'TRANSICION_INVALIDA',
+      `${draft.display_number} está en preparación para ${order.display_number}: Depósito tiene que despacharlo o anularlo primero.`,
+    )
+}
+
+export function cmdCancelSalesOrder(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'SALES_ORDER')
+  if (salesOrderLines(db, doc.id).some((l) => l.qty_delivered > EPS))
+    fail('TRANSICION_INVALIDA', `${doc.display_number} tiene entregas: no se puede anular. Usá "Cerrar saldo".`)
+  assertNoDraftDelivery(db, doc)
+  transition(ctx, doc, 'CANCEL', { comment: reason })
+}
+
+export function cmdCloseSalesOrder(ctx: Ctx, docId: string, reason: string) {
+  const doc = getDoc(ctx.db, docId, 'SALES_ORDER')
+  assertNoDraftDelivery(ctx.db, doc)
+  transition(ctx, doc, 'CLOSE', { comment: reason })
+}
+
+/** Estado del pedido según lo entregado: confirmado, entregado parcialmente o entregado. */
+function recomputeSalesOrder(ctx: Ctx, orderId: string) {
+  const doc = getDoc(ctx.db, orderId, 'SALES_ORDER')
+  if (!['CONFIRMADO', 'ENTREGADO_PARCIAL', 'ENTREGADO'].includes(doc.status)) return
+  const lines = salesOrderLines(ctx.db, doc.id)
+  const full = lines.every((l) => l.qty_delivered >= l.quantity - EPS)
+  const some = lines.some((l) => l.qty_delivered > EPS)
+  const target = full ? 'ENTREGADO' : some ? 'ENTREGADO_PARCIAL' : 'CONFIRMADO'
+  if (target !== doc.status) transition(ctx, doc, 'SYSTEM', { to: target })
+}
+
+// ============================================================ Remitos (docs/FASE_4_VENTAS_Y_CLIENTES.md §3)
+
+export interface DeliveryNoteInput {
+  sales_order_id: string
+  carrier_name: string
+  notes: string
+  lines: { so_line_id: string; quantity: number; notes?: string }[]
+}
+
+export function cmdCreateDeliveryNote(ctx: Ctx, companyId: string, input: DeliveryNoteInput, confirm: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'delivery_note.create')
+  const order = db.documents.find(
+    (d) => d.id === input.sales_order_id && d.company_id === companyId && d.doc_type === 'SALES_ORDER',
+  )
+  if (!order) fail('DATO_INVALIDO', 'Elegí el pedido de venta que se despacha.')
+  if (!['CONFIRMADO', 'ENTREGADO_PARCIAL'].includes(order.status))
+    fail(
+      'TRANSICION_INVALIDA',
+      `${order.display_number} está "${statusLabel('SALES_ORDER', order.status)}": se despachan pedidos confirmados.`,
+    )
+  const carrier = input.carrier_name.trim()
+  if (carrier.length > 80) fail('DATO_INVALIDO', 'El transportista tiene hasta 80 caracteres.')
+  for (const line of input.lines) {
+    if (!Number.isFinite(line.quantity) || line.quantity < 0 || round3(line.quantity) !== line.quantity)
+      fail(
+        'DATO_INVALIDO',
+        'Las cantidades que salen deben ser números mayores o iguales que cero (hasta 3 decimales).',
+      )
+  }
+  const lines = input.lines.filter((l) => l.quantity > 0)
+  if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué sale de al menos un ítem.')
+  const byLine = new Map<string, number>()
+  for (const line of lines) {
+    const sl = db.soLines.find((l) => l.id === line.so_line_id && l.document_id === order.id)
+    if (!sl) fail('DATO_INVALIDO', 'Uno de los ítems no es del pedido de venta.')
+    const p = getProduct(db, companyId, sl.product_id)
+    const total = round3((byLine.get(sl.id) ?? 0) + line.quantity)
+    byLine.set(sl.id, total)
+    const pending = round3(sl.quantity - sl.qty_delivered)
+    if (total > pending + EPS)
+      fail(
+        'CANTIDAD_EXCEDE_PENDIENTE',
+        `${p.code}: salen ${fmtQty(total, p.uom_code)} pero sólo faltan entregar ${fmtQty(pending, p.uom_code)}.`,
+        'No se entrega más de lo que pidió el cliente: si quiere más, Ventas carga otro pedido.',
+      )
+  }
+  const customer = db.customers.find((c) => c.id === order.customer_id)!
+  const doc = newDocument(ctx, companyId, 'DELIVERY_NOTE', actor, {
+    customer_id: customer.id,
+    notes: input.notes.trim(),
+    dn: { sales_order_id: order.id, warehouse_id: order.so!.warehouse_id, carrier_name: carrier, dispatched_at: null },
+  })
+  let total = 0
+  lines.forEach((l, i) => {
+    const sl = db.soLines.find((x) => x.id === l.so_line_id)!
+    total += round2(l.quantity * sl.unit_price)
+    db.dnLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      so_line_id: sl.id,
+      product_id: sl.product_id,
+      quantity: l.quantity,
+      unit_cost: 0,
+      notes: (l.notes ?? '').trim(),
+    })
+  })
+  // Valorizado a los precios del pedido (sin IVA).
+  doc.subtotal = round2(total)
+  doc.total = doc.subtotal
+  link(ctx, companyId, order.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'delivery_note',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number} para ${order.display_number} de ${customer.legal_name}`,
+  })
+  if (confirm) dispatchDeliveryNote(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/**
+ * Despachar: la mercadería sale al costo promedio, el pedido suma lo entregado
+ * (y libera esa reserva) y se registra el costo de lo vendido.
+ */
+function dispatchDeliveryNote(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  const order = getDoc(db, doc.dn!.sales_order_id, 'SALES_ORDER')
+  if (!['CONFIRMADO', 'ENTREGADO_PARCIAL'].includes(order.status))
+    fail(
+      'TRANSICION_INVALIDA',
+      `${order.display_number} ya no admite entregas (estado "${statusLabel('SALES_ORDER', order.status)}").`,
+    )
+  const customer = db.customers.find((c) => c.id === order.customer_id)!
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    summary: `Despachó ${doc.display_number}: salió la mercadería de ${order.display_number} para ${customer.legal_name}`,
+  })
+  const costByType = new Map<T.ProductType, number>()
+  for (const line of deliveryNoteLines(db, doc.id)) {
+    const sl = db.soLines.find((x) => x.id === line.so_line_id)!
+    const p = getProduct(db, doc.company_id, line.product_id)
+    const pending = round3(sl.quantity - sl.qty_delivered)
+    if (line.quantity > pending + EPS)
+      fail(
+        'CANTIDAD_EXCEDE_PENDIENTE',
+        `${p.code}: la cantidad supera lo que falta entregar de ${order.display_number} (${fmtQty(pending, p.uom_code)}).`,
+      )
+    sl.qty_delivered = round3(sl.qty_delivered + line.quantity)
+    if (!p.is_stockable) continue
+    postMovement(ctx, {
+      company_id: doc.company_id,
+      product_id: p.id,
+      warehouse_id: doc.dn!.warehouse_id,
+      type: 'DESPACHO_VENTA',
+      quantity: -line.quantity,
+      document_id: doc.id,
+      document_line_id: line.id,
+      date: doc.document_date,
+    })
+    const movement = db.stockMovements[db.stockMovements.length - 1]
+    line.unit_cost = movement.unit_cost
+    costByType.set(p.product_type, round2((costByType.get(p.product_type) ?? 0) - movement.total_cost))
+  }
+  doc.dn = { ...doc.dn!, dispatched_at: ctx.now }
+  recomputeSalesOrder(ctx, order.id)
+  const types = (Object.keys(PRODUCT_TYPES) as T.ProductType[]).filter((t) => (costByType.get(t) ?? 0) > 0)
+  if (types.length)
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'COSTO_VENTA',
+      `Costo de lo vendido según ${doc.display_number} (${order.display_number}, ${customer.legal_name}).`,
+      [
+        ...types.map((t) => ({ key: `COSTO_${t}`, debit: costByType.get(t)!, credit: 0 })),
+        ...types.map((t) => ({ key: t, debit: 0, credit: costByType.get(t)! })),
+      ],
+    )
+  const full = order.status === 'ENTREGADO'
+  notifyRoles(
+    ctx,
+    doc.company_id,
+    ['VENTAS'],
+    {
+      type: 'PEDIDO_DESPACHADO',
+      title: `${order.display_number} ${full ? 'entregado' : 'entregado parcialmente'}`,
+      body: `Depósito despachó ${doc.display_number} para ${customer.legal_name}.`,
+      link_path: docPath(db, order),
+      document_id: order.id,
+    },
+    actor.user_id,
+  )
+}
+
+export function cmdConfirmDeliveryNote(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'DELIVERY_NOTE')
+  requirePermission(ctx, doc.company_id, 'delivery_note.create')
+  dispatchDeliveryNote(ctx, doc)
+}
+
+/**
+ * El borrador se anula sin más. Uno despachado vuelve al depósito al costo con
+ * que salió, con el contraasiento de su costo; no lo anula quien lo despachó
+ * (SoD-3), salvo Gerencia.
+ */
+export function cmdCancelDeliveryNote(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'DELIVERY_NOTE')
+  if (doc.status !== 'CONFIRMADO') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'delivery_note.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const company = getCompany(db, doc.company_id)
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  if (
+    company.settings.sod_enabled &&
+    !eff.supervisor &&
+    !eff.roles.includes('GERENCIA') &&
+    invoiceRegistrant(db, doc.id) === ctx.userId
+  )
+    fail(
+      'SEPARACION_FUNCIONES',
+      'No podés anular un remito que despachaste vos.',
+      'Otro integrante de Depósito o Gerencia debe revisar y anular.',
+    )
+  const order = getDoc(db, doc.dn!.sales_order_id, 'SALES_ORDER')
+  if (order.status === 'CERRADO')
+    fail('TRANSICION_INVALIDA', `${order.display_number} está cerrado: el remito ya no puede anularse.`)
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulado: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number} con contramovimiento${reversal ? ` y el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
+  })
+  for (const line of deliveryNoteLines(db, doc.id)) {
+    const sl = db.soLines.find((x) => x.id === line.so_line_id)!
+    sl.qty_delivered = round3(sl.qty_delivered - line.quantity)
+    if (!getProduct(db, doc.company_id, line.product_id).is_stockable) continue
+    postMovement(ctx, {
+      company_id: doc.company_id,
+      product_id: line.product_id,
+      warehouse_id: doc.dn!.warehouse_id,
+      type: 'ANULACION_DESPACHO',
+      quantity: line.quantity,
+      unit_cost: line.unit_cost,
+      document_id: doc.id,
+      document_line_id: line.id,
+      date: businessDate(company),
+    })
+  }
+  recomputeSalesOrder(ctx, order.id)
 }
 
 // ============================================================ Tareas y notificaciones

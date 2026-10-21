@@ -23,6 +23,8 @@ const CSV_COLUMNS: CsvColumn<StockRow>[] = [
   { header: 'Depósito', value: (r) => r.warehouse.name },
   { header: 'Unidad', value: (r) => r.product.uom_code },
   { header: 'Stock', value: (r) => r.qty },
+  { header: 'Reservado para pedidos', value: (r) => r.reserved },
+  { header: 'Disponible', value: (r) => r.available },
   { header: 'Stock mínimo', value: (r) => r.product.min_stock },
   { header: 'Bajo mínimo (total del producto)', value: (r) => r.below_min },
   { header: 'Costo promedio (PPP)', value: (r) => round2(r.avg_cost) },
@@ -134,6 +136,24 @@ export function StockPage() {
                 {qty(r.qty, r.product.uom_code)}
               </span>
             ),
+          },
+          {
+            key: 'reserved',
+            header: 'Reservado',
+            align: 'right',
+            sort: (r) => r.reserved,
+            cell: (r) => (
+              <span className={cn('tabular', r.reserved > 0 ? 'text-amber-700' : 'text-muted-foreground')}>
+                {r.reserved > 0 ? qty(r.reserved) : '—'}
+              </span>
+            ),
+          },
+          {
+            key: 'available',
+            header: 'Disponible',
+            align: 'right',
+            sort: (r) => r.available,
+            cell: (r) => <span className="tabular">{qty(r.available)}</span>,
           },
           {
             key: 'min',

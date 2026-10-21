@@ -24,7 +24,11 @@ export function PrintPage() {
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
   const priced =
-    doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE' || doc.doc_type === 'SUPPLIER_QUOTE'
+    doc.doc_type === 'PURCHASE_ORDER' ||
+    doc.doc_type === 'SUPPLIER_INVOICE' ||
+    doc.doc_type === 'SUPPLIER_QUOTE' ||
+    doc.doc_type === 'SALES_ORDER'
+  const customer = data.customer
   const th = 'border-b border-slate-300 px-2 py-1.5 text-left text-[11px] font-semibold uppercase text-slate-600'
   const td = 'border-b border-slate-200 px-2 py-1.5 align-top'
 
@@ -257,6 +261,51 @@ export function PrintPage() {
               </div>
             </>
           )}
+          {(doc.doc_type === 'SALES_ORDER' || doc.doc_type === 'DELIVERY_NOTE') && customer && (
+            <div className="col-span-2 rounded border border-slate-300 p-2">
+              <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
+              <div className="font-semibold">{customer.legal_name}</div>
+              <div>
+                {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
+                {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} ({customer.province}
+                )
+              </div>
+            </div>
+          )}
+          {doc.doc_type === 'SALES_ORDER' && data.sales_order && (
+            <>
+              <div>
+                <b>Entrega:</b> {data.sales_order.delivery_date ? date(data.sales_order.delivery_date) : 'a coordinar'}{' '}
+                desde {warehouse?.name}
+              </div>
+              <div>
+                <b>Condición de pago:</b>{' '}
+                {data.sales_order.payment_terms_days ? `${data.sales_order.payment_terms_days} días` : 'Contado'}
+              </div>
+              {data.sales_order.customer_reference && (
+                <div>
+                  <b>Referencia del cliente:</b> {data.sales_order.customer_reference}
+                </div>
+              )}
+            </>
+          )}
+          {doc.doc_type === 'DELIVERY_NOTE' && data.delivery && (
+            <>
+              <div>
+                <b>Pedido de venta:</b> {data.related_order?.display_number}
+              </div>
+              <div>
+                <b>Transportista:</b> {data.delivery.carrier_name || '—'}
+              </div>
+              <div>
+                <b>Sale de:</b> {warehouse?.name}
+              </div>
+              <div>
+                <b>Despachado:</b>{' '}
+                {data.delivery.dispatched_at ? dateTime(data.delivery.dispatched_at) : 'en preparación'}
+              </div>
+            </>
+          )}
           {doc.doc_type === 'STOCK_ADJUSTMENT' && doc.sa && (
             <>
               <div>
@@ -406,12 +455,15 @@ export function PrintPage() {
                 <th className={th}>Código</th>
                 <th className={th}>Descripción</th>
                 {doc.doc_type === 'GOODS_RECEIPT' && <th className={`${th} text-right`}>Ordenado</th>}
+                {doc.doc_type === 'DELIVERY_NOTE' && <th className={`${th} text-right`}>Pedido</th>}
                 <th className={`${th} text-right`}>
                   {doc.doc_type === 'GOODS_RECEIPT'
                     ? 'Recibido'
                     : doc.doc_type === 'STOCK_ADJUSTMENT'
                       ? 'Ajuste'
-                      : 'Cantidad'}
+                      : doc.doc_type === 'DELIVERY_NOTE'
+                        ? 'Entregado'
+                        : 'Cantidad'}
                 </th>
                 {priced && (
                   <>
@@ -431,6 +483,9 @@ export function PrintPage() {
                   <td className={td}>{l.product.name}</td>
                   {doc.doc_type === 'GOODS_RECEIPT' && (
                     <td className={`${td} text-right`}>{qty(l.qty_ordered_po, l.product.uom_code)}</td>
+                  )}
+                  {doc.doc_type === 'DELIVERY_NOTE' && (
+                    <td className={`${td} text-right`}>{qty(l.qty_ordered_so, l.product.uom_code)}</td>
                   )}
                   <td className={`${td} text-right`}>{qty(l.quantity, l.product.uom_code)}</td>
                   {priced && (

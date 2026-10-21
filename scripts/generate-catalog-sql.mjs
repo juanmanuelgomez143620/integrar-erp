@@ -5,7 +5,7 @@
 // claves de la imputación automática (posting_keys, desde la Fase 3).
 //
 // Uso: npm run db:catalog [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de catálogos (la de la Fase 3d.2).
+// Sin argumento reescribe la última migración de catálogos (la de la Fase 4a).
 // Una migración ya aplicada en alguna instancia no se reescribe: si cambian
 // los catálogos después, se genera una nueva con otro nombre (el script es
 // idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias).
@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261019130100_catalog_data_conciliacion.sql'
+const target = process.argv[2] ?? '20261020120100_catalog_data_ventas.sql'
 
 const server = await createServer({
   root,
@@ -33,6 +33,8 @@ const MOVEMENT_DIRECTION = {
   ANULACION_RECEPCION: -1,
   AJUSTE_POSITIVO: 1,
   AJUSTE_NEGATIVO: -1,
+  DESPACHO_VENTA: -1,
+  ANULACION_DESPACHO: 1,
 }
 
 const sql = (value) =>
@@ -156,7 +158,7 @@ try {
   )
 
   const out = [
-    '-- Datos de los catálogos del sistema (con los de cheques y conciliación bancaria, Fase 3d.2).',
+    '-- Datos de los catálogos del sistema (con los de pedidos de venta y remitos, Fase 4a).',
     '-- GENERADO por scripts/generate-catalog-sql.mjs desde src/lib/domain/catalog.ts: no editar a mano.',
     '-- Idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias.',
     '',

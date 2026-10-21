@@ -125,6 +125,8 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['rfq_lines', mock.rfqLines],
     ['supplier_quote_lines', mock.sqLines],
     ['bank_reconciliation_lines', mock.brLines],
+    ['sales_order_lines', mock.soLines],
+    ['delivery_note_lines', mock.dnLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -1713,6 +1715,261 @@ describe('paridad de comandos', () => {
     expect(await cancel('anular la última', reconciliation, 'Se tomó el extracto de otra cuenta')).not.toBeNull()
   })
 
+  it('ventas: pedidos con crédito y reserva de stock, remitos con costo de lo vendido y anulaciones', async () => {
+    const companyPg = pg(company)
+    const customer = (code: string) => mock.customers.find((c) => c.company_id === company && c.code === code)!.id
+    const salesOrder = (
+      customerCode: string,
+      lines: [string, number, number?][],
+      over: Partial<E.SalesOrderInput> = {},
+    ) => {
+      const input: E.SalesOrderInput = {
+        customer_id: customer(customerCode),
+        warehouse_id: warehouse('DEP-PT'),
+        delivery_date: null,
+        payment_terms_days: 30,
+        customer_reference: '',
+        notes: '',
+        lines: lines.map(([code, quantity, price]) => ({
+          product_id: product(code).id,
+          quantity,
+          unit_price: price ?? product(code).sale_price!,
+        })),
+        ...over,
+      }
+      return {
+        input,
+        pgInput: {
+          ...input,
+          customer_id: pg(input.customer_id),
+          warehouse_id: pg(input.warehouse_id),
+          lines: input.lines.map((l) => ({ ...l, product_id: pg(l.product_id) })),
+        },
+      }
+    }
+    const create = (label: string, username: string, o: ReturnType<typeof salesOrder>, confirm: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateSalesOrder(c, company, o.input, confirm),
+        (b) => b.commands.createSalesOrder(companyPg, o.pgInput, confirm),
+      )
+    const createdOrder = (label: string, username: string, o: ReturnType<typeof salesOrder>, confirm: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateSalesOrder(c, company, o.input, confirm),
+        (b) => b.commands.createSalesOrder(companyPg, o.pgInput, confirm),
+      )
+    const status = (id: string) => mock.documents.find((d) => d.id === id)!.status
+    const orderLines = (orderId: string) =>
+      mock.soLines.filter((l) => l.document_id === orderId).sort((a, b) => a.line_no - b.line_no)
+    const delivery = (orderId: string, quantities: number[]) => {
+      const input: E.DeliveryNoteInput = {
+        sales_order_id: orderId,
+        carrier_name: 'Transporte propio',
+        notes: '',
+        lines: orderLines(orderId).map((l, i) => ({ so_line_id: l.id, quantity: quantities[i] ?? 0 })),
+      }
+      return {
+        input,
+        pgInput: {
+          ...input,
+          sales_order_id: pg(orderId),
+          lines: input.lines.map((l) => ({ ...l, so_line_id: pg(l.so_line_id) })),
+        },
+      }
+    }
+    const deliver = (label: string, username: string, d: ReturnType<typeof delivery>, confirm: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateDeliveryNote(c, company, d.input, confirm),
+        (b) => b.commands.createDeliveryNote(companyPg, d.pgInput, confirm),
+      )
+    const createdDelivery = (label: string, username: string, d: ReturnType<typeof delivery>, confirm: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateDeliveryNote(c, company, d.input, confirm),
+        (b) => b.commands.createDeliveryNote(companyPg, d.pgInput, confirm),
+      )
+    const cancelDelivery = (label: string, username: string, id: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelDeliveryNote(c, id, reason),
+        (b) => b.commands.cancelDeliveryNote(pg(id), reason),
+      )
+    const orderAction = (
+      label: string,
+      username: string,
+      id: string,
+      action: 'confirm' | 'approve' | 'reject' | 'cancel' | 'close',
+      text = '',
+    ) =>
+      step(
+        label,
+        username,
+        (c) =>
+          action === 'confirm'
+            ? E.cmdConfirmSalesOrder(c, id)
+            : action === 'approve'
+              ? E.cmdApproveSalesOrder(c, id, text)
+              : action === 'reject'
+                ? E.cmdRejectSalesOrder(c, id, text)
+                : action === 'cancel'
+                  ? E.cmdCancelSalesOrder(c, id, text)
+                  : E.cmdCloseSalesOrder(c, id, text),
+        (b) =>
+          action === 'confirm'
+            ? b.commands.confirmSalesOrder(pg(id))
+            : action === 'approve'
+              ? b.commands.approveSalesOrder(pg(id), text)
+              : action === 'reject'
+                ? b.commands.rejectSalesOrder(pg(id), text)
+                : action === 'cancel'
+                  ? b.commands.cancelSalesOrder(pg(id), text)
+                  : b.commands.closeSalesOrder(pg(id), text),
+      )
+    const reads = async (label: string) => {
+      for (const username of ['ventas', 'deposito', 'gerencia']) {
+        await sameRead(
+          `clientes para vender ${label} (${username})`,
+          username,
+          (b) => b.api.salesCustomers(companyPg),
+          (u) => Q.salesCustomers(mock, u, company),
+        )
+        await sameRead(
+          `catálogo de venta ${label} (${username})`,
+          username,
+          (b) => b.api.salesCatalog(companyPg),
+          (u) => Q.salesCatalog(mock, u, company),
+        )
+        await sameRead(
+          `pedidos para despachar ${label} (${username})`,
+          username,
+          (b) => b.api.dispatchableOrders(companyPg),
+          (u) => Q.dispatchableOrders(mock, u, company),
+        )
+      }
+    }
+
+    // Controles del pedido: qué se vende, cantidades, precios, fechas, condición y permisos.
+    const yesterday = addDays(todayAR(), -1)
+    for (const [label, username, o] of [
+      ['una materia prima no se vende', 'ventas', salesOrder('CLI-004', [['MP-001', 10, 2000]])],
+      [
+        'el mismo producto dos veces',
+        'ventas',
+        salesOrder('CLI-004', [
+          ['PT-002', 1],
+          ['PT-002', 2],
+        ]),
+      ],
+      ['precio cero', 'ventas', salesOrder('CLI-004', [['PT-002', 1, 0]])],
+      ['precio con cinco decimales', 'ventas', salesOrder('CLI-004', [['PT-002', 1, 10.00001]])],
+      ['cantidad con cuatro decimales', 'ventas', salesOrder('CLI-004', [['PT-002', 1.0001]])],
+      ['entrega en el pasado', 'ventas', salesOrder('CLI-004', [['PT-002', 1]], { delivery_date: yesterday })],
+      ['fecha de entrega inválida', 'ventas', salesOrder('CLI-004', [['PT-002', 1]], { delivery_date: '2027-13-40' })],
+      ['condición de pago de 400 días', 'ventas', salesOrder('CLI-004', [['PT-002', 1]], { payment_terms_days: 400 })],
+      [
+        'referencia muy larga',
+        'ventas',
+        salesOrder('CLI-004', [['PT-002', 1]], { customer_reference: 'x'.repeat(61) }),
+      ],
+      ['sin ítems', 'ventas', salesOrder('CLI-004', [])],
+      ['Compras no vende', 'compras1', salesOrder('CLI-004', [['PT-002', 1]])],
+    ] as const)
+      expect(await create(label, username, o, false), label).toBeNull()
+
+    // Falta de stock: el borrador se guarda, pero no se confirma más de lo disponible.
+    const available = (code: string) =>
+      Q.salesCatalog(mock, mockId('ventas'), company)
+        .find((p) => p.code === code)!
+        .stock.find((s) => s.warehouse_id === warehouse('DEP-PT'))!.available
+    const short = await createdOrder(
+      'pedido de más mesas que las disponibles',
+      'ventas',
+      salesOrder('CLI-004', [['PT-001', available('PT-001') + 1]]),
+      false,
+    )
+    expect(await orderAction('confirmar sin stock', 'ventas', short, 'confirm')).toBeNull()
+    expect(await orderAction('anular el borrador', 'ventas', short, 'cancel', 'Falta stock')).not.toBeNull()
+
+    // Dentro del crédito queda confirmado; si lo supera, lo autoriza Gerencia.
+    const big = await createdOrder(
+      'pedido con flete, dentro del crédito',
+      'ventas',
+      salesOrder(
+        'CLI-004',
+        [
+          ['PT-002', 5],
+          ['SV-001', 1, 40000],
+        ],
+        { delivery_date: addDays(todayAR(), 7), customer_reference: 'OC 7781', notes: 'Entregar en obra' },
+      ),
+      true,
+    )
+    expect(status(big)).toBe('CONFIRMADO')
+    const credit = await createdOrder(
+      'pedido que supera el crédito',
+      'ventas',
+      salesOrder('CLI-007', [['MR-001', 5]]),
+      true,
+    )
+    expect(status(credit)).toBe('PENDIENTE_APROBACION')
+    await reads('con los pedidos confirmados')
+    expect(await orderAction('Ventas no autoriza créditos', 'ventas', credit, 'approve')).toBeNull()
+    expect(await orderAction('rechazar sin motivo', 'gerencia', credit, 'reject', '')).toBeNull()
+    expect(await deliver('no se despacha un pedido sin autorizar', 'deposito', delivery(credit, [1]), false)).toBeNull()
+    await ok(
+      'Gerencia autoriza el crédito',
+      'gerencia',
+      (c) => E.cmdApproveSalesOrder(c, credit, 'Paga siempre'),
+      (b) => b.commands.approveSalesOrder(pg(credit), 'Paga siempre'),
+    )
+
+    // Controles del remito.
+    for (const [label, username, d] of [
+      ['más de lo que falta entregar', 'deposito', delivery(big, [6, 0])],
+      ['todo en cero', 'deposito', delivery(big, [0, 0])],
+      ['una cantidad negativa', 'deposito', delivery(big, [-1, 1])],
+      ['Ventas no despacha', 'ventas', delivery(big, [1, 0])],
+    ] as const)
+      expect(await deliver(label, username, d, false), label).toBeNull()
+
+    // En preparación, el pedido no se anula; despachado, baja el stock y registra el costo.
+    const partial = await createdDelivery('remito en preparación', 'deposito', delivery(big, [2, 1]), false)
+    expect(await orderAction('anular con un remito en preparación', 'ventas', big, 'cancel', 'Error')).toBeNull()
+    await ok(
+      'despacharlo',
+      'deposito',
+      (c) => E.cmdConfirmDeliveryNote(c, partial),
+      (b) => b.commands.confirmDeliveryNote(pg(partial)),
+    )
+    expect(status(big)).toBe('ENTREGADO_PARCIAL')
+    expect(await cancelDelivery('quien despachó no anula', 'deposito', partial, 'Error de carga')).toBeNull()
+    expect(await cancelDelivery('anular sin motivo', 'gerencia', partial, '')).toBeNull()
+    expect(
+      await cancelDelivery('Gerencia lo anula con contramovimiento', 'gerencia', partial, 'Volvió todo'),
+    ).not.toBeNull()
+    expect(status(big)).toBe('CONFIRMADO')
+    await createdDelivery('entregar todo', 'deposito', delivery(big, [5, 1]), true)
+    expect(status(big)).toBe('ENTREGADO')
+    expect(await orderAction('anular un pedido entregado', 'ventas', big, 'cancel', 'Error')).toBeNull()
+
+    // Entregado en parte y cerrado: su remito ya no se anula.
+    const closing = await createdDelivery('entregar dos colchones', 'deposito', delivery(credit, [2]), true)
+    expect(await orderAction('cerrar sin motivo', 'ventas', credit, 'close', '')).toBeNull()
+    expect(
+      await orderAction('cerrar el saldo', 'ventas', credit, 'close', 'El cliente no recibe el resto'),
+    ).not.toBeNull()
+    expect(status(credit)).toBe('CERRADO')
+    expect(await cancelDelivery('anular el remito de un pedido cerrado', 'gerencia', closing, 'Error')).toBeNull()
+    await reads('después de las entregas')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -1727,6 +1984,8 @@ describe('paridad de comandos', () => {
       'SUPPLIER_QUOTE',
       'FUNDS_TRANSFER',
       'BANK_RECONCILIATION',
+      'SALES_ORDER',
+      'DELIVERY_NOTE',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`
@@ -1747,6 +2006,7 @@ describe('paridad de comandos', () => {
       'auditor',
       'contabilidad',
       'tesoreria',
+      'ventas',
     ]
     for (const username of users) {
       for (const type of types)
@@ -1789,7 +2049,7 @@ describe('paridad de comandos', () => {
         (b) => b.api.stock(companyPg),
         (u) => Q.listStock(mock, u, company),
       )
-      for (const code of ['MP-002', 'IN-001', 'MP-006'])
+      for (const code of ['MP-002', 'IN-001', 'MP-006', 'PT-002', 'MR-001'])
         await sameRead(
           `kardex ${code} (${username})`,
           username,

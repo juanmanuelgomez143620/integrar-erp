@@ -9,6 +9,7 @@ import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
 import {
   cmdApprovePurchaseOrder,
+  cmdCreateDeliveryNote,
   cmdCreateFundsTransfer,
   cmdCreateGoodsReceipt,
   cmdCreateJournalEntry,
@@ -16,6 +17,7 @@ import {
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
   cmdCreateRfq,
+  cmdCreateSalesOrder,
   cmdCreateStockAdjustment,
   cmdCreateSupplierInvoice,
   cmdCreateSupplierQuote,
@@ -84,6 +86,8 @@ export function buildSeed(): DB {
     rfqSuppliers: [],
     sqLines: [],
     brLines: [],
+    soLines: [],
+    dnLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],
@@ -586,6 +590,54 @@ export function buildSeed(): DB {
       notes: '',
     },
     false,
+  )
+
+  // Ventas: Mueblería El Ceibo compra sillas, mesas y el flete, dentro de su crédito: el pedido
+  // reservó la mercadería y Depósito ya preparó el remito (falta despacharlo). Carpintería Don
+  // Aurelio pide dos mesas que superan su límite de crédito: lo tiene que autorizar Gerencia.
+  const customer = (code: string) => db.customers.find((c) => c.company_id === companyId && c.code === code)!.id
+  const pv = cmdCreateSalesOrder(
+    ctx(users.ventas, 25.4),
+    companyId,
+    {
+      customer_id: customer('CLI-001'),
+      warehouse_id: whPT.id,
+      delivery_date: addDays(todayAR(), 3),
+      payment_terms_days: 30,
+      customer_reference: 'OC 1532',
+      notes: '',
+      lines: [
+        { product_id: product['PT-002'].id, quantity: 8, unit_price: 125000 },
+        { product_id: product['PT-001'].id, quantity: 2, unit_price: 520000 },
+        { product_id: product['SV-001'].id, quantity: 1, unit_price: 45000 },
+      ],
+    },
+    true,
+  )
+  cmdCreateDeliveryNote(
+    ctx(users.deposito, 25.3),
+    companyId,
+    {
+      sales_order_id: pv.id,
+      carrier_name: 'Transporte propio',
+      notes: '',
+      lines: db.soLines.filter((l) => l.document_id === pv.id).map((l) => ({ so_line_id: l.id, quantity: l.quantity })),
+    },
+    false,
+  )
+  cmdCreateSalesOrder(
+    ctx(users.ventas, 25.2),
+    companyId,
+    {
+      customer_id: customer('CLI-005'),
+      warehouse_id: whPT.id,
+      delivery_date: null,
+      payment_terms_days: 15,
+      customer_reference: '',
+      notes: 'Pide que se entreguen juntas.',
+      lines: [{ product_id: product['PT-001'].id, quantity: 2, unit_price: 520000 }],
+    },
+    true,
   )
 
   // El historial previo no debe aparecer como "no leído".

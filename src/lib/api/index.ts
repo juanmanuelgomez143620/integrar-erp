@@ -26,7 +26,9 @@ export type {
   CompanyContext,
   ComparisonQuote,
   Dashboard,
+  DeliveryView,
   DetailLine,
+  DispatchableOrder,
   DocRef,
   DocumentDetail,
   DocumentListItem,
@@ -57,6 +59,9 @@ export type {
   ReconciliationLineView,
   ReconciliationView,
   RfqView,
+  SalesCustomer,
+  SalesOrderView,
+  SellableProduct,
   StockRow,
   SupplierAccount,
   SupplierAccountMovement,
@@ -65,12 +70,14 @@ export type {
   TransferView,
   TrialBalance,
   TrialBalanceRow,
+  WarehouseAvailability,
 } from '../mock/queries'
 export type {
   AccountInput,
   BankReconciliationInput,
   ChangePasswordInput,
   CourseInput,
+  DeliveryNoteInput,
   FundsTransferInput,
   GoodsReceiptInput,
   JournalEntryInput,
@@ -78,6 +85,7 @@ export type {
   PurchaseOrderInput,
   RequisitionInput,
   RfqInput,
+  SalesOrderInput,
   SchoolSettingsInput,
   StockAdjustmentInput,
   SupplierInvoiceInput,
@@ -175,6 +183,9 @@ const mockApi = {
   pendingRequisitionLines: (companyId: string) => query((db, u) => Q.pendingRequisitionLines(db, u, companyId)),
   receivableOrders: (companyId: string) => query((db, u) => Q.receivableOrders(db, u, companyId)),
   invoiceableOrders: (companyId: string) => query((db, u) => Q.invoiceableOrders(db, u, companyId)),
+  salesCustomers: (companyId: string) => query((db, u) => Q.salesCustomers(db, u, companyId)),
+  salesCatalog: (companyId: string) => query((db, u) => Q.salesCatalog(db, u, companyId)),
+  dispatchableOrders: (companyId: string) => query((db, u) => Q.dispatchableOrders(db, u, companyId)),
   payables: (companyId: string) => query((db, u) => Q.listPayables(db, u, companyId)),
   supplierAccount: (companyId: string, supplierId: string) =>
     query((db, u) => Q.supplierAccount(db, u, companyId, supplierId)),
@@ -284,6 +295,17 @@ const mockCommands = {
     command((c) => E.cmdCreateBankReconciliation(c, companyId, input)),
   cancelBankReconciliation: (docId: string, reason: string) =>
     command((c) => E.cmdCancelBankReconciliation(c, docId, reason)),
+  createSalesOrder: (companyId: string, input: E.SalesOrderInput, confirm: boolean) =>
+    command((c) => E.cmdCreateSalesOrder(c, companyId, input, confirm)),
+  confirmSalesOrder: (docId: string) => command((c) => E.cmdConfirmSalesOrder(c, docId)),
+  approveSalesOrder: (docId: string, comment: string) => command((c) => E.cmdApproveSalesOrder(c, docId, comment)),
+  rejectSalesOrder: (docId: string, reason: string) => command((c) => E.cmdRejectSalesOrder(c, docId, reason)),
+  cancelSalesOrder: (docId: string, reason: string) => command((c) => E.cmdCancelSalesOrder(c, docId, reason)),
+  closeSalesOrder: (docId: string, reason: string) => command((c) => E.cmdCloseSalesOrder(c, docId, reason)),
+  createDeliveryNote: (companyId: string, input: E.DeliveryNoteInput, confirm: boolean) =>
+    command((c) => E.cmdCreateDeliveryNote(c, companyId, input, confirm)),
+  confirmDeliveryNote: (docId: string) => command((c) => E.cmdConfirmDeliveryNote(c, docId)),
+  cancelDeliveryNote: (docId: string, reason: string) => command((c) => E.cmdCancelDeliveryNote(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

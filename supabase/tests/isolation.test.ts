@@ -86,6 +86,10 @@ async function snapshot(company: string) {
     'funds_transfers',
     'bank_reconciliations',
     'bank_reconciliation_lines',
+    'sales_orders',
+    'sales_order_lines',
+    'delivery_notes',
+    'delivery_note_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -121,7 +125,11 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                       ? B.transfer
                       : fn.startsWith('br_')
                         ? B.reconciliation
-                        : B.order
+                        : fn.startsWith('so_')
+                          ? B.salesOrder
+                          : fn.startsWith('dn_')
+                            ? B.delivery
+                            : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -150,6 +158,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         invoice_id: B.invoice,
         amount: 1,
         rfq_line_id: B.rfqLine,
+        so_line_id: B.salesLine,
       },
       { account_id: B.account, debit: 0, credit: 1 },
     ],
@@ -176,6 +185,11 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     legal_name: 'Intruso SA',
     product_type: 'MATERIA_PRIMA',
     uom_code: 'UN',
+    customer_id: B.customer,
+    sales_order_id: B.salesOrder,
+    carrier_name: 'Intruso',
+    delivery_date: null,
+    customer_reference: 'Intruso',
   }
   const values: Record<string, unknown> = {
     p_company_id: company,
@@ -429,6 +443,42 @@ beforeAll(async () => {
   B.journal = (
     await one(`select document_id as id from public.journal_entries where company_id = $1 limit 1`, [B.id])
   ).id
+  // Un pedido de venta confirmado de B y un remito despachado en parte.
+  B.customer = (await one(`select id from public.customers where company_id = $1 and code = 'CLI-001'`, [B.id])).id
+  B.salesOrder = (
+    await rpc<{ id: string }>('docenteB', 'so_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        customer_id: B.customer,
+        warehouse_id: (await one(`select id from public.warehouses where company_id = $1 and code = 'DEP-PT'`, [B.id]))
+          .id,
+        delivery_date: null,
+        payment_terms_days: 30,
+        customer_reference: '',
+        lines: [
+          {
+            product_id: (await one(`select id from public.products where company_id = $1 and code = 'PT-002'`, [B.id]))
+              .id,
+            quantity: 4,
+            unit_price: 125000,
+          },
+        ],
+      }),
+      p_confirm: true,
+    })
+  ).id
+  B.salesLine = (await one(`select id from public.sales_order_lines where document_id = $1`, [B.salesOrder])).id
+  B.delivery = (
+    await rpc<{ id: string }>('alumnoB', 'dn_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        sales_order_id: B.salesOrder,
+        carrier_name: '',
+        lines: [{ so_line_id: B.salesLine, quantity: 2 }],
+      }),
+      p_confirm: true,
+    })
+  ).id
 
   bIds = new Set(
     (
@@ -456,6 +506,8 @@ beforeAll(async () => {
          union select id::text from public.rfq_lines where company_id = $1
          union select id::text from public.supplier_quote_lines where company_id = $1
          union select id::text from public.bank_reconciliation_lines where company_id = $1
+         union select id::text from public.sales_order_lines where company_id = $1
+         union select id::text from public.delivery_note_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

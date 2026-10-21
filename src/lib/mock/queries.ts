@@ -7,12 +7,13 @@ import {
   MODULES,
   POSTING_EVENTS,
   ROLES,
+  SELLABLE_PRODUCT_TYPES,
   TRANSITIONS,
   type StatusInfo,
 } from '../domain/catalog'
 import { TREASURY_RUBRO } from '../domain/chart-of-accounts'
 import type * as T from '../domain/types'
-import { date, money, todayAR } from '../format'
+import { date, money, qty, todayAR } from '../format'
 import type { DB } from './db'
 import {
   accountBalance,
@@ -20,6 +21,8 @@ import {
   accountLinesUpTo,
   bestQuote,
   can,
+  customerCreditUsed,
+  deliveryNoteLines,
   docPath,
   effectivePermissions,
   fail,
@@ -36,15 +39,18 @@ import {
   isPosted,
   isSchoolAdmin,
   lastReconciliation,
+  onHandQuantity,
   orderFromQuote,
   quoteIsValid,
   quotesOf,
   reconciledLineIds,
   requirePermission,
   requisitionAvailableQuantity,
+  reservedQuantity,
   rfqLinesOf,
   round2,
   round3,
+  salesOrderLines,
   type AccountLine,
 } from './engine'
 
@@ -239,7 +245,7 @@ export interface KardexRow extends T.StockMovement {
 
 export interface ProductDetail {
   product: ProductRow
-  balances: (T.StockBalance & { warehouse_name: string })[]
+  balances: (T.StockBalance & { warehouse_name: string; qty_reserved: number; qty_available: number })[]
   kardex: KardexRow[]
 }
 
@@ -251,10 +257,15 @@ export function productDetail(db: DB, userId: string, companyId: string, code: s
   return {
     product: productRow(db, p, canStock),
     balances: canStock
-      ? balancesOf(db, p.id).map((b) => ({
-          ...b,
-          warehouse_name: db.warehouses.find((w) => w.id === b.warehouse_id)?.name ?? '',
-        }))
+      ? balancesOf(db, p.id).map((b) => {
+          const reserved = reservedQuantity(db, p.id, b.warehouse_id)
+          return {
+            ...b,
+            warehouse_name: db.warehouses.find((w) => w.id === b.warehouse_id)?.name ?? '',
+            qty_reserved: reserved,
+            qty_available: round3(b.qty_on_hand - reserved),
+          }
+        })
       : [],
     kardex: canStock
       ? db.stockMovements
@@ -278,6 +289,9 @@ export interface StockRow {
   product: T.Product
   warehouse: T.Warehouse
   qty: number
+  /** Reservado para pedidos de venta en curso, y lo que queda disponible para vender. */
+  reserved: number
+  available: number
   avg_cost: number
   value: number
   total_qty: number
@@ -298,10 +312,13 @@ export function listStock(db: DB, userId: string, companyId: string): StockRow[]
     for (const b of list) {
       const warehouse = db.warehouses.find((w) => w.id === b.warehouse_id)
       if (!warehouse) continue
+      const reserved = reservedQuantity(db, p.id, warehouse.id)
       rows.push({
         product: p,
         warehouse,
         qty: b.qty_on_hand,
+        reserved,
+        available: round3(b.qty_on_hand - reserved),
         avg_cost: b.avg_unit_cost,
         value: b.qty_on_hand * b.avg_unit_cost,
         total_qty: total,
@@ -317,6 +334,7 @@ export function listStock(db: DB, userId: string, companyId: string): StockRow[]
 export interface DocumentListItem extends T.Document {
   status_info: StatusInfo
   supplier_name: string
+  customer_name: string
   sector_name: string
   created_by_name: string
   line_count: number
@@ -355,6 +373,10 @@ function lineCount(db: DB, doc: T.Document) {
       return 0
     case 'BANK_RECONCILIATION':
       return db.brLines.filter((l) => l.document_id === doc.id).length
+    case 'SALES_ORDER':
+      return db.soLines.filter((l) => l.document_id === doc.id).length
+    case 'DELIVERY_NOTE':
+      return db.dnLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -379,6 +401,10 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return rfqLinesOf(db, doc.id)
     case 'SUPPLIER_QUOTE':
       return db.sqLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
+    case 'SALES_ORDER':
+      return salesOrderLines(db, doc.id)
+    case 'DELIVERY_NOTE':
+      return deliveryNoteLines(db, doc.id)
   }
 }
 
@@ -404,6 +430,7 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
     ...doc,
     status_info: DOC_STATUSES[doc.doc_type][doc.status],
     supplier_name: db.suppliers.find((s) => s.id === doc.supplier_id)?.legal_name ?? '',
+    customer_name: db.customers.find((c) => c.id === doc.customer_id)?.legal_name ?? '',
     sector_name: db.sectors.find((s) => s.id === doc.sector_id)?.name ?? '—',
     created_by_name: nameOf(db, doc.created_by),
     line_count: lineCount(db, doc),
@@ -464,6 +491,8 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'PAYMENT_ORDER',
     'FUNDS_TRANSFER',
     'BANK_RECONCILIATION',
+    'SALES_ORDER',
+    'DELIVERY_NOTE',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -500,6 +529,8 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     (t) => t.docType === doc.doc_type && t.from === doc.status && t.action !== 'SYSTEM',
   )) {
     if (!tr.permission || !can(eff, tr.permission)) continue
+    // Una acción puede llevar a estados distintos (confirmar un pedido): el botón es uno solo.
+    if (result.some((r) => r.action === tr.action)) continue
     let reason: string | null = null
     if (doc.doc_type === 'PURCHASE_ORDER' && (tr.action === 'APPROVE' || tr.action === 'REJECT')) {
       const req = db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')
@@ -581,6 +612,18 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       if (doc.total > balance + 1e-9)
         reason = `Los fondos ya se usaron: en ${accountLabel(to)} hay ${money(balance)}. Para devolverlos, prepará otra transferencia.`
     }
+    if (doc.doc_type === 'SALES_ORDER') reason = salesOrderActionReason(db, userId, doc, tr.action) ?? reason
+    if (doc.doc_type === 'DELIVERY_NOTE' && doc.status === 'CONFIRMADO' && tr.action === 'CANCEL') {
+      const order = db.documents.find((d) => d.id === doc.dn!.sales_order_id)!
+      if (
+        company.settings.sod_enabled &&
+        !eff.supervisor &&
+        !eff.roles.includes('GERENCIA') &&
+        invoiceRegistrant(db, doc.id) === userId
+      )
+        reason = 'Separación de funciones: otro integrante de Depósito o Gerencia debe anularlo.'
+      else if (order.status === 'CERRADO') reason = `${order.display_number} está cerrado: ya no se anula el remito.`
+    }
     result.push({
       action: tr.action,
       label: tr.label,
@@ -592,6 +635,39 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     })
   }
   return result
+}
+
+/** Por qué no se puede confirmar, autorizar, anular o cerrar un pedido de venta; null si se puede. */
+function salesOrderActionReason(db: DB, userId: string, doc: T.Document, action: T.TransitionAction) {
+  const eff = effectivePermissions(db, userId, doc.company_id)
+  const company = db.companies.find((c) => c.id === doc.company_id)!
+  if (action === 'CONFIRM' && !company.settings.allow_negative_stock) {
+    for (const l of salesOrderLines(db, doc.id)) {
+      const p = db.products.find((x) => x.id === l.product_id)!
+      if (!p.is_stockable) continue
+      const available = round3(
+        onHandQuantity(db, p.id, doc.so!.warehouse_id) - reservedQuantity(db, p.id, doc.so!.warehouse_id, doc.id),
+      )
+      if (l.quantity > available + 1e-9)
+        return `Falta stock de ${p.code}: hay ${qty(Math.max(available, 0), p.uom_code)} disponibles y el pedido lleva ${qty(l.quantity, p.uom_code)}.`
+    }
+  }
+  if (
+    (action === 'APPROVE' || action === 'REJECT') &&
+    !eff.supervisor &&
+    company.settings.sod_enabled &&
+    doc.created_by === userId
+  )
+    return 'Separación de funciones: no podés autorizar ni rechazar el crédito de un pedido que cargaste vos.'
+  if (action === 'CANCEL' && salesOrderLines(db, doc.id).some((l) => l.qty_delivered > 1e-9))
+    return 'Tiene entregas: usá "Cerrar saldo".'
+  if (action === 'CANCEL' || action === 'CLOSE') {
+    const draft = db.documents
+      .filter((d) => d.doc_type === 'DELIVERY_NOTE' && d.status === 'BORRADOR' && d.dn!.sales_order_id === doc.id)
+      .sort((a, b) => a.number - b.number)[0]
+    if (draft) return `${draft.display_number} está en preparación: Depósito tiene que despacharlo o anularlo.`
+  }
+  return null
 }
 
 const rfqNumber = (db: DB, quote: T.Document) =>
@@ -756,6 +832,45 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         text: `Se transfirió el ${date(doc.ft?.transferred_on)} de ${from?.name ?? '—'} a ${to?.name ?? '—'}: el movimiento está en el libro diario y no cambia el total de los fondos.`,
       }
     }
+    case 'SALES_ORDER:BORRADOR':
+      return {
+        who: 'Ventas',
+        text: 'Revisar el cliente, los ítems, los precios y el depósito, y confirmar el pedido: se controla el stock disponible y el crédito del cliente, y se reserva la mercadería.',
+      }
+    case 'SALES_ORDER:PENDIENTE_APROBACION':
+      return {
+        who: 'Gerencia',
+        text: `${doc.so?.credit_reason ?? ''} Autorizar el crédito o rechazar el pedido con motivo; mientras tanto, la mercadería queda reservada. Quien cargó el pedido no puede autorizarlo: es un control de separación de funciones.`.trim(),
+      }
+    case 'SALES_ORDER:CONFIRMADO': {
+      const warehouse = db.warehouses.find((w) => w.id === doc.so?.warehouse_id)
+      return {
+        who: 'Depósito',
+        text: `La mercadería está reservada en ${warehouse?.name ?? 'el depósito'}. Prepararla, cargar el remito y despacharlo.`,
+      }
+    }
+    case 'SALES_ORDER:ENTREGADO_PARCIAL':
+      return {
+        who: 'Depósito o Ventas',
+        text: 'Falta entregar el saldo, que sigue reservado. Si no se va a entregar, Ventas puede cerrar el saldo con motivo.',
+      }
+    case 'SALES_ORDER:ENTREGADO':
+      return { who: 'Ventas', text: 'Se entregó todo lo pedido: lo que sigue es facturarlo.' }
+    case 'SALES_ORDER:RECHAZADO':
+      return {
+        who: 'Ventas',
+        text: `Motivo del rechazo: "${doc.status_reason}". Si el cliente achica el pedido o paga lo que debe, se carga otro.`,
+      }
+    case 'DELIVERY_NOTE:BORRADOR':
+      return {
+        who: 'Depósito',
+        text: 'Preparar la mercadería, controlarla contra el remito y despacharlo: baja el stock, se libera la reserva y se registra el costo de lo vendido.',
+      }
+    case 'DELIVERY_NOTE:CONFIRMADO':
+      return {
+        who: '—',
+        text: 'La mercadería salió: bajó el stock (ver kardex), el costo de lo vendido está en el libro diario y Ventas fue notificada.',
+      }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -796,6 +911,14 @@ export interface DetailLine {
   unit_cost?: number
   // FP: precio pactado en la OC, para mostrar la diferencia
   order_unit_price?: number
+  // PV: precio de venta del producto (la bonificación se mide contra él), lo entregado y lo disponible
+  list_price?: number
+  qty_delivered?: number
+  /** En el depósito del pedido, sin lo reservado para otros pedidos; null en los servicios. */
+  qty_available?: number | null
+  // REM
+  so_line_id?: string
+  qty_ordered_so?: number
 }
 
 export interface ApprovalView extends T.ApprovalRequest {
@@ -944,6 +1067,26 @@ export interface ReconciliationView {
   pending: ReconciliationLineView[]
 }
 
+/** Pedido de venta: sus condiciones y el crédito del cliente. */
+export interface SalesOrderView {
+  delivery_date: string | null
+  payment_terms_days: number
+  customer_reference: string
+  credit_reason: string
+  confirmed_at: string | null
+  /** Límite de crédito del cliente (null: sin límite) y lo que usa sin contar este pedido. */
+  credit_limit: number | null
+  credit_used: number
+}
+
+/** Remito: quién lo lleva, cuándo salió y a qué costo. */
+export interface DeliveryView {
+  carrier_name: string
+  dispatched_at: string | null
+  /** Costo de lo que salió del depósito, al promedio del despacho (0 mientras está en preparación). */
+  cost_total: number
+}
+
 export interface DocumentDetail {
   doc: DocumentListItem
   lines: DetailLine[]
@@ -953,7 +1096,10 @@ export interface DocumentDetail {
   quote: QuoteView | null
   transfer: TransferView | null
   reconciliation: ReconciliationView | null
+  sales_order: SalesOrderView | null
+  delivery: DeliveryView | null
   supplier: T.Supplier | null
+  customer: T.Customer | null
   warehouse: T.Warehouse | null
   related_order: DocumentListItem | null
   approvals: ApprovalView[]
@@ -1124,8 +1270,55 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
         line_total: l.line_total,
       }))
   }
-  const warehouseId = doc.po?.warehouse_id ?? doc.gr?.warehouse_id ?? doc.sa?.warehouse_id ?? doc.rq?.warehouse_id
-  const orderId = doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id
+  if (doc.doc_type === 'SALES_ORDER') {
+    lines = salesOrderLines(db, doc.id).map((l) => {
+      const p = product(l.product_id)
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        product: p,
+        quantity: l.quantity,
+        notes: '',
+        unit_price: l.unit_price,
+        list_price: l.list_price,
+        vat_rate: l.vat_rate,
+        line_subtotal: l.line_subtotal,
+        line_tax: l.line_tax,
+        line_total: l.line_total,
+        qty_delivered: l.qty_delivered,
+        qty_available: p.is_stockable
+          ? round3(
+              onHandQuantity(db, p.id, doc.so!.warehouse_id) - reservedQuantity(db, p.id, doc.so!.warehouse_id, doc.id),
+            )
+          : null,
+      }
+    })
+  }
+  if (doc.doc_type === 'DELIVERY_NOTE') {
+    lines = deliveryNoteLines(db, doc.id).map((l) => {
+      const sl = db.soLines.find((x) => x.id === l.so_line_id)!
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        product: product(l.product_id),
+        quantity: l.quantity,
+        notes: l.notes,
+        so_line_id: l.so_line_id,
+        qty_ordered_so: sl.quantity,
+        qty_delivered: sl.qty_delivered,
+        unit_price: sl.unit_price,
+        unit_cost: l.unit_cost,
+      }
+    })
+  }
+  const warehouseId =
+    doc.po?.warehouse_id ??
+    doc.gr?.warehouse_id ??
+    doc.sa?.warehouse_id ??
+    doc.rq?.warehouse_id ??
+    doc.so?.warehouse_id ??
+    doc.dn?.warehouse_id
+  const orderId = doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id ?? doc.dn?.sales_order_id
   const relatedOrder = orderId ? db.documents.find((d) => d.id === orderId) : undefined
   const history = db.audit.filter((e) => e.document_id === doc.id).sort((a, b) => a.id - b.id)
   const firstBy = (actions: string[]) => {
@@ -1174,10 +1367,20 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                         { label: 'Concilió', ...firstBy(['CREATE']) },
                         { label: 'Revisó', name: '', sector: '', at: '' },
                       ]
-                    : [
-                        { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                        { label: 'Controló', name: '', sector: '', at: '' },
-                      ]
+                    : doc.doc_type === 'SALES_ORDER'
+                      ? [
+                          { label: 'Vendió', ...firstBy(['CONFIRM', 'CREATE']) },
+                          { label: 'Autorizó el crédito', ...firstBy(['APPROVE']) },
+                        ]
+                      : doc.doc_type === 'DELIVERY_NOTE'
+                        ? [
+                            { label: 'Despachó', ...firstBy(['CONFIRM', 'CREATE']) },
+                            { label: 'Recibió conforme (cliente)', name: '', sector: '', at: '' },
+                          ]
+                        : [
+                            { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                            { label: 'Controló', name: '', sector: '', at: '' },
+                          ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1187,7 +1390,10 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     quote: doc.sq ? quoteView(db, doc) : null,
     transfer: doc.ft ? transferView(db, doc) : null,
     reconciliation: doc.br ? reconciliationView(db, doc) : null,
+    sales_order: doc.so ? salesOrderView(db, doc) : null,
+    delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
+    customer: db.customers.find((c) => c.id === doc.customer_id) ?? null,
     warehouse: db.warehouses.find((w) => w.id === warehouseId) ?? null,
     related_order: relatedOrder ? listItem(db, relatedOrder) : null,
     approvals: db.approvalRequests
@@ -1204,6 +1410,28 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     actions: availableActions(db, userId, doc),
     next_step: nextStep(db, doc),
     signatures,
+  }
+}
+
+function salesOrderView(db: DB, doc: T.Document): SalesOrderView {
+  const so = doc.so!
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  return {
+    delivery_date: so.delivery_date,
+    payment_terms_days: so.payment_terms_days,
+    customer_reference: so.customer_reference,
+    credit_reason: so.credit_reason,
+    confirmed_at: so.confirmed_at,
+    credit_limit: customer.credit_limit,
+    credit_used: customerCreditUsed(db, customer.id, doc.id),
+  }
+}
+
+function deliveryView(db: DB, doc: T.Document): DeliveryView {
+  return {
+    carrier_name: doc.dn!.carrier_name,
+    dispatched_at: doc.dn!.dispatched_at,
+    cost_total: round2(deliveryNoteLines(db, doc.id).reduce((s, l) => s + round2(l.quantity * l.unit_cost), 0)),
   }
 }
 
@@ -1784,6 +2012,131 @@ export function invoiceableOrders(db: DB, userId: string, companyId: string): In
             product: db.products.find((p) => p.id === l.product_id)!,
             invoiced,
             pending: round3(l.qty_received - invoiced),
+          }
+        })
+        .filter((x) => x.pending > 1e-9),
+    }))
+    .filter((o) => o.lines.length)
+}
+
+// ============================================================ Ventas (docs/FASE_4_VENTAS_Y_CLIENTES.md)
+
+/** Un cliente para el pedido de venta: su condición de pago y su crédito. */
+export interface SalesCustomer {
+  id: string
+  code: string
+  legal_name: string
+  vat_condition: T.VatCondition
+  payment_terms_days: number
+  credit_limit: number | null
+  /** Lo que ya usa del crédito: pedidos sin facturar (y, desde 4b, facturas sin cobrar). */
+  credit_used: number
+}
+
+export function salesCustomers(db: DB, userId: string, companyId: string): SalesCustomer[] {
+  assertPerm(db, userId, companyId, 'sales_order.create')
+  return db.customers
+    .filter((c) => c.company_id === companyId && c.is_active)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((c) => ({
+      id: c.id,
+      code: c.code,
+      legal_name: c.legal_name,
+      vat_condition: c.vat_condition,
+      payment_terms_days: c.payment_terms_days,
+      credit_limit: c.credit_limit,
+      credit_used: customerCreditUsed(db, c.id),
+    }))
+}
+
+/** Lo que hay de un producto en un depósito, lo reservado para pedidos y lo disponible. */
+export interface WarehouseAvailability {
+  warehouse_id: string
+  on_hand: number
+  reserved: number
+  available: number
+}
+
+export interface SellableProduct {
+  id: string
+  code: string
+  name: string
+  uom_code: string
+  product_type: T.ProductType
+  is_stockable: boolean
+  sale_price: number | null
+  /** La alícuota que se factura: la del producto, o 0 si la empresa no es responsable inscripta. */
+  vat_rate: number
+  /** Por depósito, en orden de código; vacío en los servicios. */
+  stock: WarehouseAvailability[]
+}
+
+function availabilityOf(db: DB, companyId: string, productId: string): WarehouseAvailability[] {
+  return db.warehouses
+    .filter((w) => w.company_id === companyId)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((w) => {
+      const onHand = onHandQuantity(db, productId, w.id)
+      const reserved = reservedQuantity(db, productId, w.id)
+      return { warehouse_id: w.id, on_hand: onHand, reserved, available: round3(onHand - reserved) }
+    })
+}
+
+/** Lo que se puede vender, con su precio y lo disponible en cada depósito (para cargar el pedido). */
+export function salesCatalog(db: DB, userId: string, companyId: string): SellableProduct[] {
+  assertPerm(db, userId, companyId, 'sales_order.create')
+  const company = db.companies.find((c) => c.id === companyId)!
+  return db.products
+    .filter((p) => p.company_id === companyId && p.is_active && SELLABLE_PRODUCT_TYPES.includes(p.product_type))
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((p) => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      uom_code: p.uom_code,
+      product_type: p.product_type,
+      is_stockable: p.is_stockable,
+      sale_price: p.sale_price,
+      vat_rate: company.vat_condition === 'RESPONSABLE_INSCRIPTO' ? p.vat_rate : 0,
+      stock: p.is_stockable ? availabilityOf(db, companyId, p.id) : [],
+    }))
+}
+
+export interface DispatchableOrder {
+  order: DocumentListItem
+  warehouse: T.Warehouse
+  lines: {
+    line: T.SalesOrderLine
+    product: T.Product
+    /** Lo que falta entregar. */
+    pending: number
+    /** Lo que hay en el depósito del pedido (null en los servicios). */
+    on_hand: number | null
+  }[]
+}
+
+/** Pedidos confirmados con algo por entregar (para preparar el remito). */
+export function dispatchableOrders(db: DB, userId: string, companyId: string): DispatchableOrder[] {
+  assertPerm(db, userId, companyId, 'delivery_note.create')
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'SALES_ORDER' &&
+        ['CONFIRMADO', 'ENTREGADO_PARCIAL'].includes(d.status),
+    )
+    .sort((a, b) => a.number - b.number)
+    .map((d) => ({
+      order: listItem(db, d),
+      warehouse: db.warehouses.find((w) => w.id === d.so!.warehouse_id)!,
+      lines: salesOrderLines(db, d.id)
+        .map((l) => {
+          const p = db.products.find((x) => x.id === l.product_id)!
+          return {
+            line: l,
+            product: p,
+            pending: round3(l.quantity - l.qty_delivered),
+            on_hand: p.is_stockable ? onHandQuantity(db, p.id, d.so!.warehouse_id) : null,
           }
         })
         .filter((x) => x.pending > 1e-9),

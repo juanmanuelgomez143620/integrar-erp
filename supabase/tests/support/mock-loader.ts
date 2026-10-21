@@ -113,11 +113,25 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert(
       'documents',
       mock.documents.map(
-        ({ pr: _pr, po: _po, gr: _gr, sa: _sa, je: _je, si: _si, op: _op, rq: _rq, sq: _sq, ft: _ft, br: _br, ...d }) =>
-          d,
+        ({
+          pr: _pr,
+          po: _po,
+          gr: _gr,
+          sa: _sa,
+          je: _je,
+          si: _si,
+          op: _op,
+          rq: _rq,
+          sq: _sq,
+          ft: _ft,
+          br: _br,
+          so: _so,
+          dn: _dn,
+          ...d
+        }) => d,
       ),
     )
-    const sub = (key: 'pr' | 'po' | 'gr' | 'sa' | 'je' | 'si' | 'op' | 'rq' | 'sq' | 'ft' | 'br') =>
+    const sub = (key: 'pr' | 'po' | 'gr' | 'sa' | 'je' | 'si' | 'op' | 'rq' | 'sq' | 'ft' | 'br' | 'so' | 'dn') =>
       mock.documents.filter((d) => d[key]).map((d) => ({ ...d[key], document_id: d.id, company_id: d.company_id }))
     await insert('purchase_requisitions', sub('pr'))
     await insert('purchase_orders', sub('po'))
@@ -130,6 +144,8 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('supplier_quotes', sub('sq'))
     await insert('funds_transfers', sub('ft'))
     await insert('bank_reconciliations', sub('br'))
+    await insert('sales_orders', sub('so'))
+    await insert('delivery_notes', sub('dn'))
     await insert('purchase_requisition_lines', mock.prLines as unknown as Row[])
     await insert('purchase_order_lines', mock.poLines as unknown as Row[])
     await insert('goods_receipt_lines', mock.grLines as unknown as Row[])
@@ -141,6 +157,8 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('rfq_suppliers', mock.rfqSuppliers as unknown as Row[])
     await insert('supplier_quote_lines', mock.sqLines as unknown as Row[])
     await insert('bank_reconciliation_lines', mock.brLines as unknown as Row[])
+    await insert('sales_order_lines', mock.soLines as unknown as Row[])
+    await insert('delivery_note_lines', mock.dnLines as unknown as Row[])
     await insert('document_links', mock.docLinks as unknown as Row[])
     await insert('stock_movements', mock.stockMovements as unknown as Row[], true)
     await insert('stock_balances', mock.stockBalances as unknown as Row[])

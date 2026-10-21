@@ -15,6 +15,7 @@ import {
   ShoppingCart,
   PackageCheck,
   ShieldAlert,
+  Truck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -101,6 +102,17 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
   BANK_RECONCILIATION: {
     CANCEL: (id, t) => commands.cancelBankReconciliation(id, t),
   },
+  SALES_ORDER: {
+    CONFIRM: (id) => commands.confirmSalesOrder(id),
+    APPROVE: (id, t) => commands.approveSalesOrder(id, t),
+    REJECT: (id, t) => commands.rejectSalesOrder(id, t),
+    CANCEL: (id, t) => commands.cancelSalesOrder(id, t),
+    CLOSE: (id, t) => commands.closeSalesOrder(id, t),
+  },
+  DELIVERY_NOTE: {
+    CONFIRM: (id) => commands.confirmDeliveryNote(id),
+    CANCEL: (id, t) => commands.cancelDeliveryNote(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -115,6 +127,8 @@ const AREA: Record<DocType, string> = {
   SUPPLIER_QUOTE: 'Compras',
   FUNDS_TRANSFER: 'Pagos y tesorería',
   BANK_RECONCILIATION: 'Pagos y tesorería',
+  SALES_ORDER: 'Ventas',
+  DELIVERY_NOTE: 'Depósito',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -180,6 +194,10 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
     ['REGISTRADA', 'PAGADA_PARCIAL'].includes(doc.status) &&
     !!detail.supplier &&
     company.can('payment_order.create')
+  const canDispatch =
+    doc.doc_type === 'SALES_ORDER' &&
+    ['CONFIRMADO', 'ENTREGADO_PARCIAL'].includes(doc.status) &&
+    company.can('delivery_note.create')
 
   const primary = detail.actions.filter((a) => a.tone === 'default')
   const secondary = detail.actions.filter((a) => a.tone !== 'default')
@@ -280,6 +298,13 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               <Button variant="outline" asChild>
                 <Link to={`${company.docPath('PAYMENT_ORDER', 'nueva')}?proveedor=${detail.supplier!.code}`}>
                   <Banknote /> Preparar orden de pago
+                </Link>
+              </Button>
+            )}
+            {canDispatch && (
+              <Button asChild>
+                <Link to={`${company.docPath('DELIVERY_NOTE', 'nuevo')}?pv=${doc.display_number}`}>
+                  <Truck /> Preparar remito
                 </Link>
               </Button>
             )}
@@ -401,8 +426,10 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
             </Section>
           )}
 
+          {detail.sales_order && <CreditSection detail={detail} />}
+
           {detail.related_order && (
-            <Section title="Orden de compra">
+            <Section title={DOC_TYPES[detail.related_order.doc_type].name}>
               <Link
                 to={detail.related_order.path}
                 className="flex items-center justify-between gap-2 text-sm hover:underline"
@@ -411,7 +438,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
                 <DocStatus info={detail.related_order.status_info} />
               </Link>
               <p className="mt-1 text-xs text-muted-foreground">
-                {detail.related_order.supplier_name} · {money(detail.related_order.total)}
+                {detail.related_order.supplier_name || detail.related_order.customer_name} ·{' '}
+                {money(detail.related_order.total)}
               </p>
             </Section>
           )}
@@ -446,6 +474,39 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
         />
       )}
     </>
+  )
+}
+
+/** El crédito del cliente al lado del pedido: lo que Gerencia mira para autorizarlo. */
+function CreditSection({ detail }: { detail: DocumentDetail }) {
+  const so = detail.sales_order!
+  const { doc } = detail
+  const counts = !['BORRADOR', 'RECHAZADO', 'ANULADO'].includes(doc.status)
+  const withOrder = so.credit_used + doc.total
+  const over = so.credit_limit != null && withOrder > so.credit_limit + 1e-9
+  return (
+    <Section title="Crédito del cliente">
+      <dl className="flex flex-col gap-1.5 text-sm">
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Límite</dt>
+          <dd className="tabular">{so.credit_limit == null ? 'Sin límite' : money(so.credit_limit)}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Usado por otros pedidos y deudas</dt>
+          <dd className="tabular">{money(so.credit_used)}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">{counts ? 'Con este pedido' : 'Con este pedido (si se confirma)'}</dt>
+          <dd className={cn('tabular font-semibold', over ? 'text-red-700' : 'text-navy')}>{money(withOrder)}</dd>
+        </div>
+      </dl>
+      {/* Mientras espera a Gerencia, el motivo ya está en "¿Qué sigue?". */}
+      {so.credit_reason && doc.status !== 'PENDIENTE_APROBACION' && (
+        <p className="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+          Necesitó la autorización de Gerencia. {so.credit_reason}
+        </p>
+      )}
+    </Section>
   )
 }
 
@@ -725,6 +786,61 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
       </dl>
     )
   }
+  if (doc.doc_type === 'SALES_ORDER' && detail.sales_order) {
+    const so = detail.sales_order
+    const customer = detail.customer
+    return (
+      <dl className={grid}>
+        <InfoRow label="Cliente">{customer?.legal_name}</InfoRow>
+        <InfoRow label="CUIT (simulado)">
+          {customer?.tax_id || 'Sin CUIT'} · {customer ? VAT_CONDITIONS[customer.vat_condition] : ''}
+        </InfoRow>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Entrega pedida">{so.delivery_date ? date(so.delivery_date) : 'Sin fecha'}</InfoRow>
+        <InfoRow label="Entrega desde">{warehouse?.name}</InfoRow>
+        <InfoRow label="Condición de pago">
+          {so.payment_terms_days ? `${so.payment_terms_days} días` : 'Contado'}
+        </InfoRow>
+        <InfoRow label="Referencia del cliente">{so.customer_reference || '—'}</InfoRow>
+        <InfoRow label="Vendió">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'DELIVERY_NOTE' && detail.delivery) {
+    const { delivery, customer } = detail
+    return (
+      <dl className={grid}>
+        <InfoRow label="Pedido de venta">
+          {detail.related_order ? (
+            <Link className="font-mono hover:underline" to={detail.related_order.path}>
+              {detail.related_order.display_number}
+            </Link>
+          ) : (
+            '—'
+          )}
+        </InfoRow>
+        <InfoRow label="Cliente">{customer?.legal_name}</InfoRow>
+        <InfoRow label="Entregar en">
+          {customer ? `${customer.address_line}, ${customer.city} (${customer.province})` : '—'}
+        </InfoRow>
+        <InfoRow label="Transportista">{delivery.carrier_name || '—'}</InfoRow>
+        <InfoRow label="Sale de">{warehouse?.name}</InfoRow>
+        <InfoRow label="Despachado">
+          {delivery.dispatched_at ? dateTime(delivery.dispatched_at) : 'Todavía no (en preparación)'}
+        </InfoRow>
+        {delivery.dispatched_at && company.can('ledger.read') && (
+          <InfoRow label="Costo de lo vendido">{money(delivery.cost_total)}</InfoRow>
+        )}
+        <InfoRow label="Preparó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
   if (doc.doc_type === 'GOODS_RECEIPT' && doc.gr) {
     return (
       <dl className={grid}>
@@ -971,6 +1087,22 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
               </>
             )}
+            {doc.doc_type === 'SALES_ORDER' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Cantidad</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Precio unit.</TableHead>
+                <TableHead className={cn(head, 'text-right')}>IVA</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Entregado</TableHead>
+              </>
+            )}
+            {doc.doc_type === 'DELIVERY_NOTE' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Pedido</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Sale en este remito</TableHead>
+                <TableHead className={head}>Observaciones</TableHead>
+              </>
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1067,20 +1199,81 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
               )}
+              {doc.doc_type === 'SALES_ORDER' && (
+                <>
+                  <TableCell className="tabular text-right">
+                    {qty(l.quantity, l.product.uom_code)}
+                    {doc.status === 'BORRADOR' && l.qty_available != null && (
+                      <div
+                        className={cn(
+                          'text-xs',
+                          l.qty_available < l.quantity ? 'font-medium text-red-700' : 'text-muted-foreground',
+                        )}
+                      >
+                        Disponible: {qty(Math.max(l.qty_available, 0))}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="tabular text-right">
+                    {money(l.unit_price)}
+                    {!!l.list_price && (l.unit_price ?? 0) < l.list_price && (
+                      <div className="text-xs text-amber-700">
+                        Bonif. {Math.round((1 - (l.unit_price ?? 0) / l.list_price) * 1000) / 10}%
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
+                  <TableCell
+                    className={cn(
+                      'tabular text-right',
+                      (l.qty_delivered ?? 0) >= l.quantity
+                        ? 'text-green-700'
+                        : (l.qty_delivered ?? 0) > 0
+                          ? 'text-amber-700'
+                          : '',
+                    )}
+                  >
+                    {qty(l.qty_delivered)}
+                  </TableCell>
+                </>
+              )}
+              {doc.doc_type === 'DELIVERY_NOTE' && (
+                <>
+                  <TableCell className="tabular text-right">{qty(l.qty_ordered_so, l.product.uom_code)}</TableCell>
+                  <TableCell className="tabular text-right font-semibold">
+                    {qty(l.quantity, l.product.uom_code)}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{l.notes || '—'}</TableCell>
+                </>
+              )}
             </TableRow>
           ))}
         </TableBody>
-        {(doc.doc_type === 'PURCHASE_ORDER' || doc.doc_type === 'SUPPLIER_INVOICE') && (
+        {(doc.doc_type === 'PURCHASE_ORDER' ||
+          doc.doc_type === 'SUPPLIER_INVOICE' ||
+          doc.doc_type === 'SALES_ORDER') && (
           <TableFooter>
-            {/* En la OC queda una columna más a la derecha (lo recibido). */}
+            {/* En la OC y en el pedido de venta queda una columna más a la derecha (lo recibido o entregado). */}
             <TotalRow
               label="Subtotal neto"
               value={doc.subtotal}
-              span={6}
-              trailing={doc.doc_type === 'PURCHASE_ORDER'}
+              span={doc.doc_type === 'SALES_ORDER' ? 5 : 6}
+              trailing={doc.doc_type !== 'SUPPLIER_INVOICE'}
             />
-            <TotalRow label="IVA" value={doc.tax_total} span={6} trailing={doc.doc_type === 'PURCHASE_ORDER'} />
-            <TotalRow label="Total" value={doc.total} span={6} strong trailing={doc.doc_type === 'PURCHASE_ORDER'} />
+            <TotalRow
+              label="IVA"
+              value={doc.tax_total}
+              span={doc.doc_type === 'SALES_ORDER' ? 5 : 6}
+              trailing={doc.doc_type !== 'SUPPLIER_INVOICE'}
+            />
+            <TotalRow
+              label="Total"
+              value={doc.total}
+              span={doc.doc_type === 'SALES_ORDER' ? 5 : 6}
+              strong
+              trailing={doc.doc_type !== 'SUPPLIER_INVOICE'}
+            />
           </TableFooter>
         )}
         {doc.doc_type === 'SUPPLIER_QUOTE' && (

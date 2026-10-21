@@ -44,6 +44,8 @@ export interface DB {
   rfqSuppliers: T.RfqSupplier[]
   sqLines: T.SupplierQuoteLine[]
   brLines: T.BankReconciliationLine[]
+  soLines: T.SalesOrderLine[]
+  dnLines: T.DeliveryNoteLine[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -58,7 +60,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 7
+export const DB_VERSION = 8
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -101,6 +103,8 @@ const COLLECTIONS = [
   'rfqSuppliers',
   'sqLines',
   'brLines',
+  'soLines',
+  'dnLines',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -128,6 +132,8 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   rfqSuppliers: 6,
   sqLines: 6,
   brLines: 7,
+  soLines: 8,
+  dnLines: 8,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -198,6 +204,15 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.brLines ??= []
     for (const d of db.documents)
       if (d.op) d.op = { ...d.op, payment_method: d.op.payment_method ?? (d.op.paid_on ? 'TRANSFERENCIA' : null) }
+  },
+  // v7 → v8: pedidos de venta y remitos (Fase 4a) y las reglas del costo de lo vendido. Lo
+  // reservado sale de los pedidos en curso: el saldo de stock ya no lo guarda aparte.
+  7: (db) => {
+    db.soLines ??= []
+    db.dnLines ??= []
+    for (const b of db.stockBalances) delete (b as Partial<{ qty_reserved: number }>).qty_reserved
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
   },
 }
 

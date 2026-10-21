@@ -23,7 +23,7 @@ export function ProductSelect({
   disabled,
   ...aria
 }: {
-  products: Product[]
+  products: Pick<Product, 'id' | 'code' | 'name' | 'product_type'>[]
   value: string
   onChange: (id: string) => void
   placeholder?: string

@@ -249,6 +249,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     pendingRequisitionLines: (companyId) => rpc('requisition_lines_pending', company(companyId)),
     receivableOrders: (companyId) => rpc('orders_receivable', company(companyId)),
     invoiceableOrders: (companyId) => rpc('orders_invoiceable', company(companyId)),
+    salesCustomers: (companyId) => rpc('sales_customers', company(companyId)),
+    salesCatalog: (companyId) => rpc('sales_catalog', company(companyId)),
+    dispatchableOrders: (companyId) => rpc('orders_dispatchable', company(companyId)),
     payables: (companyId) => rpc('payables_list', company(companyId)),
     supplierAccount: (companyId, supplierId) =>
       rpc('supplier_account', { ...company(companyId), p_supplier_id: supplierId }),
@@ -349,6 +352,17 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     cancelFundsTransfer: (docId, reason) => rpc('ft_cancel', { ...doc(docId), p_reason: reason }),
     createBankReconciliation: (companyId, input) => rpc('br_create', { ...company(companyId), p_input: input }),
     cancelBankReconciliation: (docId, reason) => rpc('br_cancel', { ...doc(docId), p_reason: reason }),
+    createSalesOrder: (companyId, input, confirm) =>
+      rpc('so_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    confirmSalesOrder: (docId) => rpc('so_confirm', doc(docId)),
+    approveSalesOrder: (docId, comment) => rpc('so_approve', { ...doc(docId), p_comment: comment }),
+    rejectSalesOrder: (docId, reason) => rpc('so_reject', { ...doc(docId), p_reason: reason }),
+    cancelSalesOrder: (docId, reason) => rpc('so_cancel', { ...doc(docId), p_reason: reason }),
+    closeSalesOrder: (docId, reason) => rpc('so_close', { ...doc(docId), p_reason: reason }),
+    createDeliveryNote: (companyId, input, confirm) =>
+      rpc('dn_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    confirmDeliveryNote: (docId) => rpc('dn_confirm', doc(docId)),
+    cancelDeliveryNote: (docId, reason) => rpc('dn_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

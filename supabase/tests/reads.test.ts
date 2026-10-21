@@ -48,6 +48,8 @@ const DOC_TYPES: DocType[] = [
   'SUPPLIER_QUOTE',
   'FUNDS_TRANSFER',
   'BANK_RECONCILIATION',
+  'SALES_ORDER',
+  'DELIVERY_NOTE',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -144,7 +146,7 @@ describe('maestros y stock', () => {
   })
 
   it('ficha de producto con saldos y kardex', async () => {
-    const codes = ['MP-001', 'MP-004', 'IN-003', 'SV-001', 'NO-EXISTE']
+    const codes = ['MP-001', 'MP-004', 'IN-003', 'SV-001', 'PT-001', 'PT-003', 'NO-EXISTE']
     for (const u of USERS)
       for (const code of codes)
         await same(u, () => Q.productDetail(mock, userId(u), company, code), 'product_detail', [companyPg, code])
@@ -192,6 +194,16 @@ describe('documentos', () => {
       await same(u, () => Q.pendingRequisitionLines(mock, userId(u), company), 'requisition_lines_pending', [companyPg])
       await same(u, () => Q.receivableOrders(mock, userId(u), company), 'orders_receivable', [companyPg])
       await same(u, () => Q.invoiceableOrders(mock, userId(u), company), 'orders_invoiceable', [companyPg])
+    }
+  })
+})
+
+describe('ventas', () => {
+  it('clientes con su crédito, catálogo con lo disponible y pedidos para despachar', async () => {
+    for (const u of USERS) {
+      await same(u, () => Q.salesCustomers(mock, userId(u), company), 'sales_customers', [companyPg])
+      await same(u, () => Q.salesCatalog(mock, userId(u), company), 'sales_catalog', [companyPg])
+      await same(u, () => Q.dispatchableOrders(mock, userId(u), company), 'orders_dispatchable', [companyPg])
     }
   })
 })

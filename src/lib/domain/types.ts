@@ -18,7 +18,7 @@ export type RoleCode =
   | 'DOCENTE'
 
 export type ModuleCode =
-  'core' | 'masters' | 'purchasing' | 'inventory' | 'payables' | 'accounting' | 'management' | 'audit'
+  'core' | 'masters' | 'purchasing' | 'sales' | 'inventory' | 'payables' | 'accounting' | 'management' | 'audit'
 
 export type PermissionAction =
   'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award'
@@ -39,6 +39,8 @@ export type DocType =
   | 'SUPPLIER_QUOTE'
   | 'FUNDS_TRANSFER'
   | 'BANK_RECONCILIATION'
+  | 'SALES_ORDER'
+  | 'DELIVERY_NOTE'
 
 /** Cómo se pagó una orden de pago. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -60,7 +62,13 @@ export type TransitionAction =
 export type Badge = 'neutral' | 'info' | 'warning' | 'success' | 'danger'
 
 export type MovementType =
-  'STOCK_INICIAL' | 'RECEPCION_COMPRA' | 'ANULACION_RECEPCION' | 'AJUSTE_POSITIVO' | 'AJUSTE_NEGATIVO'
+  | 'STOCK_INICIAL'
+  | 'RECEPCION_COMPRA'
+  | 'ANULACION_RECEPCION'
+  | 'AJUSTE_POSITIVO'
+  | 'AJUSTE_NEGATIVO'
+  | 'DESPACHO_VENTA'
+  | 'ANULACION_DESPACHO'
 
 export type AdjustmentReason = 'INVENTARIO_INICIAL' | 'CONTEO_FISICO' | 'ROTURA' | 'CONSUMO_INTERNO' | 'OTRO'
 
@@ -342,6 +350,30 @@ export interface BankReconciliationHeader {
   pending_credits: number
 }
 
+/** Pedido de venta (tabla sales_orders, 1 a 1 con documents): qué compra el cliente, desde dónde se entrega y en qué condiciones. */
+export interface SalesOrderHeader {
+  /** Depósito desde el que se entrega: ahí se reserva el stock. */
+  warehouse_id: string
+  /** Fecha de entrega que pidió el cliente (opcional). */
+  delivery_date: string | null
+  payment_terms_days: number
+  /** Número de orden de compra del cliente u otra referencia suya. */
+  customer_reference: string
+  /** Por qué necesitó la autorización de Gerencia (crédito excedido o facturas vencidas); vacío si no. */
+  credit_reason: string
+  /** Cuándo quedó confirmado (por Ventas o con la autorización de Gerencia). */
+  confirmed_at: string | null
+}
+
+/** Remito (tabla delivery_notes, 1 a 1 con documents): lo que Depósito despacha de un pedido de venta. */
+export interface DeliveryNoteHeader {
+  sales_order_id: string
+  warehouse_id: string
+  carrier_name: string
+  /** Cuándo salió la mercadería (al despacharlo). */
+  dispatched_at: string | null
+}
+
 /** Un movimiento del mayor que figura en el extracto (tabla bank_reconciliation_lines). */
 export interface BankReconciliationLine {
   id: string
@@ -379,6 +411,8 @@ export interface Document extends Audited {
   sq?: SupplierQuoteHeader
   ft?: FundsTransferHeader
   br?: BankReconciliationHeader
+  so?: SalesOrderHeader
+  dn?: DeliveryNoteHeader
 }
 
 export interface RequisitionLine {
@@ -454,6 +488,38 @@ export interface PaymentOrderLine {
   line_no: number
   invoice_id: string
   amount: number
+}
+
+/** Un ítem del pedido de venta. Lo que falta entregar queda reservado mientras el pedido está en curso. */
+export interface SalesOrderLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  product_id: string
+  quantity: number
+  /** Precio de venta del producto al cargar el pedido: la bonificación se mide contra él. */
+  list_price: number
+  unit_price: number
+  vat_rate: number
+  line_subtotal: number
+  line_tax: number
+  line_total: number
+  qty_delivered: number
+}
+
+/** Un ítem del remito. */
+export interface DeliveryNoteLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  so_line_id: string
+  product_id: string
+  quantity: number
+  /** Costo unitario con que salió del depósito (el promedio al despacharlo); 0 en borrador y en los servicios. */
+  unit_cost: number
+  notes: string
 }
 
 /** Un ítem que se pide cotizar; puede atender una línea de solicitud de compra. */
@@ -583,7 +649,6 @@ export interface StockBalance {
   product_id: string
   warehouse_id: string
   qty_on_hand: number
-  qty_reserved: number
   avg_unit_cost: number
   last_movement_at: string | null
 }

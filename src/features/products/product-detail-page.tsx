@@ -192,7 +192,14 @@ export function ProductDetailPage() {
                 {data.balances.map((b) => (
                   <li key={b.warehouse_id} className="flex justify-between gap-2">
                     <span className="text-muted-foreground">{b.warehouse_name}</span>
-                    <span className="tabular font-medium">{qty(b.qty_on_hand, p.uom_code)}</span>
+                    <span className="text-right">
+                      <span className="tabular font-medium">{qty(b.qty_on_hand, p.uom_code)}</span>
+                      {b.qty_reserved > 0 && (
+                        <span className="block text-xs text-amber-700">
+                          {qty(b.qty_reserved)} reservados · {qty(b.qty_available)} disponibles
+                        </span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>

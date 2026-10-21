@@ -286,6 +286,59 @@ export function buildScenario(): DB {
   )
   E.cmdCancelBankReconciliation(as('contabilidad'), count.id, 'Era un arqueo, no un extracto')
 
+  // Ventas: pedidos en cada estado y remitos despachados (uno con el flete, otro
+  // parcial que deja una mesa bajo el mínimo), anulados y en preparación.
+  const customer = (code: string) => db.customers.find((c) => c.company_id === company && c.code === code)!.id
+  const salesOrder = (customerCode: string, lines: [string, number][]): E.SalesOrderInput => ({
+    customer_id: customer(customerCode),
+    warehouse_id: warehouse('DEP-PT'),
+    delivery_date: null,
+    payment_terms_days: 30,
+    customer_reference: '',
+    notes: '',
+    lines: lines.map(([code, quantity]) => ({
+      product_id: product(code).id,
+      quantity,
+      unit_price: product(code).sale_price!,
+    })),
+  })
+  const orderLines = (orderId: string) =>
+    db.soLines.filter((l) => l.document_id === orderId).sort((a, b) => a.line_no - b.line_no)
+  const delivery = (orderId: string, quantities?: number[]): E.DeliveryNoteInput => ({
+    sales_order_id: orderId,
+    carrier_name: 'Transporte propio',
+    notes: '',
+    lines: orderLines(orderId).map((l, i) => ({ so_line_id: l.id, quantity: quantities?.[i] ?? l.quantity })),
+  })
+  const demoOrder = (number: string) =>
+    db.documents.find((d) => d.company_id === company && d.display_number === number)!
+  const demoDelivery = db.documents.find((d) => d.company_id === company && d.doc_type === 'DELIVERY_NOTE')!
+  E.cmdConfirmDeliveryNote(as('deposito'), demoDelivery.id)
+  const credit = demoOrder('PV-00002')
+  E.cmdApproveSalesOrder(as('gerencia'), credit.id, 'Cliente de muchos años')
+  E.cmdCreateDeliveryNote(as('deposito'), company, delivery(credit.id, [1]), true)
+  E.cmdCreateDeliveryNote(as('deposito'), company, delivery(credit.id, [1]), false)
+  const returned = E.cmdCreateSalesOrder(
+    as('ventas'),
+    company,
+    salesOrder('CLI-002', [
+      ['PT-003', 2],
+      ['MR-001', 1],
+    ]),
+    true,
+  )
+  const returnedDelivery = E.cmdCreateDeliveryNote(as('deposito'), company, delivery(returned.id), true)
+  E.cmdCancelDeliveryNote(as('gerencia'), returnedDelivery.id, 'El cliente no estaba: la mercadería volvió')
+  const closedOrder = E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-003', [['PT-004', 2]]), true)
+  E.cmdCreateDeliveryNote(as('deposito'), company, delivery(closedOrder.id, [1]), true)
+  E.cmdCloseSalesOrder(as('ventas'), closedOrder.id, 'El cliente ya no quiere la segunda cama')
+  E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-008', [['PT-002', 3]]), false)
+  const rejectedOrder = E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-006', [['PT-004', 3]]), true)
+  E.cmdRejectSalesOrder(as('gerencia'), rejectedOrder.id, 'Supera el crédito: que pague la mitad por adelantado')
+  const cancelledOrder = E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-010', [['PT-002', 1]]), false)
+  E.cmdCancelSalesOrder(as('ventas'), cancelledOrder.id, 'Se cargó al cliente equivocado')
+  E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-005', [['SV-001', 1]]), true)
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

@@ -15,6 +15,7 @@ import {
   ClipboardList,
   FileSearch,
   GraduationCap,
+  Handshake,
   History,
   Inbox,
   Landmark,
@@ -23,6 +24,7 @@ import {
   NotebookPen,
   Package,
   PackageCheck,
+  PackageOpen,
   ReceiptText,
   Scale,
   ScrollText,
@@ -85,6 +87,10 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    label: 'Ventas',
+    items: [{ label: 'Pedidos de venta', path: 'ventas/pedidos', icon: Handshake, permission: 'sales_order.read' }],
+  },
+  {
     label: 'Pagos y tesorería',
     items: [
       { label: 'Cuentas corrientes', path: 'pagos/proveedores', icon: Wallet, permission: 'payable.read' },
@@ -110,6 +116,7 @@ export const NAV: NavGroup[] = [
     label: 'Depósito',
     items: [
       { label: 'Recepciones', path: 'deposito/recepciones', icon: PackageCheck, permission: 'goods_receipt.read' },
+      { label: 'Remitos', path: 'deposito/remitos', icon: PackageOpen, permission: 'delivery_note.read' },
       { label: 'Stock', path: 'stock', icon: Boxes, permission: 'stock.read' },
       {
         label: 'Ajustes de stock',
