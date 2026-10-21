@@ -50,6 +50,12 @@ import {
   rfqLinesOf,
   round2,
   round3,
+  INVOICED_SALES_STATUSES,
+  salesInvoicedQuantity,
+  salesInvoiceLabel,
+  salesInvoiceLines,
+  salesInvoicePending,
+  salesLetter,
   salesOrderLines,
   type AccountLine,
 } from './engine'
@@ -377,6 +383,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.soLines.filter((l) => l.document_id === doc.id).length
     case 'DELIVERY_NOTE':
       return db.dnLines.filter((l) => l.document_id === doc.id).length
+    case 'SALES_INVOICE':
+      return db.fvLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -405,6 +413,8 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return salesOrderLines(db, doc.id)
     case 'DELIVERY_NOTE':
       return deliveryNoteLines(db, doc.id)
+    case 'SALES_INVOICE':
+      return salesInvoiceLines(db, doc.id)
   }
 }
 
@@ -493,6 +503,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'BANK_RECONCILIATION',
     'SALES_ORDER',
     'DELIVERY_NOTE',
+    'SALES_INVOICE',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -636,6 +647,10 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
   }
   return result
 }
+
+/** El pedido tiene algo entregado y todavía sin facturar. */
+const uninvoicedDelivery = (db: DB, doc: T.Document) =>
+  salesOrderLines(db, doc.id).some((l) => l.qty_delivered - salesInvoicedQuantity(db, l.id) > 1e-9)
 
 /** Por qué no se puede confirmar, autorizar, anular o cerrar un pedido de venta; null si se puede. */
 function salesOrderActionReason(db: DB, userId: string, doc: T.Document, action: T.TransitionAction) {
@@ -855,7 +870,26 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         text: 'Falta entregar el saldo, que sigue reservado. Si no se va a entregar, Ventas puede cerrar el saldo con motivo.',
       }
     case 'SALES_ORDER:ENTREGADO':
-      return { who: 'Ventas', text: 'Se entregó todo lo pedido: lo que sigue es facturarlo.' }
+      return uninvoicedDelivery(db, doc)
+        ? { who: 'Ventas', text: 'Se entregó todo lo pedido: falta facturar lo entregado.' }
+        : {
+            who: '—',
+            text: 'Se entregó y se facturó todo lo pedido: la deuda está en la cuenta corriente del cliente.',
+          }
+    case 'SALES_ORDER:CERRADO':
+      return uninvoicedDelivery(db, doc)
+        ? { who: 'Ventas', text: 'Se cerró con saldo sin entregar: falta facturar lo que sí se entregó.' }
+        : { who: '—', text: DOC_STATUSES.SALES_ORDER.CERRADO.description }
+    case 'SALES_INVOICE:BORRADOR':
+      return {
+        who: 'Ventas',
+        text: 'Revisar las cantidades contra lo entregado y registrar la factura: se le asigna el número y se generan el asiento de venta y la deuda del cliente.',
+      }
+    case 'SALES_INVOICE:REGISTRADA':
+      return {
+        who: 'Tesorería',
+        text: `La deuda está en la cuenta corriente del cliente y vence el ${date(doc.fv?.due_date)}. Se cancela cuando el cliente paga, con un recibo de cobro.`,
+      }
     case 'SALES_ORDER:RECHAZADO':
       return {
         who: 'Ventas',
@@ -911,9 +945,10 @@ export interface DetailLine {
   unit_cost?: number
   // FP: precio pactado en la OC, para mostrar la diferencia
   order_unit_price?: number
-  // PV: precio de venta del producto (la bonificación se mide contra él), lo entregado y lo disponible
+  // PV: precio de venta del producto (la bonificación se mide contra él), lo entregado, lo facturado y lo disponible
   list_price?: number
   qty_delivered?: number
+  qty_invoiced?: number
   /** En el depósito del pedido, sin lo reservado para otros pedidos; null en los servicios. */
   qty_available?: number | null
   // REM
@@ -1286,6 +1321,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
         line_tax: l.line_tax,
         line_total: l.line_total,
         qty_delivered: l.qty_delivered,
+        qty_invoiced: salesInvoicedQuantity(db, l.id),
         qty_available: p.is_stockable
           ? round3(
               onHandQuantity(db, p.id, doc.so!.warehouse_id) - reservedQuantity(db, p.id, doc.so!.warehouse_id, doc.id),
@@ -1311,6 +1347,26 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
       }
     })
   }
+  if (doc.doc_type === 'SALES_INVOICE') {
+    lines = salesInvoiceLines(db, doc.id).map((l) => {
+      const sl = db.soLines.find((x) => x.id === l.so_line_id)!
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        product: product(l.product_id),
+        quantity: l.quantity,
+        notes: '',
+        so_line_id: l.so_line_id,
+        qty_ordered_so: sl.quantity,
+        qty_delivered: sl.qty_delivered,
+        unit_price: l.unit_price,
+        vat_rate: l.vat_rate,
+        line_subtotal: l.line_subtotal,
+        line_tax: l.line_tax,
+        line_total: l.line_total,
+      }
+    })
+  }
   const warehouseId =
     doc.po?.warehouse_id ??
     doc.gr?.warehouse_id ??
@@ -1318,7 +1374,8 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     doc.rq?.warehouse_id ??
     doc.so?.warehouse_id ??
     doc.dn?.warehouse_id
-  const orderId = doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id ?? doc.dn?.sales_order_id
+  const orderId =
+    doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id ?? doc.dn?.sales_order_id ?? doc.fv?.sales_order_id
   const relatedOrder = orderId ? db.documents.find((d) => d.id === orderId) : undefined
   const history = db.audit.filter((e) => e.document_id === doc.id).sort((a, b) => a.id - b.id)
   const firstBy = (actions: string[]) => {
@@ -1377,10 +1434,15 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                             { label: 'Despachó', ...firstBy(['CONFIRM', 'CREATE']) },
                             { label: 'Recibió conforme (cliente)', name: '', sector: '', at: '' },
                           ]
-                        : [
-                            { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                            { label: 'Controló', name: '', sector: '', at: '' },
-                          ]
+                        : doc.doc_type === 'SALES_INVOICE'
+                          ? [
+                              { label: 'Emitió', ...firstBy(['CONFIRM', 'CREATE']) },
+                              { label: 'Controló', name: '', sector: '', at: '' },
+                            ]
+                          : [
+                              { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                              { label: 'Controló', name: '', sector: '', at: '' },
+                            ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -2142,6 +2204,185 @@ export function dispatchableOrders(db: DB, userId: string, companyId: string): D
         .filter((x) => x.pending > 1e-9),
     }))
     .filter((o) => o.lines.length)
+}
+
+export interface InvoiceableSalesOrder {
+  order: DocumentListItem
+  /** La letra que tendrá la factura (según la condición del cliente). */
+  letter: T.SalesInvoiceHeader['letter']
+  lines: {
+    line: T.SalesOrderLine
+    product: T.Product
+    invoiced: number
+    /** Entregado menos facturado: lo que todavía se puede facturar. */
+    pending: number
+  }[]
+}
+
+/** Pedidos con algo entregado y todavía sin facturar (para emitir la factura de venta). */
+export function invoiceableSalesOrders(db: DB, userId: string, companyId: string): InvoiceableSalesOrder[] {
+  assertPerm(db, userId, companyId, 'sales_invoice.create')
+  const company = db.companies.find((c) => c.id === companyId)!
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'SALES_ORDER' &&
+        ['ENTREGADO_PARCIAL', 'ENTREGADO', 'CERRADO'].includes(d.status),
+    )
+    .sort((a, b) => a.number - b.number)
+    .map((d) => ({
+      order: listItem(db, d),
+      letter: salesLetter(
+        company,
+        db.customers.find((c) => c.id === d.customer_id)!,
+      ),
+      lines: salesOrderLines(db, d.id)
+        .map((l) => {
+          const invoiced = salesInvoicedQuantity(db, l.id)
+          return {
+            line: l,
+            product: db.products.find((p) => p.id === l.product_id)!,
+            invoiced,
+            pending: round3(l.qty_delivered - invoiced),
+          }
+        })
+        .filter((x) => x.pending > 1e-9),
+    }))
+    .filter((o) => o.lines.length)
+}
+
+// ============================================================ Cuentas corrientes de clientes (docs/FASE_4_VENTAS_Y_CLIENTES.md §4)
+
+export interface ReceivableInvoice {
+  id: string
+  display_number: string
+  path: string
+  /** Comprobante: "A 00001-00000012". */
+  invoice_label: string
+  document_date: string
+  due_date: string
+  total: number
+  collected: number
+  pending: number
+  overdue: boolean
+}
+
+export interface ReceivableRow {
+  customer: {
+    id: string
+    code: string
+    legal_name: string
+    tax_id: string
+    payment_terms_days: number
+    credit_limit: number | null
+  }
+  balance: number
+  invoices: number
+  overdue: number
+  next_due: string | null
+}
+
+function receivableInvoice(db: DB, doc: T.Document, today: string): ReceivableInvoice {
+  const pending = salesInvoicePending(db, doc)
+  return {
+    id: doc.id,
+    display_number: doc.display_number,
+    path: docPath(db, doc),
+    invoice_label: salesInvoiceLabel(doc.fv!),
+    document_date: doc.document_date,
+    due_date: doc.fv!.due_date,
+    total: doc.total,
+    collected: round2(doc.total - pending),
+    pending,
+    overdue: doc.fv!.due_date < today && pending > 0,
+  }
+}
+
+/** Facturas de venta registradas (que generaron deuda) de una empresa. */
+function registeredSalesInvoices(db: DB, companyId: string) {
+  return db.documents.filter(
+    (d) => d.company_id === companyId && d.doc_type === 'SALES_INVOICE' && INVOICED_SALES_STATUSES.includes(d.status),
+  )
+}
+
+/** Lo que debe cada cliente con facturas registradas, por código. */
+export function listReceivables(db: DB, userId: string, companyId: string): ReceivableRow[] {
+  assertPerm(db, userId, companyId, 'receivable.read')
+  const today = todayAR()
+  const invoices = registeredSalesInvoices(db, companyId)
+  return db.customers
+    .filter((c) => c.company_id === companyId && invoices.some((d) => d.customer_id === c.id))
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((c) => {
+      const pending = invoices
+        .filter((d) => d.customer_id === c.id)
+        .map((d) => receivableInvoice(db, d, today))
+        .filter((i) => i.pending > 0)
+      const dues = pending.map((i) => i.due_date).sort(compareCodes)
+      return {
+        customer: {
+          id: c.id,
+          code: c.code,
+          legal_name: c.legal_name,
+          tax_id: c.tax_id,
+          payment_terms_days: c.payment_terms_days,
+          credit_limit: c.credit_limit,
+        },
+        balance: round2(pending.reduce((sum, i) => sum + i.pending, 0)),
+        invoices: pending.length,
+        overdue: round2(pending.filter((i) => i.overdue).reduce((sum, i) => sum + i.pending, 0)),
+        next_due: dues[0] ?? null,
+      }
+    })
+}
+
+export interface CustomerAccountMovement {
+  document_id: string
+  display_number: string
+  path: string
+  date: string
+  description: string
+  /** Debe: lo que se le facturó (aumenta su deuda). Haber: lo que pagó. */
+  debit: number
+  credit: number
+  balance: number
+}
+
+export interface CustomerAccount {
+  customer: T.Customer
+  movements: CustomerAccountMovement[]
+  pending: ReceivableInvoice[]
+  balance: number
+  /** El crédito que usa: lo que debe más lo pedido sin facturar. */
+  credit_used: number
+}
+
+/** Cuenta corriente de un cliente: facturas (y, desde 4c, cobros) con saldo acumulado, y las facturas pendientes. */
+export function customerAccount(db: DB, userId: string, companyId: string, customerId: string): CustomerAccount | null {
+  assertPerm(db, userId, companyId, 'receivable.read')
+  const customer = db.customers.find((c) => c.id === customerId && c.company_id === companyId)
+  if (!customer) return null
+  const today = todayAR()
+  const invoices = registeredSalesInvoices(db, companyId)
+    .filter((d) => d.customer_id === customer.id)
+    .sort((a, b) => compareCodes(a.document_date, b.document_date) || a.number - b.number)
+  let balance = 0
+  const movements = invoices.map((d) => {
+    balance = round2(balance + d.total)
+    return {
+      document_id: d.id,
+      display_number: d.display_number,
+      path: docPath(db, d),
+      date: d.document_date,
+      description: `Factura ${salesInvoiceLabel(d.fv!)}`,
+      debit: d.total,
+      credit: 0,
+      balance,
+    }
+  })
+  const pending = invoices.map((d) => receivableInvoice(db, d, today)).filter((i) => i.pending > 0)
+  return { customer, movements, pending, balance, credit_used: customerCreditUsed(db, customer.id) }
 }
 
 // ============================================================ Cuentas corrientes de proveedores

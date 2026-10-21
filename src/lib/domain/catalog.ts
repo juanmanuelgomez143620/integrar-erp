@@ -44,6 +44,8 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   rfq: 'purchasing',
   supplier_quote: 'purchasing',
   sales_order: 'sales',
+  sales_invoice: 'sales',
+  receivable: 'sales',
   goods_receipt: 'inventory',
   delivery_note: 'inventory',
   stock: 'inventory',
@@ -132,6 +134,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read',
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
+    'sales_invoice.read', 'receivable.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -148,6 +151,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   VENTAS: [
     ...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read',
     'sales_order.read', 'sales_order.create', 'sales_order.cancel', 'delivery_note.read',
+    'sales_invoice.read', 'sales_invoice.create', 'sales_invoice.cancel', 'receivable.read',
   ],
   DEPOSITO: [
     ...CORE_READ,
@@ -174,19 +178,22 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'posting_rule.update',
     'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read', 'funds_transfer.read',
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
-    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read',
+    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
+    'receivable.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
     'supplier_invoice.read', 'payable.read',
     'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
     'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel', 'bank_reconciliation.read',
-    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read',
+    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
+    'receivable.read',
   ],
   RRHH: [...CORE_READ],
   IMPUESTOS: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
-    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read',
+    'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
+    'receivable.read',
   ],
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
@@ -201,7 +208,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
-    'sales_order.read', 'delivery_note.read',
+    'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read',
   ],
   DOCENTE: [],
 }
@@ -285,6 +292,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'DELIVERY_NOTE', prefix: 'REM', name: 'Remito', plural: 'Remitos',
     resource: 'delivery_note', module: 'inventory', path: 'deposito/remitos',
     description: 'Constancia de la mercadería que sale del depósito para un cliente, contra su pedido de venta. Descuenta el stock y registra el costo de lo vendido.',
+  },
+  SALES_INVOICE: {
+    code: 'SALES_INVOICE', prefix: 'FV', name: 'Factura de venta', plural: 'Facturas de venta',
+    resource: 'sales_invoice', module: 'sales', path: 'ventas/facturas',
+    description: 'Comprobante simulado que la empresa le emite al cliente por lo que se le entregó. Al registrarse genera el asiento de venta y la deuda del cliente en su cuenta corriente.',
   },
 }
 
@@ -382,6 +394,11 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     BORRADOR: { label: 'En preparación', badge: 'neutral', final: false, description: 'Depósito prepara la mercadería: todavía no movió stock.' },
     CONFIRMADO: { label: 'Despachado', badge: 'success', final: true, description: 'La mercadería salió del depósito: bajó el stock y se registró el costo de lo vendido.' },
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba despachado, la mercadería volvió al depósito y un contraasiento revirtió su costo.' },
+  },
+  SALES_INVOICE: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Ventas la está preparando: todavía no tiene número ni generó deuda.' },
+    REGISTRADA: { label: 'Registrada', badge: 'info', final: false, description: 'Emitida: está en la cuenta corriente del cliente y en el libro diario. Falta cobrarla.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba registrada, un contraasiento revirtió la venta y su número no se vuelve a usar.' },
   },
 }
 
@@ -517,6 +534,11 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('DELIVERY_NOTE', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'delivery_note.create', 'Despachar', 'La mercadería sale del depósito: baja el stock, se libera la reserva y se registra el costo de lo vendido.'),
   t('DELIVERY_NOTE', 'BORRADOR', 'CANCEL', 'ANULADO', 'delivery_note.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
   t('DELIVERY_NOTE', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'delivery_note.cancel', 'Anular con contramovimiento', 'La mercadería vuelve al depósito y un contraasiento revierte su costo. Debe hacerlo otro usuario.', true, 'destructive'),
+
+  // Factura de venta
+  t('SALES_INVOICE', 'BORRADOR', 'CONFIRM', 'REGISTRADA', 'sales_invoice.create', 'Registrar factura', 'Le asigna el número, controla las cantidades contra lo entregado y genera el asiento de venta y la deuda del cliente.'),
+  t('SALES_INVOICE', 'BORRADOR', 'CANCEL', 'ANULADA', 'sales_invoice.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('SALES_INVOICE', 'REGISTRADA', 'CANCEL', 'ANULADA', 'sales_invoice.cancel', 'Anular con contraasiento', 'Revierte el asiento de venta y la deuda del cliente. Sólo si todavía no tiene cobros.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -584,6 +606,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'SALES_ORDER', status: 'CONFIRMADO', taskType: 'DESPACHAR_PEDIDO', assignee: 'ROLE', role: 'DEPOSITO', title: 'Preparar y despachar {number}', description: 'Preparar la mercadería reservada, cargar el remito y despacharlo.' },
   { docType: 'SALES_ORDER', status: 'ENTREGADO_PARCIAL', taskType: 'DESPACHAR_PEDIDO', assignee: 'ROLE', role: 'DEPOSITO', title: 'Despachar el saldo de {number}', description: 'Queda mercadería reservada pendiente de entrega.' },
   { docType: 'DELIVERY_NOTE', status: 'BORRADOR', taskType: 'DESPACHAR_REMITO', assignee: 'CREATOR', title: 'Despachar {number}', description: 'Controlar la mercadería preparada contra el remito y despacharlo.' },
+  { docType: 'SALES_INVOICE', status: 'BORRADOR', taskType: 'REGISTRAR_FV', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar las cantidades contra lo entregado y registrar la factura de venta.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -606,6 +629,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   AUTORIZAR_CREDITO: 'Autorizar crédito',
   DESPACHAR_PEDIDO: 'Despachar pedido',
   DESPACHAR_REMITO: 'Despachar remito',
+  REGISTRAR_FV: 'Registrar factura de venta',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -715,6 +739,16 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     keys: {
       // La contrapartida es la caja o el banco de la orden, no una regla.
       PROVEEDORES: 'Deuda con el proveedor que se cancela',
+    },
+  },
+  VENTA: {
+    label: 'Venta (factura de venta registrada)',
+    keys: {
+      PRODUCTO_TERMINADO: 'Productos terminados vendidos',
+      MERCADERIA_REVENTA: 'Mercaderías de reventa vendidas',
+      SERVICIO: 'Servicios cobrados al cliente',
+      IVA_DEBITO: 'IVA de la factura',
+      DEUDORES: 'Lo que debe el cliente',
     },
   },
   COSTO_VENTA: {

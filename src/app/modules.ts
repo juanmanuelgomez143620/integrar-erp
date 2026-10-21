@@ -88,7 +88,11 @@ export const NAV: NavGroup[] = [
   },
   {
     label: 'Ventas',
-    items: [{ label: 'Pedidos de venta', path: 'ventas/pedidos', icon: Handshake, permission: 'sales_order.read' }],
+    items: [
+      { label: 'Pedidos de venta', path: 'ventas/pedidos', icon: Handshake, permission: 'sales_order.read' },
+      { label: 'Facturas de venta', path: 'ventas/facturas', icon: ReceiptText, permission: 'sales_invoice.read' },
+      { label: 'Cuentas corrientes', path: 'ventas/clientes', icon: Wallet, permission: 'receivable.read' },
+    ],
   },
   {
     label: 'Pagos y tesorería',

@@ -3674,42 +3674,92 @@ const amountWithVat = (quantity: number, unitPrice: number, vatRate: number) => 
   return round2(net + round2((net * vatRate) / 100))
 }
 
+/** Facturas de venta que generaron deuda (registradas; desde 4c, también las cobradas en parte). */
+export const INVOICED_SALES_STATUSES = ['REGISTRADA']
+
+/** Lo facturado de un ítem del pedido en facturas registradas (salvo una). */
+export function salesInvoicedQuantity(db: DB, soLineId: string, exceptDocId?: string) {
+  const docs = new Set(
+    db.documents
+      .filter(
+        (d) => d.doc_type === 'SALES_INVOICE' && INVOICED_SALES_STATUSES.includes(d.status) && d.id !== exceptDocId,
+      )
+      .map((d) => d.id),
+  )
+  return round3(
+    db.fvLines.filter((l) => l.so_line_id === soLineId && docs.has(l.document_id)).reduce((s, l) => s + l.quantity, 0),
+  )
+}
+
+/** Lo que falta cobrar de una factura de venta registrada (desde 4c le restan los cobros). */
+export const salesInvoicePending = (_db: DB, invoice: T.Document) => round2(invoice.total)
+
+/** Facturas de venta registradas de un cliente, por número. */
+function customerInvoices(db: DB, customerId: string) {
+  return db.documents
+    .filter(
+      (d) =>
+        d.doc_type === 'SALES_INVOICE' && d.customer_id === customerId && INVOICED_SALES_STATUSES.includes(d.status),
+    )
+    .sort((a, b) => a.number - b.number)
+}
+
 /**
  * Lo que un pedido usa del crédito del cliente, con IVA: lo pedido (si sigue en
- * curso) o lo entregado (si terminó). La factura (4b) lo pasa a la deuda.
+ * curso) o lo entregado (si terminó), menos lo que ya se facturó (eso está en
+ * la deuda del cliente).
  */
 function creditUsedByOrder(db: DB, order: T.Document) {
   const finished = !ACTIVE_SALES_STATUSES.includes(order.status)
   return round2(
-    salesOrderLines(db, order.id).reduce(
-      (s, l) => s + amountWithVat(finished ? l.qty_delivered : l.quantity, l.unit_price, l.vat_rate),
-      0,
-    ),
-  )
-}
-
-/** El crédito que usa un cliente: sus pedidos todavía sin facturar (salvo uno). */
-export function customerCreditUsed(db: DB, customerId: string, exceptDocId?: string) {
-  return round2(
-    db.documents
-      .filter(
-        (d) =>
-          d.doc_type === 'SALES_ORDER' &&
-          d.customer_id === customerId &&
-          CREDIT_STATUSES.includes(d.status) &&
-          d.id !== exceptDocId,
+    salesOrderLines(db, order.id).reduce((s, l) => {
+      const uninvoiced = Math.max(
+        round3((finished ? l.qty_delivered : l.quantity) - salesInvoicedQuantity(db, l.id)),
+        0,
       )
-      .reduce((s, d) => s + creditUsedByOrder(db, d), 0),
+      return s + amountWithVat(uninvoiced, l.unit_price, l.vat_rate)
+    }, 0),
   )
 }
 
-/** Por qué el pedido necesita la autorización de Gerencia; vacío si alcanza el crédito. */
+/** El crédito que usa un cliente: sus facturas sin cobrar y sus pedidos todavía sin facturar (salvo uno). */
+export function customerCreditUsed(db: DB, customerId: string, exceptDocId?: string) {
+  const orders = db.documents
+    .filter(
+      (d) =>
+        d.doc_type === 'SALES_ORDER' &&
+        d.customer_id === customerId &&
+        CREDIT_STATUSES.includes(d.status) &&
+        d.id !== exceptDocId,
+    )
+    .reduce((s, d) => s + creditUsedByOrder(db, d), 0)
+  const invoices = customerInvoices(db, customerId).reduce((s, d) => s + salesInvoicePending(db, d), 0)
+  return round2(orders + invoices)
+}
+
+/** Lo vencido y sin cobrar de un cliente: el cliente moroso. */
+export function customerOverdue(db: DB, customerId: string, today: string) {
+  return round2(
+    customerInvoices(db, customerId)
+      .filter((d) => d.fv!.due_date < today)
+      .reduce((s, d) => s + salesInvoicePending(db, d), 0),
+  )
+}
+
+/** Por qué el pedido necesita la autorización de Gerencia (cliente moroso o sin crédito); vacío si no. */
 function creditReason(db: DB, doc: T.Document) {
   const customer = db.customers.find((c) => c.id === doc.customer_id)!
-  if (customer.credit_limit == null) return ''
-  const used = round2(customerCreditUsed(db, customer.id, doc.id) + doc.total)
-  if (used <= customer.credit_limit + EPS) return ''
-  return `Supera el límite de crédito de ${customer.legal_name} (${money(customer.credit_limit)}): con este pedido llegaría a ${money(used)} entre lo que debe y lo pedido sin facturar.`
+  const reasons: string[] = []
+  const overdue = customerOverdue(db, customer.id, businessDate(getCompany(db, doc.company_id)))
+  if (overdue > EPS) reasons.push(`${customer.legal_name} tiene facturas vencidas sin cobrar por ${money(overdue)}.`)
+  if (customer.credit_limit != null) {
+    const used = round2(customerCreditUsed(db, customer.id, doc.id) + doc.total)
+    if (used > customer.credit_limit + EPS)
+      reasons.push(
+        `Supera el límite de crédito de ${customer.legal_name} (${money(customer.credit_limit)}): con este pedido llegaría a ${money(used)} entre lo que debe y lo pedido sin facturar.`,
+      )
+  }
+  return reasons.join(' ')
 }
 
 function validateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrderInput) {
@@ -4145,6 +4195,19 @@ export function cmdCancelDeliveryNote(ctx: Ctx, docId: string, reason: string) {
   const order = getDoc(db, doc.dn!.sales_order_id, 'SALES_ORDER')
   if (order.status === 'CERRADO')
     fail('TRANSICION_INVALIDA', `${order.display_number} está cerrado: el remito ya no puede anularse.`)
+  // Lo facturado nunca queda por encima de lo entregado.
+  for (const line of deliveryNoteLines(db, doc.id)) {
+    const sl = db.soLines.find((x) => x.id === line.so_line_id)!
+    const invoiced = salesInvoicedQuantity(db, sl.id)
+    if (invoiced > round3(sl.qty_delivered - line.quantity) + EPS) {
+      const p = getProduct(db, doc.company_id, line.product_id)
+      fail(
+        'TRANSICION_INVALIDA',
+        `No se puede anular ${doc.display_number}: de ${p.code} ya se facturaron ${fmtQty(invoiced, p.uom_code)}. Primero hay que anular la factura de venta.`,
+        'Lo facturado nunca puede superar lo entregado (control por oposición).',
+      )
+    }
+  }
   const entry = automaticEntryOf(db, doc.id)
   const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulado: ${comment}`, true) : null
   transition(ctx, doc, 'CANCEL', {
@@ -4169,6 +4232,220 @@ export function cmdCancelDeliveryNote(ctx: Ctx, docId: string, reason: string) {
     })
   }
   recomputeSalesOrder(ctx, order.id)
+}
+
+// ============================================================ Facturas de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §4)
+
+export interface SalesInvoiceInput {
+  sales_order_id: string
+  notes: string
+  /** Lo que se factura de cada ítem del pedido, a su precio. */
+  lines: { so_line_id: string; quantity: number }[]
+}
+
+/** Punto de venta de los comprobantes simulados. */
+export const SALES_POINT_OF_SALE = '00001'
+
+/** Pedidos con algo entregado que se puede facturar. */
+const INVOICEABLE_SALES_STATUSES = ['ENTREGADO_PARCIAL', 'ENTREGADO', 'CERRADO']
+
+/**
+ * Letra de la factura (a validar): la empresa responsable inscripta emite A a
+ * responsables inscriptos y monotributistas (Ley 27.618) y B a exentos y
+ * consumidores finales; si no es responsable inscripta, C.
+ */
+export function salesLetter(company: T.Company, customer: T.Customer): T.SalesInvoiceHeader['letter'] {
+  if (company.vat_condition !== 'RESPONSABLE_INSCRIPTO') return 'C'
+  return customer.vat_condition === 'RESPONSABLE_INSCRIPTO' || customer.vat_condition === 'MONOTRIBUTO' ? 'A' : 'B'
+}
+
+export const salesInvoiceLabel = (fv: T.SalesInvoiceHeader) =>
+  `${fv.letter} ${fv.point_of_sale}-${fv.invoice_number || 'sin número'}`
+
+export const salesInvoiceLines = (db: DB, docId: string) =>
+  db.fvLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** Control por oposición: no se factura más de lo entregado menos lo ya facturado. */
+function assertSalesInvoiceable(db: DB, sl: T.SalesOrderLine, quantity: number) {
+  const invoiced = salesInvoicedQuantity(db, sl.id)
+  const available = round3(sl.qty_delivered - invoiced)
+  if (quantity > available + EPS) {
+    const p = db.products.find((x) => x.id === sl.product_id)!
+    fail(
+      'CANTIDAD_EXCEDIDA',
+      `${p.code}: se entregaron ${fmtQty(sl.qty_delivered, p.uom_code)} y ya se facturaron ${fmtQty(invoiced, p.uom_code)}; como mucho se pueden facturar ${fmtQty(Math.max(available, 0), p.uom_code)}.`,
+      'Se factura lo que efectivamente salió: la factura se controla contra el pedido y los remitos.',
+    )
+  }
+}
+
+export function cmdCreateSalesInvoice(ctx: Ctx, companyId: string, input: SalesInvoiceInput, register: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'sales_invoice.create')
+  const order = db.documents.find(
+    (d) => d.id === input.sales_order_id && d.company_id === companyId && d.doc_type === 'SALES_ORDER',
+  )
+  if (!order) fail('DATO_INVALIDO', 'Elegí el pedido de venta que se factura.')
+  if (!INVOICEABLE_SALES_STATUSES.includes(order.status))
+    fail(
+      'TRANSICION_INVALIDA',
+      `${order.display_number} está "${statusLabel('SALES_ORDER', order.status)}": se factura lo entregado, y todavía no salió nada.`,
+    )
+  for (const line of input.lines) {
+    if (!Number.isFinite(line.quantity) || line.quantity < 0 || round3(line.quantity) !== line.quantity)
+      fail('DATO_INVALIDO', 'Las cantidades deben ser números mayores o iguales que cero (hasta 3 decimales).')
+  }
+  const lines = input.lines.filter((l) => l.quantity > 0)
+  if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué se factura de al menos un ítem.')
+  const byLine = new Map<string, number>()
+  for (const line of lines) {
+    const sl = db.soLines.find((l) => l.id === line.so_line_id && l.document_id === order.id)
+    if (!sl) fail('DATO_INVALIDO', 'Uno de los ítems no es del pedido de venta.')
+    const total = round3((byLine.get(sl.id) ?? 0) + line.quantity)
+    byLine.set(sl.id, total)
+    assertSalesInvoiceable(db, sl, total)
+  }
+  const company = getCompany(db, companyId)
+  const customer = db.customers.find((c) => c.id === order.customer_id)!
+  const fv: T.SalesInvoiceHeader = {
+    sales_order_id: order.id,
+    letter: salesLetter(company, customer),
+    point_of_sale: SALES_POINT_OF_SALE,
+    invoice_number: '',
+    due_date: addDays(businessDate(company), order.so!.payment_terms_days),
+    registered_at: null,
+  }
+  const doc = newDocument(ctx, companyId, 'SALES_INVOICE', actor, {
+    customer_id: customer.id,
+    notes: input.notes.trim(),
+    fv,
+  })
+  lines.forEach((l, i) => {
+    const sl = db.soLines.find((x) => x.id === l.so_line_id)!
+    const subtotal = round2(l.quantity * sl.unit_price)
+    const tax = round2((subtotal * sl.vat_rate) / 100)
+    db.fvLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      so_line_id: sl.id,
+      product_id: sl.product_id,
+      quantity: l.quantity,
+      unit_price: sl.unit_price,
+      vat_rate: sl.vat_rate,
+      line_subtotal: subtotal,
+      line_tax: tax,
+      line_total: round2(subtotal + tax),
+    })
+  })
+  const docLines = salesInvoiceLines(db, doc.id)
+  doc.subtotal = round2(docLines.reduce((s, l) => s + l.line_subtotal, 0))
+  doc.tax_total = round2(docLines.reduce((s, l) => s + l.line_tax, 0))
+  doc.total = round2(doc.subtotal + doc.tax_total)
+  link(ctx, companyId, order.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'sales_invoice',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: factura ${fv.letter} a ${customer.legal_name} por ${money(doc.total)} contra ${order.display_number}`,
+  })
+  if (register) registerSalesInvoice(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/**
+ * Registrar: controla otra vez las cantidades, le asigna el número correlativo
+ * de su letra y la fecha de hoy (vence según la condición del pedido), y
+ * genera el asiento de venta y la deuda del cliente.
+ */
+function registerSalesInvoice(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'CONFIRM')
+  const lines = salesInvoiceLines(db, doc.id)
+  const byLine = new Map<string, number>()
+  for (const l of lines) {
+    const total = round3((byLine.get(l.so_line_id) ?? 0) + l.quantity)
+    byLine.set(l.so_line_id, total)
+    assertSalesInvoiceable(
+      db,
+      db.soLines.find((x) => x.id === l.so_line_id)!,
+      total,
+    )
+  }
+  const company = getCompany(db, doc.company_id)
+  const order = getDoc(db, doc.fv!.sales_order_id, 'SALES_ORDER')
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  const last = db.documents
+    .filter(
+      (d) =>
+        d.company_id === doc.company_id &&
+        d.doc_type === 'SALES_INVOICE' &&
+        d.fv!.letter === doc.fv!.letter &&
+        d.fv!.point_of_sale === doc.fv!.point_of_sale &&
+        d.fv!.invoice_number,
+    )
+    .reduce((max, d) => Math.max(max, Number(d.fv!.invoice_number)), 0)
+  const today = businessDate(company)
+  doc.document_date = today
+  doc.fv = {
+    ...doc.fv!,
+    invoice_number: String(last + 1).padStart(8, '0'),
+    due_date: addDays(today, order.so!.payment_terms_days),
+  }
+  const label = salesInvoiceLabel(doc.fv)
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    summary: `Registró ${doc.display_number}: factura ${label} a ${customer.legal_name} por ${money(doc.total)}`,
+  })
+  doc.fv = { ...doc.fv, registered_at: ctx.now }
+  const byType = new Map<string, number>()
+  for (const l of lines) {
+    const type = db.products.find((p) => p.id === l.product_id)!.product_type
+    byType.set(type, round2((byType.get(type) ?? 0) + l.line_subtotal))
+  }
+  postEvent(ctx, actor, doc, 'VENTA', `Venta según ${doc.display_number}: factura ${label} a ${customer.legal_name}.`, [
+    { key: 'DEUDORES', debit: doc.total, credit: 0 },
+    ...Object.keys(PRODUCT_TYPES)
+      .filter((type) => byType.has(type))
+      .map((type) => ({ key: type, debit: 0, credit: byType.get(type)! })),
+    { key: 'IVA_DEBITO', debit: 0, credit: doc.tax_total },
+  ])
+}
+
+export function cmdConfirmSalesInvoice(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'SALES_INVOICE')
+  requirePermission(ctx, doc.company_id, 'sales_invoice.create')
+  registerSalesInvoice(ctx, doc)
+}
+
+/**
+ * El borrador se anula sin más. Una factura registrada y sin cobros se anula
+ * con el contraasiento de su asiento de venta, y deja de figurar en la deuda
+ * del cliente; su número no se vuelve a usar.
+ */
+export function cmdCancelSalesInvoice(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'SALES_INVOICE')
+  if (doc.status !== 'REGISTRADA') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'sales_invoice.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? ` y su asiento con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
+  })
 }
 
 // ============================================================ Tareas y notificaciones

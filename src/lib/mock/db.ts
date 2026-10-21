@@ -46,6 +46,7 @@ export interface DB {
   brLines: T.BankReconciliationLine[]
   soLines: T.SalesOrderLine[]
   dnLines: T.DeliveryNoteLine[]
+  fvLines: T.SalesInvoiceLine[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -60,7 +61,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 8
+export const DB_VERSION = 9
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -105,6 +106,7 @@ const COLLECTIONS = [
   'brLines',
   'soLines',
   'dnLines',
+  'fvLines',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -134,6 +136,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   brLines: 7,
   soLines: 8,
   dnLines: 8,
+  fvLines: 9,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -211,6 +214,12 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.soLines ??= []
     db.dnLines ??= []
     for (const b of db.stockBalances) delete (b as Partial<{ qty_reserved: number }>).qty_reserved
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+  },
+  // v8 → v9: facturas de venta (Fase 4b) y las reglas del asiento de venta.
+  8: (db) => {
+    db.fvLines ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertBasePostingRules(ctx, company.id)
   },

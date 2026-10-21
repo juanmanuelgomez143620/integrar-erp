@@ -32,6 +32,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   },
   SALES_ORDER: { area: 'Ventas', newLabel: 'Nuevo pedido', createPerm: 'sales_order.create' },
   DELIVERY_NOTE: { area: 'Depósito', newLabel: 'Preparar remito', createPerm: 'delivery_note.create' },
+  SALES_INVOICE: { area: 'Ventas', newLabel: 'Nueva factura', createPerm: 'sales_invoice.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -275,6 +276,33 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'SALES_INVOICE') {
+    columns.push(
+      { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
+      {
+        key: 'voucher',
+        header: 'Comprobante',
+        cell: (d) => (
+          <span className="font-mono text-xs">
+            {d.fv!.letter} {d.fv!.point_of_sale}-{d.fv!.invoice_number || 'sin número'}
+          </span>
+        ),
+      },
+      {
+        key: 'ref',
+        header: 'Pedido',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      { key: 'due', header: 'Vence', sort: (d) => d.fv!.due_date, cell: (d) => date(d.fv!.due_date) },
+      {
+        key: 'total',
+        header: 'Total',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   if (docType === 'JOURNAL_ENTRY') {
     columns.push(
       {
@@ -357,7 +385,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         searchPlaceholder={
           docType === 'JOURNAL_ENTRY'
             ? 'Buscar por número o leyenda…'
-            : docType === 'SALES_ORDER' || docType === 'DELIVERY_NOTE'
+            : docType === 'SALES_ORDER' || docType === 'DELIVERY_NOTE' || docType === 'SALES_INVOICE'
               ? 'Buscar por número, cliente, producto…'
               : 'Buscar por número, proveedor, producto…'
         }

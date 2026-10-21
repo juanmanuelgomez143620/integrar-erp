@@ -1,4 +1,4 @@
-// Pruebas de los pedidos de venta y los remitos (docs/FASE_4_VENTAS_Y_CLIENTES.md §2 y §3)
+// Pruebas de los pedidos de venta, los remitos y las facturas de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2 a §4)
 // sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,11 +8,14 @@ import {
   accountBalance,
   cmdApproveSalesOrder,
   cmdCancelDeliveryNote,
+  cmdCancelSalesInvoice,
   cmdCancelSalesOrder,
   cmdCloseSalesOrder,
   cmdConfirmDeliveryNote,
+  cmdConfirmSalesInvoice,
   cmdConfirmSalesOrder,
   cmdCreateDeliveryNote,
+  cmdCreateSalesInvoice,
   cmdCreateSalesOrder,
   cmdRejectSalesOrder,
   onHandQuantity,
@@ -20,7 +23,16 @@ import {
   type Ctx,
   type SalesOrderInput,
 } from './engine'
-import { dispatchableOrders, documentDetail, listStock, salesCatalog, salesCustomers } from './queries'
+import {
+  customerAccount,
+  dispatchableOrders,
+  documentDetail,
+  invoiceableSalesOrders,
+  listReceivables,
+  listStock,
+  salesCatalog,
+  salesCustomers,
+} from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -273,5 +285,118 @@ describe('remito', () => {
       available: 2,
     })
     expect(salesCatalog(db, userId('ventas'), companyId()).some((p) => p.code === 'MP-001')).toBe(false)
+  })
+})
+
+describe('factura de venta y cuenta corriente de clientes', () => {
+  const invoiceAll = (orderId: string, register = true, username = 'ventas') =>
+    cmdCreateSalesInvoice(
+      ctx(username),
+      companyId(),
+      {
+        sales_order_id: orderId,
+        notes: '',
+        lines: linesOf(orderId).map((l) => ({ so_line_id: l.id, quantity: l.qty_delivered })),
+      },
+      register,
+    )
+
+  it('no se factura lo que todavía no salió', () => {
+    expectBusinessError(() => invoiceAll(byNumber('PV-00001').id), 'TRANSICION_INVALIDA')
+  })
+
+  it('registrar le asigna el número de su letra, genera el asiento de venta y la deuda del cliente', () => {
+    const pv = byNumber('PV-00001')
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const deudores = balance('1.1.03.01')
+    const ventas = balance('4.1.01.01')
+    const iva = balance('2.1.04.01')
+    const r = invoiceAll(pv.id)
+    const fv = byNumber(r.display_number)
+    expect(fv.status).toBe('REGISTRADA')
+    expect(fv.fv).toMatchObject({ letter: 'A', point_of_sale: '00001', invoice_number: '00000001' })
+    expect(fv.total).toBe(pv.total)
+    // Deudores por ventas al debe; ventas, servicios e IVA débito fiscal al haber (el saldo es debe menos haber).
+    expect(balance('1.1.03.01') - deudores).toBe(pv.total)
+    expect(ventas - balance('4.1.01.01')).toBe(8 * 125000 + 2 * 520000)
+    expect(iva - balance('2.1.04.01')).toBe(pv.tax_total)
+    expect(documentDetail(db, userId('ventas'), companyId(), 'SALES_ORDER', 'PV-00001')!.next_step.text).toContain(
+      'se facturó todo',
+    )
+    // Nada más para facturar de ese pedido; el remito ya no se anula.
+    expect(invoiceableSalesOrders(db, userId('ventas'), companyId())).toEqual([])
+    expectBusinessError(() => invoiceAll(pv.id), 'CANTIDAD_EXCEDIDA')
+    expectBusinessError(
+      () => cmdCancelDeliveryNote(ctx('gerencia'), byNumber('REM-00001').id, 'Error de carga'),
+      'TRANSICION_INVALIDA',
+    )
+    // En la cuenta corriente del cliente, y el crédito que usa no cambia: pasó del pedido a la factura.
+    const account = customerAccount(db, userId('tesoreria'), companyId(), customer('CLI-001').id)!
+    expect(account.balance).toBe(pv.total)
+    expect(account.pending.map((i) => i.invoice_label)).toEqual(['A 00001-00000001'])
+    expect(account.credit_used).toBe(pv.total)
+    expect(listReceivables(db, userId('gerencia'), companyId()).map((r) => r.customer.code)).toEqual(['CLI-001'])
+  })
+
+  it('no se factura más de lo entregado; la letra depende del cliente y el número es correlativo por letra', () => {
+    const pv = byNumber('PV-00001')
+    const line = linesOf(pv.id).find((l) => l.product_id === product('PT-002').id)!
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const partial = (quantity: number, register = true) =>
+      cmdCreateSalesInvoice(
+        ctx('ventas'),
+        companyId(),
+        { sales_order_id: pv.id, notes: '', lines: [{ so_line_id: line.id, quantity }] },
+        register,
+      )
+    expectBusinessError(() => partial(9), 'CANTIDAD_EXCEDIDA')
+    const first = partial(3)
+    const draft = partial(2, false)
+    expect(byNumber(draft.display_number).fv!.invoice_number).toBe('')
+    expectBusinessError(() => partial(6), 'CANTIDAD_EXCEDIDA')
+    // Anulada, conserva su número; la siguiente sigue la numeración.
+    cmdCancelSalesInvoice(ctx('ventas'), first.id, 'Se facturó al precio equivocado')
+    cmdConfirmSalesInvoice(ctx('ventas'), draft.id)
+    expect(byNumber(first.display_number).fv!.invoice_number).toBe('00000001')
+    expect(byNumber(draft.display_number).fv!.invoice_number).toBe('00000002')
+    // Un consumidor final recibe factura B, con su propia numeración.
+    const counter = cmdCreateSalesOrder(ctx('ventas'), companyId(), order('CLI-009', [['PT-002', 1]]), true)
+    cmdCreateDeliveryNote(
+      ctx('deposito'),
+      companyId(),
+      {
+        sales_order_id: counter.id,
+        carrier_name: '',
+        notes: '',
+        lines: linesOf(counter.id).map((l) => ({ so_line_id: l.id, quantity: 1 })),
+      },
+      true,
+    )
+    const b = invoiceAll(counter.id)
+    expect(byNumber(b.display_number).fv).toMatchObject({ letter: 'B', invoice_number: '00000001' })
+  })
+
+  it('anular una factura registrada revierte la venta con un contraasiento', () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const deudores = balance('1.1.03.01')
+    const r = invoiceAll(byNumber('PV-00001').id)
+    expectBusinessError(() => cmdCancelSalesInvoice(ctx('ventas'), r.id, ''), 'MOTIVO_REQUERIDO')
+    expectBusinessError(() => cmdCancelSalesInvoice(ctx('tesoreria'), r.id, 'Error de carga'), 'SIN_PERMISO')
+    cmdCancelSalesInvoice(ctx('ventas'), r.id, 'Error de carga')
+    expect(byNumber(r.display_number).status).toBe('ANULADA')
+    expect(balance('1.1.03.01')).toBe(deudores)
+    expect(customerAccount(db, userId('ventas'), companyId(), customer('CLI-001').id)!.balance).toBe(0)
+  })
+
+  it('cliente moroso: con facturas vencidas, un pedido nuevo necesita la autorización de Gerencia', () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const r = invoiceAll(byNumber('PV-00001').id)
+    // Pasó el tiempo: la factura venció.
+    byNumber(r.display_number).fv!.due_date = '2027-04-30'
+    const row = listReceivables(db, userId('ventas'), companyId())[0]
+    expect(row.overdue).toBe(byNumber(r.display_number).total)
+    const next = cmdCreateSalesOrder(ctx('ventas'), companyId(), order('CLI-001', [['PT-004', 1]]), true)
+    expect(byNumber(next.display_number).status).toBe('PENDIENTE_APROBACION')
+    expect(byNumber(next.display_number).so!.credit_reason).toContain('tiene facturas vencidas sin cobrar')
   })
 })

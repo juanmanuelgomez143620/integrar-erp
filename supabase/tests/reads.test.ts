@@ -50,6 +50,7 @@ const DOC_TYPES: DocType[] = [
   'BANK_RECONCILIATION',
   'SALES_ORDER',
   'DELIVERY_NOTE',
+  'SALES_INVOICE',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -204,7 +205,21 @@ describe('ventas', () => {
       await same(u, () => Q.salesCustomers(mock, userId(u), company), 'sales_customers', [companyPg])
       await same(u, () => Q.salesCatalog(mock, userId(u), company), 'sales_catalog', [companyPg])
       await same(u, () => Q.dispatchableOrders(mock, userId(u), company), 'orders_dispatchable', [companyPg])
+      await same(u, () => Q.invoiceableSalesOrders(mock, userId(u), company), 'sales_orders_invoiceable', [companyPg])
+      await same(u, () => Q.listReceivables(mock, userId(u), company), 'receivables_list', [companyPg])
     }
+  })
+
+  it('cuenta corriente de clientes con facturas, sin facturas y de otra empresa', async () => {
+    const customers = ['CLI-001', 'CLI-003', 'CLI-009', 'CLI-004'].map(
+      (code) => mock.customers.find((c) => c.company_id === company && c.code === code)!.id,
+    )
+    for (const u of ['docente', 'ventas', 'tesoreria', 'gerencia', 'deposito', 'auditor'])
+      for (const id of [...customers, crypto.randomUUID()])
+        await same(u, () => Q.customerAccount(mock, userId(u), company, id), 'customer_account', [
+          companyPg,
+          mock.customers.some((c) => c.id === id) ? loaded.pg(id) : id,
+        ])
   })
 })
 

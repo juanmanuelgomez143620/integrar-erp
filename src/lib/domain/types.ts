@@ -41,6 +41,7 @@ export type DocType =
   | 'BANK_RECONCILIATION'
   | 'SALES_ORDER'
   | 'DELIVERY_NOTE'
+  | 'SALES_INVOICE'
 
 /** Cómo se pagó una orden de pago. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -374,6 +375,22 @@ export interface DeliveryNoteHeader {
   dispatched_at: string | null
 }
 
+/**
+ * Factura de venta (tabla sales_invoices, 1 a 1 con documents): el comprobante
+ * simulado que la empresa emite al cliente, contra lo entregado de un pedido.
+ */
+export interface SalesInvoiceHeader {
+  sales_order_id: string
+  /** A a responsables inscriptos y monotributistas, B a exentos y consumidores finales; C si la empresa no es responsable inscripta. */
+  letter: 'A' | 'B' | 'C'
+  point_of_sale: string
+  /** Correlativo por letra: se asigna al registrarla (vacío en borrador). */
+  invoice_number: string
+  /** Fecha de la factura más la condición de pago del pedido. */
+  due_date: string
+  registered_at: string | null
+}
+
 /** Un movimiento del mayor que figura en el extracto (tabla bank_reconciliation_lines). */
 export interface BankReconciliationLine {
   id: string
@@ -413,6 +430,7 @@ export interface Document extends Audited {
   br?: BankReconciliationHeader
   so?: SalesOrderHeader
   dn?: DeliveryNoteHeader
+  fv?: SalesInvoiceHeader
 }
 
 export interface RequisitionLine {
@@ -520,6 +538,22 @@ export interface DeliveryNoteLine {
   /** Costo unitario con que salió del depósito (el promedio al despacharlo); 0 en borrador y en los servicios. */
   unit_cost: number
   notes: string
+}
+
+/** Un ítem de la factura de venta: lo entregado de una línea del pedido, a su precio. */
+export interface SalesInvoiceLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  so_line_id: string
+  product_id: string
+  quantity: number
+  unit_price: number
+  vat_rate: number
+  line_subtotal: number
+  line_tax: number
+  line_total: number
 }
 
 /** Un ítem que se pide cotizar; puede atender una línea de solicitud de compra. */

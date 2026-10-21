@@ -44,6 +44,11 @@ const DeliveryFormPage = lazyPage(() =>
   import('@/features/inventory/deliveries/delivery-form').then((m) => m.DeliveryFormPage),
 )
 const SalesOrderFormPage = lazyPage(() => import('@/features/sales/order-form').then((m) => m.SalesOrderFormPage))
+const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
+const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
+const CustomerAccountPage = lazyPage(() =>
+  import('@/features/sales/receivables-pages').then((m) => m.CustomerAccountPage),
+)
 const AdjustmentFormPage = lazyPage(() =>
   import('@/features/inventory/adjustments/adjustment-form').then((m) => m.AdjustmentFormPage),
 )
@@ -175,6 +180,11 @@ export const router = createBrowserRouter(
                 { path: 'ventas/pedidos', element: <DocumentListPage key="so" docType="SALES_ORDER" /> },
                 { path: 'ventas/pedidos/nuevo', element: <SalesOrderFormPage /> },
                 { path: 'ventas/pedidos/:number', element: <DocumentPage key="so" docType="SALES_ORDER" /> },
+                { path: 'ventas/facturas', element: <DocumentListPage key="fv" docType="SALES_INVOICE" /> },
+                { path: 'ventas/facturas/nueva', element: <SalesInvoiceFormPage /> },
+                { path: 'ventas/facturas/:number', element: <DocumentPage key="fv" docType="SALES_INVOICE" /> },
+                { path: 'ventas/clientes', element: <ReceivablesPage /> },
+                { path: 'ventas/clientes/:code', element: <CustomerAccountPage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

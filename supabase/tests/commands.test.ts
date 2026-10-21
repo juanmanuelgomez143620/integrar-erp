@@ -127,6 +127,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['bank_reconciliation_lines', mock.brLines],
     ['sales_order_lines', mock.soLines],
     ['delivery_note_lines', mock.dnLines],
+    ['sales_invoice_lines', mock.fvLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -1955,7 +1956,7 @@ describe('paridad de comandos', () => {
       await cancelDelivery('Gerencia lo anula con contramovimiento', 'gerencia', partial, 'Volvió todo'),
     ).not.toBeNull()
     expect(status(big)).toBe('CONFIRMADO')
-    await createdDelivery('entregar todo', 'deposito', delivery(big, [5, 1]), true)
+    const full = await createdDelivery('entregar todo', 'deposito', delivery(big, [5, 1]), true)
     expect(status(big)).toBe('ENTREGADO')
     expect(await orderAction('anular un pedido entregado', 'ventas', big, 'cancel', 'Error')).toBeNull()
 
@@ -1968,6 +1969,99 @@ describe('paridad de comandos', () => {
     expect(status(credit)).toBe('CERRADO')
     expect(await cancelDelivery('anular el remito de un pedido cerrado', 'gerencia', closing, 'Error')).toBeNull()
     await reads('después de las entregas')
+
+    // Facturas de venta: controles, numeración por letra (A al responsable inscripto, B al exento) y anulación.
+    const invoiceInput = (orderId: string, quantities: number[]) => {
+      const input: E.SalesInvoiceInput = {
+        sales_order_id: orderId,
+        notes: '',
+        lines: orderLines(orderId).map((l, i) => ({ so_line_id: l.id, quantity: quantities[i] ?? 0 })),
+      }
+      return {
+        input,
+        pgInput: {
+          ...input,
+          sales_order_id: pg(orderId),
+          lines: input.lines.map((l) => ({ ...l, so_line_id: pg(l.so_line_id) })),
+        },
+      }
+    }
+    const createInvoice = (label: string, username: string, inv: ReturnType<typeof invoiceInput>, register: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateSalesInvoice(c, company, inv.input, register),
+        (b) => b.commands.createSalesInvoice(companyPg, inv.pgInput, register),
+      )
+    const createdInvoice = (label: string, username: string, inv: ReturnType<typeof invoiceInput>, register: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateSalesInvoice(c, company, inv.input, register),
+        (b) => b.commands.createSalesInvoice(companyPg, inv.pgInput, register),
+      )
+    const cancelInvoice = (label: string, username: string, id: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelSalesInvoice(c, id, reason),
+        (b) => b.commands.cancelSalesInvoice(pg(id), reason),
+      )
+    const waiting = await createdOrder(
+      'pedido todavía sin entregar',
+      'ventas',
+      salesOrder('CLI-010', [['PT-002', 1]]),
+      true,
+    )
+    for (const [label, username, inv] of [
+      ['más de lo entregado', 'ventas', invoiceInput(big, [6, 1])],
+      ['todo en cero', 'ventas', invoiceInput(big, [0, 0])],
+      ['una cantidad negativa', 'ventas', invoiceInput(big, [-1, 1])],
+      ['Tesorería no factura', 'tesoreria', invoiceInput(big, [5, 1])],
+      ['un pedido sin entregas', 'ventas', invoiceInput(waiting, [1])],
+    ] as const)
+      expect(await createInvoice(label, username, inv, true), label).toBeNull()
+    const first = await createdInvoice('factura A de una parte', 'ventas', invoiceInput(big, [3, 1]), true)
+    const rest = await createdInvoice('borrador del resto', 'ventas', invoiceInput(big, [2, 0]), false)
+    expect(
+      await createInvoice('facturar de más con un borrador pendiente', 'ventas', invoiceInput(big, [3, 0]), false),
+    ).toBeNull()
+    await ok(
+      'registrar el borrador',
+      'ventas',
+      (c) => E.cmdConfirmSalesInvoice(c, rest),
+      (b) => b.commands.confirmSalesInvoice(pg(rest)),
+    )
+    const exempt = await createdInvoice('factura B al exento', 'ventas', invoiceInput(credit, [2]), true)
+    expect(mock.documents.find((d) => d.id === exempt)!.fv!.letter).toBe('B')
+    expect(await cancelDelivery('anular un remito ya facturado', 'gerencia', full, 'Error de carga')).toBeNull()
+    expect(await cancelInvoice('anular sin motivo', 'ventas', first, '')).toBeNull()
+    expect(await cancelInvoice('Tesorería no anula facturas', 'tesoreria', first, 'Error de carga')).toBeNull()
+    expect(
+      await cancelInvoice('anular con contraasiento', 'ventas', first, 'Se facturó con el precio viejo'),
+    ).not.toBeNull()
+    for (const username of ['ventas', 'tesoreria', 'gerencia']) {
+      await sameRead(
+        `pedidos para facturar (${username})`,
+        username,
+        (b) => b.api.invoiceableSalesOrders(companyPg),
+        (u) => Q.invoiceableSalesOrders(mock, u, company),
+      )
+      await sameRead(
+        `cuentas corrientes de clientes (${username})`,
+        username,
+        (b) => b.api.receivables(companyPg),
+        (u) => Q.listReceivables(mock, u, company),
+      )
+      for (const code of ['CLI-004', 'CLI-007'])
+        await sameRead(
+          `cuenta corriente de ${code} (${username})`,
+          username,
+          (b) => b.api.customerAccount(companyPg, pg(customer(code))),
+          (u) => Q.customerAccount(mock, u, company, customer(code)),
+        )
+    }
+    await reads('con las facturas')
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
@@ -1986,6 +2080,7 @@ describe('paridad de comandos', () => {
       'BANK_RECONCILIATION',
       'SALES_ORDER',
       'DELIVERY_NOTE',
+      'SALES_INVOICE',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

@@ -27,7 +27,8 @@ export function PrintPage() {
     doc.doc_type === 'PURCHASE_ORDER' ||
     doc.doc_type === 'SUPPLIER_INVOICE' ||
     doc.doc_type === 'SUPPLIER_QUOTE' ||
-    doc.doc_type === 'SALES_ORDER'
+    doc.doc_type === 'SALES_ORDER' ||
+    doc.doc_type === 'SALES_INVOICE'
   const customer = data.customer
   const th = 'border-b border-slate-300 px-2 py-1.5 text-left text-[11px] font-semibold uppercase text-slate-600'
   const td = 'border-b border-slate-200 px-2 py-1.5 align-top'
@@ -261,17 +262,18 @@ export function PrintPage() {
               </div>
             </>
           )}
-          {(doc.doc_type === 'SALES_ORDER' || doc.doc_type === 'DELIVERY_NOTE') && customer && (
-            <div className="col-span-2 rounded border border-slate-300 p-2">
-              <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
-              <div className="font-semibold">{customer.legal_name}</div>
-              <div>
-                {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
-                {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} ({customer.province}
-                )
+          {(doc.doc_type === 'SALES_ORDER' || doc.doc_type === 'DELIVERY_NOTE' || doc.doc_type === 'SALES_INVOICE') &&
+            customer && (
+              <div className="col-span-2 rounded border border-slate-300 p-2">
+                <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
+                <div className="font-semibold">{customer.legal_name}</div>
+                <div>
+                  {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
+                  {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} (
+                  {customer.province})
+                </div>
               </div>
-            </div>
-          )}
+            )}
           {doc.doc_type === 'SALES_ORDER' && data.sales_order && (
             <>
               <div>
@@ -304,6 +306,25 @@ export function PrintPage() {
                 <b>Despachado:</b>{' '}
                 {data.delivery.dispatched_at ? dateTime(data.delivery.dispatched_at) : 'en preparación'}
               </div>
+            </>
+          )}
+          {doc.doc_type === 'SALES_INVOICE' && doc.fv && (
+            <>
+              <div>
+                <b>Comprobante (simulado):</b> Factura {doc.fv.letter} {doc.fv.point_of_sale}-
+                {doc.fv.invoice_number || 'sin número (borrador)'}
+              </div>
+              <div>
+                <b>Vencimiento:</b> {date(doc.fv.due_date)}
+              </div>
+              <div>
+                <b>Pedido de venta:</b> {data.related_order?.display_number}
+              </div>
+              {doc.fv.letter === 'B' && (
+                <div>
+                  <b>IVA:</b> incluido en los precios para el cliente
+                </div>
+              )}
             </>
           )}
           {doc.doc_type === 'STOCK_ADJUSTMENT' && doc.sa && (

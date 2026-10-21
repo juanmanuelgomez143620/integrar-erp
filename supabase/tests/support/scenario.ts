@@ -339,6 +339,28 @@ export function buildScenario(): DB {
   E.cmdCancelSalesOrder(as('ventas'), cancelledOrder.id, 'Se cargó al cliente equivocado')
   E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-005', [['SV-001', 1]]), true)
 
+  // Facturas de venta: la del pedido de la demo (letra A, ya vencida: el cliente
+  // queda moroso y su pedido siguiente espera a Gerencia), una anulada con su
+  // contraasiento, un borrador y una B a un consumidor final.
+  const saleInvoice = (orderId: string): E.SalesInvoiceInput => ({
+    sales_order_id: orderId,
+    notes: '',
+    lines: orderLines(orderId).flatMap((l) =>
+      l.qty_delivered - E.salesInvoicedQuantity(db, l.id) > 0
+        ? [{ so_line_id: l.id, quantity: l.qty_delivered - E.salesInvoicedQuantity(db, l.id) }]
+        : [],
+    ),
+  })
+  const demoInvoice = E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(demoOrder('PV-00001').id), true)
+  db.documents.find((d) => d.id === demoInvoice.id)!.fv!.due_date = addDays(todayAR(), -10)
+  const wrongSale = E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(closedOrder.id), true)
+  E.cmdCancelSalesInvoice(as('ventas'), wrongSale.id, 'Se facturó al cliente equivocado')
+  E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(credit.id), false)
+  const counter = E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-009', [['PT-002', 1]]), true)
+  E.cmdCreateDeliveryNote(as('deposito'), company, delivery(counter.id), true)
+  E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(counter.id), true)
+  E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-001', [['PT-002', 2]]), true)
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

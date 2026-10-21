@@ -252,6 +252,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     salesCustomers: (companyId) => rpc('sales_customers', company(companyId)),
     salesCatalog: (companyId) => rpc('sales_catalog', company(companyId)),
     dispatchableOrders: (companyId) => rpc('orders_dispatchable', company(companyId)),
+    invoiceableSalesOrders: (companyId) => rpc('sales_orders_invoiceable', company(companyId)),
+    receivables: (companyId) => rpc('receivables_list', company(companyId)),
+    customerAccount: (companyId, customerId) =>
+      rpc('customer_account', { ...company(companyId), p_customer_id: customerId }),
     payables: (companyId) => rpc('payables_list', company(companyId)),
     supplierAccount: (companyId, supplierId) =>
       rpc('supplier_account', { ...company(companyId), p_supplier_id: supplierId }),
@@ -363,6 +367,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('dn_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
     confirmDeliveryNote: (docId) => rpc('dn_confirm', doc(docId)),
     cancelDeliveryNote: (docId, reason) => rpc('dn_cancel', { ...doc(docId), p_reason: reason }),
+    createSalesInvoice: (companyId, input, register) =>
+      rpc('fv_create', { ...company(companyId), p_input: input, p_register: register }),
+    confirmSalesInvoice: (docId) => rpc('fv_confirm', doc(docId)),
+    cancelSalesInvoice: (docId, reason) => rpc('fv_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

@@ -90,6 +90,8 @@ async function snapshot(company: string) {
     'sales_order_lines',
     'delivery_notes',
     'delivery_note_lines',
+    'sales_invoices',
+    'sales_invoice_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -129,7 +131,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                           ? B.salesOrder
                           : fn.startsWith('dn_')
                             ? B.delivery
-                            : B.order
+                            : fn.startsWith('fv_')
+                              ? B.salesInvoice
+                              : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -222,6 +226,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_limit: null,
     p_account_id: B.account,
     p_supplier_id: B.supplier,
+    p_customer_id: B.customer,
     p_rule_id: B.rule,
     p_quote_id: B.quote,
     p_method: 'TRANSFERENCIA',
@@ -479,6 +484,13 @@ beforeAll(async () => {
       p_confirm: true,
     })
   ).id
+  B.salesInvoice = (
+    await rpc<{ id: string }>('docenteB', 'fv_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({ sales_order_id: B.salesOrder, lines: [{ so_line_id: B.salesLine, quantity: 2 }] }),
+      p_register: true,
+    })
+  ).id
 
   bIds = new Set(
     (
@@ -508,6 +520,7 @@ beforeAll(async () => {
          union select id::text from public.bank_reconciliation_lines where company_id = $1
          union select id::text from public.sales_order_lines where company_id = $1
          union select id::text from public.delivery_note_lines where company_id = $1
+         union select id::text from public.sales_invoice_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

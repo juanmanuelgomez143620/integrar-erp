@@ -180,6 +180,11 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'COSTO_VENTA', key: 'COSTO_MERCADERIA_REVENTA', code: '5.1.01.02' },
   { event: 'COSTO_VENTA', key: 'PRODUCTO_TERMINADO', code: '1.1.05.04' },
   { event: 'COSTO_VENTA', key: 'MERCADERIA_REVENTA', code: '1.1.05.05' },
+  { event: 'VENTA', key: 'PRODUCTO_TERMINADO', code: '4.1.01.01' },
+  { event: 'VENTA', key: 'MERCADERIA_REVENTA', code: '4.1.01.02' },
+  { event: 'VENTA', key: 'SERVICIO', code: '4.1.01.03' },
+  { event: 'VENTA', key: 'IVA_DEBITO', code: '2.1.04.01' },
+  { event: 'VENTA', key: 'DEUDORES', code: '1.1.03.01' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */
