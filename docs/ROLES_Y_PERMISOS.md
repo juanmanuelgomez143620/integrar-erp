@@ -97,6 +97,8 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Conciliación bancaria (Fase 3d) | L | — | — | — | — | L C X⁸ | L | — | — | — | L | Todo |
 | Solicitud de cotización (Fase 3c) | L | L C X J⁷ | — | L | — | L | L | — | L | — | L | Todo |
 | Cotización de proveedor (Fase 3c) | L | L C X | — | L | — | L | L | — | L | — | L | Todo |
+| Pedido de venta (Fase 4a) | L A⁹ | — | L C X | L | — | L | L | — | L | L | L | Todo |
+| Remito (Fase 4a) | L X¹⁰ | — | L | L C X | — | L | L | — | L | L | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
@@ -106,6 +108,8 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ⁶ Gerencia autoriza (o rechaza) cada orden de pago; quien la preparó no la aprueba. Tesorería la paga si alcanza el saldo de la caja o el banco, y no paga facturas que registró (SoD-5).
 ⁷ Compras adjudica a una cotización vigente; si no es la más conveniente por precio, justifica la elección. La OC que nace de la adjudicación sigue su aprobación por monto: ahí aprueba Gerencia.
 ⁸ Concilia Contabilidad y no Tesorería, que maneja los fondos (control por oposición); sólo se anula la última conciliación de cada banco. Tesorería elige el medio de pago al pagar una orden (transferencia, cheque con su número o efectivo).
+⁹ Ventas confirma el pedido (se reserva el stock) y lo anula o cierra con saldo; Gerencia autoriza (o rechaza) los que superan el crédito del cliente, y quien cargó el pedido no lo autoriza (SoD-8).
+¹⁰ Depósito prepara y despacha el remito (baja el stock y se registra el costo de lo vendido); Gerencia anula los que despachó Depósito, porque quien despachó un remito no lo anula (SoD-3).
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
@@ -129,10 +133,11 @@ Se implementa como regla explícita porque es **contenido a enseñar**, no sólo
 |---|---|---|---|
 | SoD-1 | Quien crea una OC no la aprueba | Validación en `po_approve` | MVP |
 | SoD-2 | Compras no registra recepciones; Depósito no emite OC | Matriz de permisos | MVP |
-| SoD-3 | Quien confirmó una recepción no la anula (otro usuario de Depósito o Gerencia) | Validación en `gr_cancel` | MVP (P1) |
+| SoD-3 | Quien confirmó una recepción o despachó un remito no lo anula (otro usuario de Depósito o Gerencia) | Validación en `gr_cancel` y `dn_cancel` | MVP (P1), 4a |
 | SoD-4 | Quien carga un ajuste negativo relevante no lo aprueba | Regla de aprobación | 2 |
 | SoD-5 | Quien registra la factura del proveedor no la paga | Matriz + validación en `op_pay` | 3b |
 | SoD-7 | Quien prepara una orden de pago no la aprueba ni la rechaza | Validación en `op_approve` y `op_reject` | 3b |
+| SoD-8 | Quien carga un pedido de venta no autoriza su crédito | Validación en `so_approve` y `so_reject` | 4a |
 | SoD-6 | Quien liquida sueldos no aprueba la liquidación | Regla de aprobación | 6 |
 
 - Configuración por empresa: `settings.sod_enabled` (por defecto **activado**). Si una isla tiene un solo estudiante, el docente puede desactivarla o aprobar como supervisor.

@@ -41,6 +41,10 @@ Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 pro
 | D3 | Fase 3c: solicitud de cotización a varios proveedores, cotizaciones, cuadro comparativo y adjudicación que genera la OC | Hecho (18/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
 | D4 | Fase 3d.1: transferencias entre cajas y bancos, flujo de fondos real y proyectado | Hecho (19/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
 | D5 | Fase 3d.2: medio de pago (cheques propios), cheques emitidos y conciliación bancaria simplificada | Hecho (19/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
+| D6 | Fase 4a (`docs/FASE_4_VENTAS_Y_CLIENTES.md`): pedido de venta con control de crédito y reserva de stock; remito que descuenta el stock y registra el costo de lo vendido | Hecho (20/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
+| D7 | Fase 4b: factura de venta contra lo entregado (letra A o B) con su asiento, y cuenta corriente de clientes | Pendiente |
+| D8 | Fase 4c: recibo de cobro, antigüedad de saldos y cobros en el flujo de fondos proyectado | Pendiente |
+| D9 | Fase 4d: listas de precios y presupuestos | Pendiente |
 
 ## Reglas para quien ejecute el plan
 
