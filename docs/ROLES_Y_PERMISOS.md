@@ -59,7 +59,8 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | masters | `customer.read/create/update/export`, `supplier.read/create/update/export`, `product.read/create/update/export` |
 | purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export`; desde la Fase 3, `supplier_invoice.read/create/cancel` (facturas de proveedor); desde la 3c, `rfq.read/create/cancel/award` (solicitudes de cotización) y `supplier_quote.read/create/cancel` (cotizaciones) |
 | payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos, flujo de fondos); desde la 3d, `funds_transfer.read/create/cancel` (transferencias entre cuentas) y `bank_reconciliation.read/create/cancel` (conciliaciones bancarias) |
-| inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel` |
+| inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel`; desde la Fase 4a, `delivery_note.read/create/cancel` (remitos) |
+| sales (Fase 4) | `sales_order.read/create/approve/cancel` (pedidos de venta); desde la 4b, `sales_invoice.read/create/cancel` (facturas de venta) y `receivable.read` (cuentas corrientes de clientes); desde la 4c, `customer_receipt.read/create/cancel` (recibos de cobro) |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
 | audit | `audit.read`, `audit.export` |
@@ -100,7 +101,8 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Pedido de venta (Fase 4a) | L A⁹ | — | L C X | L | — | L | L | — | L | L | L | Todo |
 | Remito (Fase 4a) | L X¹⁰ | — | L | L C X | — | L | L | — | L | L | L | Todo |
 | Factura de venta (Fase 4b) | L | — | L C X¹¹ | — | — | L | L | — | L | — | L | Todo |
-| Cuenta corriente de clientes (Fase 4b) | L | — | L | — | — | L | L | — | L | — | L | Todo |
+| Cuenta corriente de clientes y antigüedad de saldos (Fase 4b y 4c) | L | — | L | — | — | L | L | — | L | — | L | Todo |
+| Recibo de cobro (Fase 4c) | L | — | L | — | — | L | L C X¹² | — | L | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
@@ -113,6 +115,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ⁹ Ventas confirma el pedido (se reserva el stock) y lo anula o cierra con saldo; Gerencia autoriza (o rechaza) los que superan el crédito del cliente, y quien cargó el pedido no lo autoriza (SoD-8).
 ¹⁰ Depósito prepara y despacha el remito (baja el stock y se registra el costo de lo vendido); Gerencia anula los que despachó Depósito, porque quien despachó un remito no lo anula (SoD-3).
 ¹¹ Ventas factura lo entregado (nunca más de lo que salió) y anula una factura registrada sólo si no tiene cobros; el asiento de venta se genera solo. No se anula un remito ya facturado.
+¹² Tesorería cobra: elige el medio (transferencia, cheque del cliente con su número o efectivo) y la caja o el banco donde ingresa el dinero; los cheques van a Valores a depositar hasta que se depositan con una transferencia entre cuentas. No cobra las facturas que emitió (SoD-9) y anula un cobro, con contraasiento, sólo si el dinero sigue en esa cuenta.
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
@@ -141,6 +144,7 @@ Se implementa como regla explícita porque es **contenido a enseñar**, no sólo
 | SoD-5 | Quien registra la factura del proveedor no la paga | Matriz + validación en `op_pay` | 3b |
 | SoD-7 | Quien prepara una orden de pago no la aprueba ni la rechaza | Validación en `op_approve` y `op_reject` | 3b |
 | SoD-8 | Quien carga un pedido de venta no autoriza su crédito | Validación en `so_approve` y `so_reject` | 4a |
+| SoD-9 | Quien emite una factura de venta no registra su cobro | Validación al confirmar el recibo (`rc_create` y `rc_confirm`) | 4c |
 | SoD-6 | Quien liquida sueldos no aprueba la liquidación | Regla de aprobación | 6 |
 
 - Configuración por empresa: `settings.sod_enabled` (por defecto **activado**). Si una isla tiene un solo estudiante, el docente puede desactivarla o aprobar como supervisor.

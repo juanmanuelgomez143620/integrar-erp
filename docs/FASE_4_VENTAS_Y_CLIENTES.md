@@ -10,7 +10,7 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 |---|---|---|---|
 | 4a | Pedido de venta con control de crédito y reserva de stock; remito que descuenta el stock y genera el costo de lo vendido | El pedido del cliente llega a Depósito y la mercadería sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 4b | Factura de venta contra lo entregado, con su asiento; cuenta corriente de clientes | La venta termina en la contabilidad y en la deuda del cliente | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 4c | Recibo de cobro, antigüedad de saldos (clientes morosos) y cobros en el flujo de fondos proyectado | El circuito vuelve a la caja y al banco | Pendiente |
+| 4c | Recibo de cobro, antigüedad de saldos (clientes morosos) y cobros en el flujo de fondos proyectado | El circuito vuelve a la caja y al banco | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 4d | Listas de precios y presupuestos | El pedido nace de un presupuesto aceptado, con los precios de la lista del cliente | Pendiente |
 
 ## 2. Pedido de venta (`PV-00001`, 4a)
@@ -38,9 +38,9 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 
 ## 5. Cobros (4c)
 
-- **Recibo de cobro (`RBO-00001`)**: lo registra **Tesorería** cuando el cliente paga: qué facturas cancela y cuánto de cada una (el cobro puede ser parcial), el medio (efectivo, transferencia o cheque de terceros, con su número) y la caja o el banco donde ingresa; los cheques van a Valores a depositar hasta que se depositan con una transferencia entre cuentas (3d.1). Al confirmarse genera el asiento automático **`COBRO`** (la caja o el banco al debe, Deudores por ventas al haber) y cada factura pasa a cobrada parcialmente o cobrada. Se anula con contraasiento. Quien emitió la factura no registra su cobro (SoD-9).
-- **Antigüedad de saldos**: la deuda de cada cliente según el vencimiento de sus facturas (a vencer, vencida de 1 a 30 días, de 31 a 60, de 61 a 90 y de más de 90). Los clientes con facturas vencidas son los **morosos**: para venderles a crédito hace falta la autorización de Gerencia (§2).
-- El **flujo de fondos proyectado** (3d.1) suma los cobros esperados, por el vencimiento de las facturas de venta, a los pagos.
+- **Recibo de cobro (`RBO-00001`)**: lo registra **Tesorería** cuando el cliente paga: qué facturas cancela y cuánto de cada una (el cobro puede ser parcial), el medio (efectivo, transferencia o cheque de terceros, con su número) y la caja o el banco donde ingresa; los cheques van a Valores a depositar hasta que se depositan con una transferencia entre cuentas (3d.1). La pantalla propone la cuenta según el medio (el banco para una transferencia, Valores a depositar para un cheque, la caja para el efectivo) y se puede cambiar **(a validar)**. En borrador, lo que cobra queda reservado: una factura no se cobra dos veces. Al confirmarse genera el asiento automático **`COBRO`** (la caja o el banco al debe, Deudores por ventas al haber) y cada factura pasa a **cobrada parcialmente** o **cobrada**; la factura deja de poder anularse. Se anula con contraasiento sólo si el dinero sigue en esa cuenta (si el cheque ya se depositó, primero se anula el depósito) **(a validar)**, y las facturas vuelven a tener saldo. Quien emitió la factura no registra su cobro (SoD-9).
+- **Antigüedad de saldos**: la deuda de cada cliente según el vencimiento de sus facturas (a vencer, vencida de 1 a 30 días, de 31 a 60, de 61 a 90 y de más de 90), con el total y el porcentaje de cada tramo; está en la cuenta corriente de clientes. Los clientes con facturas vencidas son los **morosos**: para venderles a crédito hace falta la autorización de Gerencia (§2).
+- El **flujo de fondos proyectado** (3d.1) suma los cobros esperados, por el vencimiento de las facturas de venta (lo vencido sin cobrar, en el primer tramo), y resta los pagos; el **flujo real** muestra los cobros a clientes como un concepto propio.
 
 ## 6. Listas de precios y presupuestos (4d)
 
@@ -70,6 +70,7 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 | `sales_invoice.read` (facturas de venta, 4b) | Ventas, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
 | `sales_invoice.create/cancel` | Ventas (sólo se anula una registrada sin cobros) |
 | `receivable.read` (cuenta corriente de clientes) | Ventas, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
-| Cobros (4c) | Se detallan al hacerlos: Tesorería cobra; Contabilidad y Gerencia consultan |
+| `customer_receipt.read` (recibos de cobro, 4c) | Tesorería, Ventas, Gerencia, Contabilidad, Impuestos, Auditoría |
+| `customer_receipt.create/cancel` | Tesorería (sólo se anula uno cobrado si el dinero sigue en la cuenta) |
 
 Separación de funciones nueva: **SoD-8**, quien prepara un pedido de venta no autoriza su crédito; **SoD-9**, quien emite la factura no registra su cobro. Depósito despacha y Ventas factura: lo que se factura se controla contra lo que salió.
