@@ -144,7 +144,7 @@ El sistema es para la ENS N.º 9; otras escuelas reciben una **instancia propia*
 
 ## 6. Backlog de ideas
 
-- Ajuste masivo de precios por porcentaje (contexto inflacionario).
+- Ajuste masivo de precios por porcentaje (contexto inflacionario): hecho en la Fase 4d, por lista de precios.
 - "Modo clase": el docente congela la empresa al final de la hora para revisar.
 - Comparación entre empresas del mismo curso (rendimiento de cada grupo).
 - Cuestionarios breves integrados al completar un circuito.

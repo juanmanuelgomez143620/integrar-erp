@@ -891,7 +891,7 @@ La mayoría son **nuevos tipos de documento** sobre `documents` más sus líneas
 | Contabilidad | `accounts` (plan de cuentas), `fiscal_years`, `fiscal_periods`, `journal_entries`, `journal_entry_lines`, `posting_rules` | 2 |
 | Compras completo | `rfqs` (+líneas, +proveedores invitados), `supplier_quotes` (+líneas), `supplier_invoices` (+líneas), `supplier_ledger_entries` | 3 |
 | Tesorería | `cash_boxes`, `bank_accounts`, `payment_methods`, `payment_orders` (+ítems), `treasury_movements`, `checks`, `bank_reconciliations` | 3 |
-| Ventas | `price_lists`, `sales_quotes`, `sales_orders` (+líneas), `delivery_notes` (+líneas), `sales_invoices` (+líneas), `customer_receipts` (+líneas); lo reservado no se guarda: es lo que les falta entregar a los pedidos en curso (docs/FASE_4_VENTAS_Y_CLIENTES.md) | 4 |
+| Ventas | `price_lists` (+precios por producto; cada cliente puede tener la suya en `customers.price_list_id`), `sales_quotes` (+líneas), `sales_orders` (+líneas), `delivery_notes` (+líneas), `sales_invoices` (+líneas), `customer_receipts` (+líneas); lo reservado no se guarda: es lo que les falta entregar a los pedidos en curso (docs/FASE_4_VENTAS_Y_CLIENTES.md) | 4 |
 | Producción | `bills_of_materials` (+líneas), `work_centers`, `production_orders`, `production_consumptions`, `production_outputs` | 5 |
 | Costos | `cost_records`, `overhead_rates`, `standard_costs`; vistas de desvíos previsto vs. real | 5 |
 | RRHH | `employees`, `job_positions`, `employee_categories`, `attendance_records`, `leaves`, `hr_events` (novedades) | 6 |

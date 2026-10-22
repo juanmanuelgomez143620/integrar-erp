@@ -11,7 +11,7 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 | 4a | Pedido de venta con control de crédito y reserva de stock; remito que descuenta el stock y genera el costo de lo vendido | El pedido del cliente llega a Depósito y la mercadería sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 4b | Factura de venta contra lo entregado, con su asiento; cuenta corriente de clientes | La venta termina en la contabilidad y en la deuda del cliente | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 4c | Recibo de cobro, antigüedad de saldos (clientes morosos) y cobros en el flujo de fondos proyectado | El circuito vuelve a la caja y al banco | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 4d | Listas de precios y presupuestos | El pedido nace de un presupuesto aceptado, con los precios de la lista del cliente | Pendiente |
+| 4d | Listas de precios y presupuestos | El pedido nace de un presupuesto aceptado, con los precios de la lista del cliente | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 
 ## 2. Pedido de venta (`PV-00001`, 4a)
 
@@ -44,8 +44,11 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 
 ## 6. Listas de precios y presupuestos (4d)
 
-- **Listas de precios**: el precio de cada producto en cada lista (por ejemplo, mayorista y minorista); cada cliente tiene la suya, y la lista se actualiza por porcentaje (contexto inflacionario). El pedido propone el precio de la lista del cliente.
-- **Presupuesto (`PRE-00001`)**: Ventas le cotiza a un cliente (ítems, precios de su lista, validez de la oferta). **Enviado → Aceptado** (genera el pedido en borrador) **/ Rechazado / Vencido**. No reserva stock ni controla crédito: eso pasa al confirmar el pedido.
+- **Listas de precios**: cada empresa arma las suyas (por ejemplo, mayorista y minorista), con el precio sin IVA de cada producto que se vende. Ventas crea una lista copiando los precios de venta de los productos, con un porcentaje si hace falta (la mayorista, un 10 % menos), y la ajusta después por porcentaje para toda la lista (contexto inflacionario: "subir la lista un 8 %") o producto por producto; un producto se puede sacar de la lista. Cada cliente puede tener una lista asignada en su ficha; si no tiene, o si el producto no está en ella, vale el precio de venta del producto **(a validar)**. Una lista desactivada deja de proponerse. Los cambios quedan en la auditoría. La plantilla no trae listas: armarlas (por ejemplo, la mayorista para las mueblerías y distribuidoras) es parte del trabajo de Ventas **(a validar)**.
+- **El pedido propone el precio de la lista del cliente**, y la bonificación se mide contra ese precio. Los pedidos ya cargados no cambian cuando se actualiza la lista.
+- **Presupuesto (`PRE-00001`)**: Ventas le cotiza a un cliente: ítems, cantidades y precios (los de su lista, con bonificación si hace falta), depósito desde el que se entregaría, condición de pago, referencia del cliente y validez de la oferta (por defecto, 15 días **(a validar)**). No reserva stock ni controla crédito: eso pasa al confirmar el pedido.
+  - **Borrador → Enviado** (se imprime para el cliente; Ventas recibe la tarea de seguirlo) **→ Aceptado / Rechazado / Vencido**. Al registrar la **aceptación** se genera el pedido de venta en borrador, con los mismos ítems y precios, enlazado al presupuesto: Ventas lo revisa y lo confirma (ahí se controlan el stock y el crédito). El **rechazo** lleva el motivo del cliente. Pasada la validez, el presupuesto no se acepta (se prepara otro con los precios del día) y Ventas lo da por **vencido**. El borrador o el enviado se anulan con motivo.
+  - Se imprime con la leyenda de simulación y la validez de la oferta.
 
 ## 7. Asientos automáticos (reglas base, a validar)
 
@@ -72,5 +75,9 @@ El circuito es el espejo del de compras, que los estudiantes ya conocen: el clie
 | `receivable.read` (cuenta corriente de clientes) | Ventas, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
 | `customer_receipt.read` (recibos de cobro, 4c) | Tesorería, Ventas, Gerencia, Contabilidad, Impuestos, Auditoría |
 | `customer_receipt.create/cancel` | Tesorería (sólo se anula uno cobrado si el dinero sigue en la cuenta) |
+| `price_list.read` (listas de precios, 4d) | Ventas, Gerencia, Contabilidad, Auditoría |
+| `price_list.create/update` | Ventas |
+| `sales_quote.read` (presupuestos, 4d) | Ventas, Gerencia, Contabilidad, Tesorería, Impuestos, Auditoría |
+| `sales_quote.create/cancel` | Ventas (create también envía y registra la respuesta del cliente; cancel anula y da por vencido) |
 
 Separación de funciones nueva: **SoD-8**, quien prepara un pedido de venta no autoriza su crédito; **SoD-9**, quien emite la factura no registra su cobro. Depósito despacha y Ventas factura: lo que se factura se controla contra lo que salió.

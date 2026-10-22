@@ -44,7 +44,8 @@ Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 pro
 | D6 | Fase 4a (`docs/FASE_4_VENTAS_Y_CLIENTES.md`): pedido de venta con control de crédito y reserva de stock; remito que descuenta el stock y registra el costo de lo vendido | Hecho (20/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
 | D7 | Fase 4b: factura de venta contra lo entregado (letra A o B) con su asiento, y cuenta corriente de clientes | Hecho (21/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
 | D8 | Fase 4c: recibo de cobro, antigüedad de saldos y cobros en el flujo de fondos proyectado | Hecho (22/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
-| D9 | Fase 4d: listas de precios y presupuestos | Pendiente |
+| D9 | Fase 4d: listas de precios y presupuestos | Hecho (22/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
+| D10 | Fase 5: producción y costos (lista de materiales, orden de producción, consumos y producción terminada, costo real contra el previsto) | Pendiente: primero el diseño corto (`docs/FASE_5_PRODUCCION_Y_COSTOS.md`) |
 
 ## Reglas para quien ejecute el plan
 
