@@ -51,6 +51,7 @@ const DOC_TYPES: DocType[] = [
   'SALES_ORDER',
   'DELIVERY_NOTE',
   'SALES_INVOICE',
+  'CUSTOMER_RECEIPT',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -294,6 +295,18 @@ describe('tesorería', () => {
         await same(u, () => Q.paymentCandidates(mock, userId(u), company, id), 'payment_candidates', [
           companyPg,
           mock.suppliers.some((s) => s.id === id) ? loaded.pg(id) : id,
+        ])
+  })
+
+  it('facturas para cobrar, con lo reservado en otros recibos', async () => {
+    const customers = ['CLI-001', 'CLI-009', 'CLI-005', 'CLI-002'].map(
+      (code) => mock.customers.find((c) => c.company_id === company && c.code === code)!.id,
+    )
+    for (const u of ['docente', 'tesoreria', 'ventas', 'gerencia', 'contabilidad'])
+      for (const id of [...customers, crypto.randomUUID()])
+        await same(u, () => Q.receiptCandidates(mock, userId(u), company, id), 'receipt_candidates', [
+          companyPg,
+          mock.customers.some((c) => c.id === id) ? loaded.pg(id) : id,
         ])
   })
 })

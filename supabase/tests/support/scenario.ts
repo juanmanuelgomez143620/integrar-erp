@@ -358,8 +358,59 @@ export function buildScenario(): DB {
   E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(credit.id), false)
   const counter = E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-009', [['PT-002', 1]]), true)
   E.cmdCreateDeliveryNote(as('deposito'), company, delivery(counter.id), true)
-  E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(counter.id), true)
+  const counterInvoice = E.cmdCreateSalesInvoice(as('ventas'), company, saleInvoice(counter.id), true)
   E.cmdCreateSalesOrder(as('ventas'), company, salesOrder('CLI-001', [['PT-002', 2]]), true)
+
+  // Cobros: una parte de la factura vencida de la demo con un cheque del cliente
+  // (a Valores a depositar, y después depositado en el banco), uno anulado con
+  // su contraasiento, uno en borrador que reserva otra parte y la factura B
+  // cobrada completa en efectivo.
+  const collection = (
+    invoiceId: string,
+    amount: number,
+    method: E.CustomerReceiptInput['payment_method'],
+    code: string,
+    reference = '',
+  ): E.CustomerReceiptInput => ({
+    customer_id: db.documents.find((d) => d.id === invoiceId)!.customer_id!,
+    treasury_account_id: treasury(code),
+    payment_method: method,
+    reference,
+    notes: '',
+    lines: [{ invoice_id: invoiceId, amount }],
+  })
+  E.cmdCreateCustomerReceipt(
+    as('tesoreria'),
+    company,
+    collection(demoInvoice.id, 500000, 'CHEQUE', '1.1.01.04', '00004567'),
+    true,
+  )
+  E.cmdCreateFundsTransfer(
+    as('tesoreria'),
+    company,
+    funds('1.1.01.04', '1.1.01.03', 500000, 'Depósito del cheque 00004567'),
+    true,
+  )
+  const bounced = E.cmdCreateCustomerReceipt(
+    as('tesoreria'),
+    company,
+    collection(demoInvoice.id, 300000, 'TRANSFERENCIA', '1.1.01.03', 'TRF 8841'),
+    true,
+  )
+  E.cmdCancelCustomerReceipt(as('tesoreria'), bounced.id, 'El banco rechazó la transferencia')
+  E.cmdCreateCustomerReceipt(
+    as('tesoreria'),
+    company,
+    collection(demoInvoice.id, 200000, 'EFECTIVO', '1.1.01.01'),
+    false,
+  )
+  const counterTotal = db.documents.find((d) => d.id === counterInvoice.id)!.total
+  E.cmdCreateCustomerReceipt(
+    as('tesoreria'),
+    company,
+    collection(counterInvoice.id, counterTotal, 'EFECTIVO', '1.1.01.01'),
+    true,
+  )
 
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(

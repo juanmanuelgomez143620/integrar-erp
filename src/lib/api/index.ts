@@ -16,6 +16,7 @@ import { createSupabaseBackend, type SupabaseConfig } from './supabase'
 export { BusinessError } from '../mock/engine'
 export type {
   AccountRow,
+  AgingKey,
   AvailableAction,
   CashFlow,
   CashFlowAccount,
@@ -63,6 +64,8 @@ export type {
   ReconciliationView,
   ReceivableInvoice,
   ReceivableRow,
+  ReceiptCandidate,
+  ReceiptView,
   RfqView,
   SalesCustomer,
   SalesOrderView,
@@ -80,6 +83,7 @@ export type {
 export type {
   AccountInput,
   BankReconciliationInput,
+  CustomerReceiptInput,
   ChangePasswordInput,
   CourseInput,
   DeliveryNoteInput,
@@ -208,6 +212,8 @@ const mockApi = {
     query((db, u) => Q.reconciliationCandidates(db, u, companyId, accountId, statementDate)),
   paymentCandidates: (companyId: string, supplierId: string) =>
     query((db, u) => Q.paymentCandidates(db, u, companyId, supplierId)),
+  receiptCandidates: (companyId: string, customerId: string) =>
+    query((db, u) => Q.receiptCandidates(db, u, companyId, customerId)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -320,6 +326,11 @@ const mockCommands = {
     command((c) => E.cmdCreateSalesInvoice(c, companyId, input, register)),
   confirmSalesInvoice: (docId: string) => command((c) => E.cmdConfirmSalesInvoice(c, docId)),
   cancelSalesInvoice: (docId: string, reason: string) => command((c) => E.cmdCancelSalesInvoice(c, docId, reason)),
+  createCustomerReceipt: (companyId: string, input: E.CustomerReceiptInput, confirm: boolean) =>
+    command((c) => E.cmdCreateCustomerReceipt(c, companyId, input, confirm)),
+  confirmCustomerReceipt: (docId: string) => command((c) => E.cmdConfirmCustomerReceipt(c, docId)),
+  cancelCustomerReceipt: (docId: string, reason: string) =>
+    command((c) => E.cmdCancelCustomerReceipt(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

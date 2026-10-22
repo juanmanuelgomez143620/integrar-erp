@@ -13,7 +13,7 @@ import { useCompany } from '@/app/company'
 
 const head = 'h-9 text-xs font-semibold text-slate-600'
 
-/** Flujo de fondos: lo que va a salir según los vencimientos y lo que entró y salió en un período. */
+/** Flujo de fondos: lo que va a entrar y salir según los vencimientos, y lo que entró y salió en un período. */
 export function CashFlowPage() {
   const company = useCompany()
   const today = todayAR()
@@ -38,7 +38,7 @@ export function CashFlowPage() {
           { label: 'Flujo de fondos' },
         ]}
         title="Flujo de fondos"
-        description="Si alcanza el dinero para lo que hay que pagar, y de dónde vino y adónde fue en un período. Sale de los vencimientos de las facturas y del libro mayor de cajas y bancos: no se carga a mano."
+        description="Si alcanza el dinero para lo que hay que pagar, contando lo que falta cobrar, y de dónde vino y adónde fue en un período. Sale de los vencimientos de las facturas y del libro mayor de cajas y bancos: no se carga a mano."
       />
       <div className="flex flex-col gap-4">
         {projection.data ? <Projection data={projection.data} /> : <Loading error={projection.error} />}
@@ -69,18 +69,23 @@ function Projection({ data }: { data: CashProjection }) {
   return (
     <Section
       title="Flujo proyectado"
-      description="Desde el saldo de hoy, lo que falta pagar de las facturas de proveedores según su vencimiento. Los cobros a clientes se sumarán con Ventas."
+      description="Desde el saldo de hoy, lo que falta cobrar de las facturas de venta y pagar de las de proveedores, según su vencimiento. Lo vencido sin cobrar puede demorarse: es lo que muestra la antigüedad de saldos."
       bodyClassName="p-0"
     >
-      <div className="grid gap-3 p-4 sm:grid-cols-3">
+      <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Disponible hoy en cajas y bancos" value={money(data.balance)} icon={Landmark} />
+        <KpiCard
+          label="Falta cobrar a clientes"
+          value={money(data.buckets.reduce((s, b) => s + b.collections, 0))}
+          hint="Facturas de venta registradas con saldo"
+        />
         <KpiCard
           label="Falta pagar a proveedores"
           value={money(data.buckets.reduce((s, b) => s + b.payments, 0))}
-          hint="Facturas registradas con saldo"
+          hint="Facturas de proveedores registradas con saldo"
         />
         <KpiCard
-          label="Saldo después de pagar todo"
+          label="Saldo después de cobrar y pagar todo"
           value={money(data.buckets[data.buckets.length - 1]?.balance ?? data.balance)}
           tone={data.shortfall ? 'danger' : 'default'}
         />
@@ -89,9 +94,9 @@ function Projection({ data }: { data: CashProjection }) {
         <div className="mx-4 mb-4 flex gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900">
           <CircleAlert className="mt-0.5 size-4 shrink-0" />
           <div>
-            <span className="font-medium">No alcanzan los fondos:</span> para pagar lo que vence hasta el tramo "
-            {short.label.toLowerCase()}" faltan {money(-short.balance)}. Hay que conseguir fondos (cobrar, pedir un
-            préstamo) o negociar los plazos con los proveedores.
+            <span className="font-medium">No alcanzan los fondos:</span> aun cobrando lo que vence, para pagar lo que
+            vence hasta el tramo "{short.label.toLowerCase()}" faltan {money(-short.balance)}. Hay que conseguir fondos
+            (adelantar cobranzas, pedir un préstamo) o negociar los plazos con los proveedores.
           </div>
         </div>
       )}
@@ -100,7 +105,7 @@ function Projection({ data }: { data: CashProjection }) {
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50">
               <TableHead className={head}>Vencimiento</TableHead>
-              <TableHead className={cn(head, 'text-right')}>Facturas</TableHead>
+              <TableHead className={cn(head, 'text-right')}>A cobrar</TableHead>
               <TableHead className={cn(head, 'text-right')}>A pagar</TableHead>
               <TableHead className={cn(head, 'text-right')}>Saldo después</TableHead>
             </TableRow>
@@ -114,11 +119,30 @@ function Projection({ data }: { data: CashProjection }) {
             </TableRow>
             {data.buckets.map((b) => (
               <TableRow key={b.key}>
-                <TableCell className={cn('text-sm', b.key === 'VENCIDAS' && b.payments > 0 && 'text-red-700')}>
+                <TableCell
+                  className={cn(
+                    'text-sm',
+                    b.key === 'VENCIDAS' && (b.payments > 0 || b.collections > 0) && 'text-red-700',
+                  )}
+                >
                   {b.label}
                 </TableCell>
-                <TableCell className="tabular text-right">{b.invoices || '—'}</TableCell>
-                <TableCell className="tabular text-right">{b.payments ? money(b.payments) : '—'}</TableCell>
+                <TableCell className="tabular text-right">
+                  {b.collections ? money(b.collections) : '—'}
+                  {b.receivables > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      {b.receivables} {b.receivables === 1 ? 'factura' : 'facturas'}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="tabular text-right">
+                  {b.payments ? money(b.payments) : '—'}
+                  {b.invoices > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      {b.invoices} {b.invoices === 1 ? 'factura' : 'facturas'}
+                    </div>
+                  )}
+                </TableCell>
                 <TableCell className={cn('tabular text-right font-medium', b.balance < 0 && 'text-red-700')}>
                   {money(b.balance)}
                 </TableCell>

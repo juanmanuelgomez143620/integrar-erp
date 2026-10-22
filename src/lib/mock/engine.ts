@@ -3674,8 +3674,8 @@ const amountWithVat = (quantity: number, unitPrice: number, vatRate: number) => 
   return round2(net + round2((net * vatRate) / 100))
 }
 
-/** Facturas de venta que generaron deuda (registradas; desde 4c, también las cobradas en parte). */
-export const INVOICED_SALES_STATUSES = ['REGISTRADA']
+/** Facturas de venta que generaron deuda: registradas, cobradas en parte o cobradas. */
+export const INVOICED_SALES_STATUSES = ['REGISTRADA', 'COBRADA_PARCIAL', 'COBRADA']
 
 /** Lo facturado de un ítem del pedido en facturas registradas (salvo una). */
 export function salesInvoicedQuantity(db: DB, soLineId: string, exceptDocId?: string) {
@@ -3691,8 +3691,30 @@ export function salesInvoicedQuantity(db: DB, soLineId: string, exceptDocId?: st
   )
 }
 
-/** Lo que falta cobrar de una factura de venta registrada (desde 4c le restan los cobros). */
-export const salesInvoicePending = (_db: DB, invoice: T.Document) => round2(invoice.total)
+/** Lo que aplican a una factura de venta los recibos de cobro en esos estados (salvo uno). */
+function appliedToSalesInvoice(db: DB, invoiceId: string, statuses: string[], exceptDocId?: string) {
+  const receipts = new Set(
+    db.documents
+      .filter((d) => d.doc_type === 'CUSTOMER_RECEIPT' && statuses.includes(d.status) && d.id !== exceptDocId)
+      .map((d) => d.id),
+  )
+  return round2(
+    db.rcLines
+      .filter((l) => l.invoice_id === invoiceId && receipts.has(l.document_id))
+      .reduce((s, l) => s + l.amount, 0),
+  )
+}
+
+/** Lo cobrado de una factura de venta: sus recibos de cobro confirmados. */
+export const salesInvoiceCollected = (db: DB, invoiceId: string) => appliedToSalesInvoice(db, invoiceId, ['CONFIRMADO'])
+
+/** Lo reservado de una factura de venta en recibos de cobro en borrador (salvo uno). */
+export const salesInvoiceCommitted = (db: DB, invoiceId: string, exceptDocId?: string) =>
+  appliedToSalesInvoice(db, invoiceId, ['BORRADOR'], exceptDocId)
+
+/** Lo que falta cobrar de una factura de venta registrada: su total menos lo cobrado. */
+export const salesInvoicePending = (db: DB, invoice: T.Document) =>
+  round2(invoice.total - salesInvoiceCollected(db, invoice.id))
 
 /** Facturas de venta registradas de un cliente, por número. */
 function customerInvoices(db: DB, customerId: string) {
@@ -4439,6 +4461,12 @@ export function cmdCancelSalesInvoice(ctx: Ctx, docId: string, reason: string) {
   const actor = requirePermission(ctx, doc.company_id, 'sales_invoice.cancel')
   const comment = reason.trim()
   if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const receipt = draftReceiptWith(db, doc.id)
+  if (receipt)
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} está en el recibo de cobro ${receipt.display_number}: primero hay que anular ese recibo.`,
+    )
   const entry = automaticEntryOf(db, doc.id)
   const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
   transition(ctx, doc, 'CANCEL', {
@@ -4446,6 +4474,220 @@ export function cmdCancelSalesInvoice(ctx: Ctx, docId: string, reason: string) {
     actor,
     summary: `Anuló ${doc.display_number}${reversal ? ` y su asiento con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
   })
+}
+
+// ============================================================ Recibos de cobro (docs/FASE_4_VENTAS_Y_CLIENTES.md §5)
+
+export interface CustomerReceiptInput {
+  customer_id: string
+  /** Caja o banco donde ingresa el dinero (los cheques de terceros, a Valores a depositar). */
+  treasury_account_id: string
+  payment_method: T.PaymentMethod
+  /** Número de la transferencia o del cheque del cliente. */
+  reference: string
+  notes: string
+  lines: { invoice_id: string; amount: number }[]
+}
+
+/** Facturas de venta que todavía se pueden cobrar. */
+const COLLECTIBLE_STATUSES = ['REGISTRADA', 'COBRADA_PARCIAL']
+
+export const receiptLines = (db: DB, docId: string) =>
+  db.rcLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** El primer recibo de cobro en borrador que incluye una factura de venta. */
+function draftReceiptWith(db: DB, invoiceId: string) {
+  const ids = new Set(db.rcLines.filter((l) => l.invoice_id === invoiceId).map((l) => l.document_id))
+  return db.documents.filter((d) => ids.has(d.id) && d.status === 'BORRADOR').sort((a, b) => a.number - b.number)[0]
+}
+
+/** Caja o banco donde ingresa un cobro: una cuenta imputable y activa del rubro Caja y bancos. */
+function receiptAccount(db: DB, companyId: string, accountId: string) {
+  const account = db.accounts.find((a) => a.id === accountId && a.company_id === companyId)
+  if (!account || !account.is_imputable || !account.code.startsWith(`${TREASURY_RUBRO}.`))
+    fail('DATO_INVALIDO', 'Elegí la caja o el banco donde ingresa el cobro (una cuenta de Caja y bancos).')
+  if (!account.is_active) fail('DATO_INVALIDO', `La cuenta ${accountLabel(account)} está desactivada.`)
+  return account
+}
+
+/** Estado de una factura de venta según lo cobrado: registrada, cobrada parcialmente o cobrada. */
+function recomputeSalesInvoice(ctx: Ctx, invoiceId: string) {
+  const invoice = getDoc(ctx.db, invoiceId, 'SALES_INVOICE')
+  if (!INVOICED_SALES_STATUSES.includes(invoice.status)) return
+  const collected = salesInvoiceCollected(ctx.db, invoice.id)
+  const target = collected >= invoice.total - EPS ? 'COBRADA' : collected > EPS ? 'COBRADA_PARCIAL' : 'REGISTRADA'
+  if (target !== invoice.status) transition(ctx, invoice, 'SYSTEM', { to: target })
+}
+
+export function cmdCreateCustomerReceipt(ctx: Ctx, companyId: string, input: CustomerReceiptInput, confirm: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'customer_receipt.create')
+  const customer = db.customers.find((c) => c.id === input.customer_id && c.company_id === companyId)
+  if (!customer) fail('DATO_INVALIDO', 'Elegí el cliente que paga.')
+  const account = receiptAccount(db, companyId, input.treasury_account_id)
+  if (!Object.hasOwn(PAYMENT_VIA, input.payment_method))
+    fail('DATO_INVALIDO', 'Elegí el medio de cobro: transferencia, cheque o efectivo.')
+  const reference = input.reference.trim()
+  if (reference.length > 60) fail('DATO_INVALIDO', 'La referencia del cobro tiene hasta 60 caracteres.')
+  if (input.payment_method === 'CHEQUE' && !/^\d{1,8}$/.test(reference))
+    fail(
+      'DATO_INVALIDO',
+      'Indicá el número del cheque del cliente (hasta 8 números).',
+      'Los cheques de terceros quedan en Valores a depositar hasta que se depositan en el banco.',
+    )
+  const seen = new Set<string>()
+  const lines = input.lines
+    .filter((l) => l.invoice_id && l.amount)
+    .map((l) => {
+      const invoice = db.documents.find(
+        (d) => d.id === l.invoice_id && d.company_id === companyId && d.doc_type === 'SALES_INVOICE',
+      )
+      if (!invoice || invoice.customer_id !== customer.id)
+        fail('DATO_INVALIDO', `Una de las facturas no es de ${customer.legal_name}.`)
+      if (seen.has(invoice.id)) fail('DATO_INVALIDO', `${invoice.display_number} está dos veces en el recibo.`)
+      seen.add(invoice.id)
+      if (!COLLECTIBLE_STATUSES.includes(invoice.status))
+        fail(
+          'DATO_INVALIDO',
+          `${invoice.display_number} está en estado "${statusLabel(invoice.doc_type, invoice.status)}": se cobran facturas registradas con saldo.`,
+        )
+      if (!Number.isFinite(l.amount) || !(l.amount > 0) || round2(l.amount) !== l.amount)
+        fail('DATO_INVALIDO', 'Los importes deben ser mayores que cero y tener hasta 2 decimales.')
+      const pending = salesInvoicePending(db, invoice)
+      const committed = salesInvoiceCommitted(db, invoice.id)
+      const available = round2(pending - committed)
+      if (l.amount > available + EPS)
+        fail(
+          'IMPORTE_EXCEDIDO',
+          `${invoice.display_number}: el saldo es ${money(pending)}${committed > 0 ? ` y ya hay ${money(committed)} en otros recibos en borrador` : ''}; como mucho se pueden cobrar ${money(Math.max(available, 0))}.`,
+          'Una factura no se cobra dos veces: lo que está en un recibo en borrador queda reservado.',
+        )
+      return { invoice, amount: l.amount }
+    })
+  if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué facturas se cobran y cuánto de cada una.')
+  const doc = newDocument(ctx, companyId, 'CUSTOMER_RECEIPT', actor, {
+    customer_id: customer.id,
+    notes: input.notes.trim(),
+    rc: { treasury_account_id: account.id, payment_method: input.payment_method, reference, received_on: null },
+  })
+  lines.forEach((l, i) => {
+    db.rcLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      invoice_id: l.invoice.id,
+      amount: l.amount,
+    })
+  })
+  doc.subtotal = round2(lines.reduce((s, l) => s + l.amount, 0))
+  doc.total = doc.subtotal
+  for (const l of lines) link(ctx, companyId, l.invoice.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'customer_receipt',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: cobro a ${customer.legal_name} por ${money(doc.total)} ${PAYMENT_VIA[input.payment_method].phrase} en ${accountLabel(account)}`,
+  })
+  if (confirm) confirmCustomerReceipt(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/**
+ * Confirma el cobro: controla de nuevo los saldos de las facturas, genera el
+ * asiento (la caja o el banco al debe y Deudores por ventas al haber) y
+ * actualiza el estado de cada factura. Quien emitió una factura no registra
+ * su cobro (SoD-9).
+ */
+function confirmCustomerReceipt(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'CONFIRM')
+  const company = getCompany(db, doc.company_id)
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  const lines = receiptLines(db, doc.id)
+  for (const l of lines) {
+    const invoice = getDoc(db, l.invoice_id, 'SALES_INVOICE')
+    if (company.settings.sod_enabled && !eff.supervisor && invoiceRegistrant(db, invoice.id) === ctx.userId)
+      fail(
+        'SEPARACION_FUNCIONES',
+        `No podés cobrar ${invoice.display_number}: la emitiste vos.`,
+        'Separación de funciones: quien emite una factura no registra su cobro. Tiene que cobrarla otro integrante de Tesorería.',
+      )
+  }
+  for (const l of lines) {
+    const invoice = getDoc(db, l.invoice_id, 'SALES_INVOICE')
+    const pending = salesInvoicePending(db, invoice)
+    if (!COLLECTIBLE_STATUSES.includes(invoice.status) || l.amount > pending + EPS)
+      fail(
+        'IMPORTE_EXCEDIDO',
+        `${invoice.display_number}: el saldo pendiente es ${money(Math.max(pending, 0))} y el recibo cobra ${money(l.amount)}.`,
+      )
+  }
+  const account = receiptAccount(db, doc.company_id, doc.rc!.treasury_account_id)
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  const via = PAYMENT_VIA[doc.rc!.payment_method]
+  const number = doc.rc!.reference ? ` N.º ${doc.rc!.reference}` : ''
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    summary: `Confirmó ${doc.display_number}: cobró ${money(doc.total)} a ${customer.legal_name} ${via.phrase}${number} en ${accountLabel(account)}`,
+  })
+  doc.rc = { ...doc.rc!, received_on: businessDate(company) }
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    'COBRO',
+    `Cobro a ${customer.legal_name} según ${doc.display_number} (${via.noun}${number}).`,
+    [
+      { account_id: account.id, debit: doc.total, credit: 0 },
+      { key: 'DEUDORES', debit: 0, credit: doc.total },
+    ],
+  )
+  for (const l of lines) recomputeSalesInvoice(ctx, l.invoice_id)
+}
+
+export function cmdConfirmCustomerReceipt(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'CUSTOMER_RECEIPT')
+  requirePermission(ctx, doc.company_id, 'customer_receipt.create')
+  confirmCustomerReceipt(ctx, doc)
+}
+
+/**
+ * El borrador se anula sin más (lo que reservaba se libera). Un recibo cobrado
+ * se anula con el contraasiento de su cobro, si el dinero todavía está en la
+ * caja o el banco, y sus facturas vuelven a tener saldo.
+ */
+export function cmdCancelCustomerReceipt(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'CUSTOMER_RECEIPT')
+  if (doc.status !== 'CONFIRMADO') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'customer_receipt.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const account = db.accounts.find((a) => a.id === doc.rc!.treasury_account_id)!
+  const balance = accountBalance(db, account.id)
+  if (doc.total > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No se puede anular: en ${accountLabel(account)} hay ${money(balance)} y el cobro fue por ${money(doc.total)}.`,
+      'El dinero ya salió de esa cuenta (por ejemplo, se depositó en el banco): primero hay que anular ese movimiento.',
+    )
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulado: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? ` y su cobro con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
+  })
+  for (const l of receiptLines(db, doc.id)) recomputeSalesInvoice(ctx, l.invoice_id)
 }
 
 // ============================================================ Tareas y notificaciones

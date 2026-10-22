@@ -42,8 +42,9 @@ export type DocType =
   | 'SALES_ORDER'
   | 'DELIVERY_NOTE'
   | 'SALES_INVOICE'
+  | 'CUSTOMER_RECEIPT'
 
-/** Cómo se pagó una orden de pago. */
+/** Cómo se pagó una orden de pago o se cobró un recibo. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
 
 export type TransitionAction =
@@ -391,6 +392,27 @@ export interface SalesInvoiceHeader {
   registered_at: string | null
 }
 
+/** Recibo de cobro (tabla customer_receipts, 1 a 1 con documents): qué facturas de un cliente se cobran y dónde ingresa el dinero. */
+export interface CustomerReceiptHeader {
+  /** Caja o banco donde ingresa el dinero: los cheques de terceros, a Valores a depositar. */
+  treasury_account_id: string
+  payment_method: PaymentMethod
+  /** Número de la transferencia o del cheque del cliente (obligatorio con cheque). */
+  reference: string
+  /** Fecha del cobro (al confirmarse: la del asiento). */
+  received_on: string | null
+}
+
+/** Una factura (y cuánto de ella) que cancela un recibo de cobro. */
+export interface CustomerReceiptLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  invoice_id: string
+  amount: number
+}
+
 /** Un movimiento del mayor que figura en el extracto (tabla bank_reconciliation_lines). */
 export interface BankReconciliationLine {
   id: string
@@ -431,6 +453,7 @@ export interface Document extends Audited {
   so?: SalesOrderHeader
   dn?: DeliveryNoteHeader
   fv?: SalesInvoiceHeader
+  rc?: CustomerReceiptHeader
 }
 
 export interface RequisitionLine {

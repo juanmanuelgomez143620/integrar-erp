@@ -1,5 +1,5 @@
-// Pruebas de los pedidos de venta, los remitos y las facturas de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2 a §4)
-// sobre buildSeed() y los cmd*.
+// Pruebas de los pedidos de venta, los remitos, las facturas de venta y los cobros
+// (docs/FASE_4_VENTAS_Y_CLIENTES.md §2 a §5) sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DB } from './db'
@@ -7,29 +7,39 @@ import {
   BusinessError,
   accountBalance,
   cmdApproveSalesOrder,
+  cmdAssignRole,
+  cmdCancelCustomerReceipt,
   cmdCancelDeliveryNote,
+  cmdCancelFundsTransfer,
   cmdCancelSalesInvoice,
   cmdCancelSalesOrder,
   cmdCloseSalesOrder,
+  cmdConfirmCustomerReceipt,
   cmdConfirmDeliveryNote,
   cmdConfirmSalesInvoice,
   cmdConfirmSalesOrder,
+  cmdCreateCustomerReceipt,
   cmdCreateDeliveryNote,
+  cmdCreateFundsTransfer,
   cmdCreateSalesInvoice,
   cmdCreateSalesOrder,
   cmdRejectSalesOrder,
   onHandQuantity,
   reservedQuantity,
   type Ctx,
+  type CustomerReceiptInput,
   type SalesOrderInput,
 } from './engine'
 import {
+  cashFlow,
+  cashProjection,
   customerAccount,
   dispatchableOrders,
   documentDetail,
   invoiceableSalesOrders,
   listReceivables,
   listStock,
+  receiptCandidates,
   salesCatalog,
   salesCustomers,
 } from './queries'
@@ -398,5 +408,215 @@ describe('factura de venta y cuenta corriente de clientes', () => {
     const next = cmdCreateSalesOrder(ctx('ventas'), companyId(), order('CLI-001', [['PT-004', 1]]), true)
     expect(byNumber(next.display_number).status).toBe('PENDIENTE_APROBACION')
     expect(byNumber(next.display_number).so!.credit_reason).toContain('tiene facturas vencidas sin cobrar')
+  })
+})
+
+describe('recibo de cobro, antigüedad de saldos y flujo de fondos', () => {
+  /** Despacha el remito de demostración y factura todo PV-00001 (lo registra Ventas). */
+  const registeredInvoice = () => {
+    const pv = byNumber('PV-00001')
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const r = cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      {
+        sales_order_id: pv.id,
+        notes: '',
+        lines: linesOf(pv.id).map((l) => ({ so_line_id: l.id, quantity: l.qty_delivered })),
+      },
+      true,
+    )
+    return byNumber(r.display_number)
+  }
+  /** Recibo de cobro de una factura, al banco y por transferencia por defecto. */
+  const receipt = (
+    invoiceId: string,
+    amount: number,
+    over: Partial<CustomerReceiptInput> = {},
+  ): CustomerReceiptInput => ({
+    customer_id: db.documents.find((d) => d.id === invoiceId)!.customer_id!,
+    treasury_account_id: account('1.1.01.03'),
+    payment_method: 'TRANSFERENCIA',
+    reference: '',
+    notes: '',
+    lines: [{ invoice_id: invoiceId, amount }],
+    ...over,
+  })
+  const sector = (code: string) => db.sectors.find((s) => s.company_id === companyId() && s.code === code)!.id
+
+  it('cobrar una parte y después el saldo: el asiento de cobro, el estado de la factura y la cuenta corriente', () => {
+    const fv = registeredInvoice()
+    const total = fv.total
+    const bank = balance('1.1.01.03')
+    const deudores = balance('1.1.03.01')
+    const first = cmdCreateCustomerReceipt(ctx('tesoreria'), companyId(), receipt(fv.id, 1000000), true)
+    expect(byNumber(first.display_number).status).toBe('CONFIRMADO')
+    expect(fv.status).toBe('COBRADA_PARCIAL')
+    // La caja o el banco al debe, Deudores por ventas al haber.
+    expect(balance('1.1.01.03') - bank).toBe(1000000)
+    expect(deudores - balance('1.1.03.01')).toBe(1000000)
+    const statement = customerAccount(db, userId('ventas'), companyId(), customer('CLI-001').id)!
+    expect(statement.movements.map((m) => [m.debit, m.credit, m.balance])).toEqual([
+      [total, 0, total],
+      [0, 1000000, total - 1000000],
+    ])
+    expect(statement.movements[1].description).toBe('Cobro en Banco cuenta corriente')
+    expect(statement.pending[0]).toMatchObject({ collected: 1000000, pending: total - 1000000 })
+    expect(statement.credit_used).toBe(total - 1000000)
+    // El saldo, con un cheque del cliente que queda en Valores a depositar.
+    const second = cmdCreateCustomerReceipt(
+      ctx('tesoreria'),
+      companyId(),
+      receipt(fv.id, total - 1000000, {
+        treasury_account_id: account('1.1.01.04'),
+        payment_method: 'CHEQUE',
+        reference: '00012345',
+      }),
+      true,
+    )
+    expect(fv.status).toBe('COBRADA')
+    expect(balance('1.1.01.04')).toBe(total - 1000000)
+    expect(balance('1.1.03.01')).toBe(deudores - total)
+    const detail = documentDetail(db, userId('tesoreria'), companyId(), 'CUSTOMER_RECEIPT', second.display_number)!
+    expect(detail.receipt).toMatchObject({ payment_method: 'CHEQUE', reference: '00012345', received_on: '2027-05-14' })
+    expect(detail.receipt!.lines[0].invoice).toMatchObject({
+      display_number: fv.display_number,
+      invoice_label: 'A 00001-00000001',
+    })
+    expect(detail.next_step.text).toContain('transferencia entre cuentas')
+    expect(detail.doc.summary).toBe(fv.display_number)
+    expect(detail.flow.map((n) => n.doc_type)).toContain('CUSTOMER_RECEIPT')
+    expect(listReceivables(db, userId('gerencia'), companyId())[0]).toMatchObject({ balance: 0, invoices: 0 })
+    // Una factura cobrada ya no se anula.
+    expectBusinessError(() => cmdCancelSalesInvoice(ctx('ventas'), fv.id, 'Error de carga'), 'TRANSICION_INVALIDA')
+  })
+
+  it('lo que está en un recibo en borrador queda reservado y no se cobra más que el saldo', () => {
+    const fv = registeredInvoice()
+    const draft = cmdCreateCustomerReceipt(ctx('tesoreria'), companyId(), receipt(fv.id, fv.total - 100), false)
+    expect(db.tasks.some((t) => t.document_id === draft.id && t.task_type === 'CONFIRMAR_RBO')).toBe(true)
+    expectBusinessError(
+      () => cmdCreateCustomerReceipt(ctx('tesoreria'), companyId(), receipt(fv.id, 200), true),
+      'IMPORTE_EXCEDIDO',
+    )
+    expect(receiptCandidates(db, userId('tesoreria'), companyId(), customer('CLI-001').id)).toEqual([
+      expect.objectContaining({ committed: fv.total - 100, available: 100 }),
+    ])
+    // Mientras está en un recibo, la factura no se anula.
+    expectBusinessError(() => cmdCancelSalesInvoice(ctx('ventas'), fv.id, 'Error de carga'), 'TRANSICION_INVALIDA')
+    cmdCancelCustomerReceipt(ctx('tesoreria'), draft.id, 'El cliente pagó otro importe')
+    expect(fv.status).toBe('REGISTRADA')
+    cmdCreateCustomerReceipt(ctx('tesoreria'), companyId(), receipt(fv.id, 200), true)
+    expect(fv.status).toBe('COBRADA_PARCIAL')
+  })
+
+  it('validaciones: el medio, la cuenta, las facturas del cliente y los importes', () => {
+    const fv = registeredInvoice()
+    const create = (input: ReturnType<typeof receipt>, username = 'tesoreria') =>
+      cmdCreateCustomerReceipt(ctx(username), companyId(), input, true)
+    expectBusinessError(() => create(receipt(fv.id, 1000), 'ventas'), 'SIN_PERMISO')
+    expectBusinessError(() => create(receipt(fv.id, 1000, { payment_method: 'CHEQUE' })), 'DATO_INVALIDO')
+    expectBusinessError(
+      () => create(receipt(fv.id, 1000, { payment_method: 'CHEQUE', reference: 'Cheque 1' })),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => create(receipt(fv.id, 1000, { treasury_account_id: account('1.1.03.01') })),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(() => create(receipt(fv.id, 1000, { customer_id: customer('CLI-002').id })), 'DATO_INVALIDO')
+    expectBusinessError(() => create(receipt(fv.id, 10.005)), 'DATO_INVALIDO')
+    expectBusinessError(() => create(receipt(fv.id, fv.total + 1)), 'IMPORTE_EXCEDIDO')
+    expectBusinessError(() => create({ ...receipt(fv.id, 1000), lines: [] }), 'DATO_INVALIDO')
+    expectBusinessError(
+      () =>
+        create({
+          ...receipt(fv.id, 1000),
+          lines: [
+            { invoice_id: fv.id, amount: 1000 },
+            { invoice_id: fv.id, amount: 1000 },
+          ],
+        }),
+      'DATO_INVALIDO',
+    )
+  })
+
+  it('quien emitió la factura no registra su cobro, y anular un cobro lo revierte si el dinero sigue en la cuenta', () => {
+    const fv = registeredInvoice()
+    // Ventas también cobra: no puede cobrar la factura que emitió (SoD-9).
+    cmdAssignRole(ctx('docente'), companyId(), userId('ventas'), 'TESORERIA', sector('TES'))
+    const own = cmdCreateCustomerReceipt(ctx('ventas'), companyId(), receipt(fv.id, fv.total), false)
+    expectBusinessError(() => cmdConfirmCustomerReceipt(ctx('ventas'), own.id), 'SEPARACION_FUNCIONES')
+    expect(
+      documentDetail(db, userId('ventas'), companyId(), 'CUSTOMER_RECEIPT', own.display_number)!.actions.find(
+        (a) => a.action === 'CONFIRM',
+      ),
+    ).toMatchObject({ enabled: false })
+    cmdConfirmCustomerReceipt(ctx('tesoreria'), own.id)
+    expect(fv.status).toBe('COBRADA')
+    // El dinero sigue en el banco: se anula con contraasiento y la factura vuelve a tener saldo.
+    const deudores = balance('1.1.03.01')
+    cmdCancelCustomerReceipt(ctx('tesoreria'), own.id, 'Se registró en la cuenta equivocada')
+    expect(fv.status).toBe('REGISTRADA')
+    expect(balance('1.1.03.01') - deudores).toBe(fv.total)
+    // En cambio, si el cheque del cliente ya se depositó, primero hay que anular el depósito.
+    const cheque = cmdCreateCustomerReceipt(
+      ctx('tesoreria'),
+      companyId(),
+      receipt(fv.id, fv.total, {
+        treasury_account_id: account('1.1.01.04'),
+        payment_method: 'CHEQUE',
+        reference: '777',
+      }),
+      true,
+    )
+    const deposit = cmdCreateFundsTransfer(
+      ctx('tesoreria'),
+      companyId(),
+      {
+        from_account_id: account('1.1.01.04'),
+        to_account_id: account('1.1.01.03'),
+        amount: fv.total,
+        reference: '',
+        notes: '',
+      },
+      true,
+    )
+    expectBusinessError(
+      () => cmdCancelCustomerReceipt(ctx('tesoreria'), cheque.id, 'El cheque fue rechazado'),
+      'SALDO_INSUFICIENTE',
+    )
+    expect(
+      documentDetail(db, userId('tesoreria'), companyId(), 'CUSTOMER_RECEIPT', cheque.display_number)!.actions.find(
+        (a) => a.action === 'CANCEL',
+      ),
+    ).toMatchObject({ enabled: false })
+    cmdCancelFundsTransfer(ctx('tesoreria'), deposit.id, 'El banco rechazó el cheque')
+    cmdCancelCustomerReceipt(ctx('tesoreria'), cheque.id, 'El cheque fue rechazado')
+    expect(byNumber(cheque.display_number).status).toBe('ANULADO')
+    expect(balance('1.1.01.04')).toBe(0)
+    expect(fv.status).toBe('REGISTRADA')
+  })
+
+  it('antigüedad de saldos y los cobros en el flujo de fondos real y proyectado', () => {
+    const fv = registeredInvoice()
+    // Pasó el tiempo: venció hace 45 días.
+    fv.fv!.due_date = '2027-03-30'
+    cmdCreateCustomerReceipt(ctx('tesoreria'), companyId(), receipt(fv.id, 500000), true)
+    const row = listReceivables(db, userId('gerencia'), companyId())[0]
+    expect(row.aging).toEqual({
+      A_VENCER: 0,
+      DE_1_A_30: 0,
+      DE_31_A_60: fv.total - 500000,
+      DE_61_A_90: 0,
+      MAS_DE_90: 0,
+    })
+    const flow = cashFlow(db, userId('tesoreria'), companyId(), '2027-05-01', '2027-05-31')
+    expect(flow.concepts.find((c) => c.key === 'COBROS')).toMatchObject({ inflow: 500000, outflow: 0 })
+    const projection = cashProjection(db, userId('tesoreria'), companyId())
+    expect(projection.buckets[0]).toMatchObject({ key: 'VENCIDAS', collections: fv.total - 500000, receivables: 1 })
+    const last = projection.buckets[projection.buckets.length - 1]
+    const payments = projection.buckets.reduce((s, b) => s + b.payments, 0)
+    expect(last.balance).toBeCloseTo(projection.balance + fv.total - 500000 - payments, 2)
   })
 })

@@ -185,6 +185,7 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'VENTA', key: 'SERVICIO', code: '4.1.01.03' },
   { event: 'VENTA', key: 'IVA_DEBITO', code: '2.1.04.01' },
   { event: 'VENTA', key: 'DEUDORES', code: '1.1.03.01' },
+  { event: 'COBRO', key: 'DEUDORES', code: '1.1.03.01' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */

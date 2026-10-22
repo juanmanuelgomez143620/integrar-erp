@@ -45,6 +45,7 @@ const DeliveryFormPage = lazyPage(() =>
 )
 const SalesOrderFormPage = lazyPage(() => import('@/features/sales/order-form').then((m) => m.SalesOrderFormPage))
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
+const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
 const CustomerAccountPage = lazyPage(() =>
   import('@/features/sales/receivables-pages').then((m) => m.CustomerAccountPage),
@@ -155,6 +156,9 @@ export const router = createBrowserRouter(
                 { path: 'pagos/ordenes', element: <DocumentListPage key="op" docType="PAYMENT_ORDER" /> },
                 { path: 'pagos/ordenes/nueva', element: <PaymentOrderFormPage /> },
                 { path: 'pagos/ordenes/:number', element: <DocumentPage key="op" docType="PAYMENT_ORDER" /> },
+                { path: 'pagos/cobros', element: <DocumentListPage key="rc" docType="CUSTOMER_RECEIPT" /> },
+                { path: 'pagos/cobros/nuevo', element: <CollectionFormPage /> },
+                { path: 'pagos/cobros/:number', element: <DocumentPage key="rc" docType="CUSTOMER_RECEIPT" /> },
                 { path: 'pagos/cajas-y-bancos', element: <TreasuryPage /> },
                 { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },

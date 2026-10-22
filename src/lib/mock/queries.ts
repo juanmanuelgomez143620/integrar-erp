@@ -43,6 +43,7 @@ import {
   orderFromQuote,
   quoteIsValid,
   quotesOf,
+  receiptLines,
   reconciledLineIds,
   requirePermission,
   requisitionAvailableQuantity,
@@ -51,6 +52,7 @@ import {
   round2,
   round3,
   INVOICED_SALES_STATUSES,
+  salesInvoiceCommitted,
   salesInvoicedQuantity,
   salesInvoiceLabel,
   salesInvoiceLines,
@@ -385,6 +387,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.dnLines.filter((l) => l.document_id === doc.id).length
     case 'SALES_INVOICE':
       return db.fvLines.filter((l) => l.document_id === doc.id).length
+    case 'CUSTOMER_RECEIPT':
+      return db.rcLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -402,6 +406,7 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     case 'PAYMENT_ORDER':
     case 'FUNDS_TRANSFER':
     case 'BANK_RECONCILIATION':
+    case 'CUSTOMER_RECEIPT':
       return []
     case 'SUPPLIER_INVOICE':
       return db.siLines.filter((l) => l.document_id === doc.id).sort(byLineNo)
@@ -419,17 +424,18 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
 }
 
 function listItem(db: DB, doc: T.Document): DocumentListItem {
-  // Lo que resume cada fila: los productos o, en una orden de pago, las facturas que paga.
-  const products =
-    doc.doc_type === 'PAYMENT_ORDER'
-      ? db.opLines
-          .filter((l) => l.document_id === doc.id)
-          .sort(byLineNo)
-          .map((l) => db.documents.find((d) => d.id === l.invoice_id)?.display_number)
-          .filter(Boolean)
-      : docLines(db, doc)
-          .map((l) => db.products.find((p) => p.id === l.product_id)?.code)
-          .filter(Boolean)
+  // Lo que resume cada fila: los productos o, en una orden de pago o un recibo de cobro, las facturas que cancela.
+  const invoiceLines: { document_id: string; line_no: number; invoice_id: string }[] | null =
+    doc.doc_type === 'PAYMENT_ORDER' ? db.opLines : doc.doc_type === 'CUSTOMER_RECEIPT' ? db.rcLines : null
+  const products = invoiceLines
+    ? invoiceLines
+        .filter((l) => l.document_id === doc.id)
+        .sort(byLineNo)
+        .map((l) => db.documents.find((d) => d.id === l.invoice_id)?.display_number)
+        .filter(Boolean)
+    : docLines(db, doc)
+        .map((l) => db.products.find((p) => p.id === l.product_id)?.code)
+        .filter(Boolean)
   const pending = db.approvalRequests.find((a) => a.document_id === doc.id && a.status === 'PENDIENTE')
   const origins = db.docLinks
     .filter((l) => l.to_document_id === doc.id)
@@ -504,6 +510,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'SALES_ORDER',
     'DELIVERY_NOTE',
     'SALES_INVOICE',
+    'CUSTOMER_RECEIPT',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -624,6 +631,21 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
         reason = `Los fondos ya se usaron: en ${accountLabel(to)} hay ${money(balance)}. Para devolverlos, prepará otra transferencia.`
     }
     if (doc.doc_type === 'SALES_ORDER') reason = salesOrderActionReason(db, userId, doc, tr.action) ?? reason
+    if (
+      doc.doc_type === 'CUSTOMER_RECEIPT' &&
+      tr.action === 'CONFIRM' &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      db.rcLines.some((l) => l.document_id === doc.id && invoiceRegistrant(db, l.invoice_id) === userId)
+    ) {
+      reason = 'Separación de funciones: emitiste una de las facturas; tiene que cobrarla otro integrante de Tesorería.'
+    }
+    if (doc.doc_type === 'CUSTOMER_RECEIPT' && doc.status === 'CONFIRMADO' && tr.action === 'CANCEL') {
+      const account = db.accounts.find((a) => a.id === doc.rc!.treasury_account_id)!
+      const balance = accountBalance(db, account.id)
+      if (doc.total > balance + 1e-9)
+        reason = `Los fondos ya se usaron: en ${accountLabel(account)} hay ${money(balance)}. Primero hay que anular el movimiento que los usó.`
+    }
     if (doc.doc_type === 'DELIVERY_NOTE' && doc.status === 'CONFIRMADO' && tr.action === 'CANCEL') {
       const order = db.documents.find((d) => d.id === doc.dn!.sales_order_id)!
       if (
@@ -890,6 +912,21 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: 'Tesorería',
         text: `La deuda está en la cuenta corriente del cliente y vence el ${date(doc.fv?.due_date)}. Se cancela cuando el cliente paga, con un recibo de cobro.`,
       }
+    case 'SALES_INVOICE:COBRADA_PARCIAL':
+      return {
+        who: 'Tesorería',
+        text: `El cliente pagó una parte: quedan ${money(salesInvoicePending(db, doc))} en su cuenta corriente (vence el ${date(doc.fv?.due_date)}). El saldo se cancela con otro recibo de cobro.`,
+      }
+    case 'CUSTOMER_RECEIPT:BORRADOR':
+      return {
+        who: 'Tesorería',
+        text: 'Revisar las facturas, los importes, el medio de cobro y la caja o el banco, y confirmar el cobro: se genera el asiento y baja la deuda del cliente. Quien emitió una de las facturas no puede registrar su cobro.',
+      }
+    case 'CUSTOMER_RECEIPT:CONFIRMADO':
+      return {
+        who: '—',
+        text: `Se cobró el ${date(doc.rc?.received_on)}: la deuda bajó en la cuenta corriente del cliente y el cobro está en el libro diario.${doc.rc?.payment_method === 'CHEQUE' ? ' Para depositar el cheque en el banco, Tesorería prepara una transferencia entre cuentas.' : ''}`,
+      }
     case 'SALES_ORDER:RECHAZADO':
       return {
         who: 'Ventas',
@@ -986,7 +1023,7 @@ export interface JournalView {
   reverses: { display_number: string; path: string } | null
 }
 
-/** Una factura que cancela la orden de pago, y cuánto de ella. */
+/** Una factura que cancela la orden de pago o el recibo de cobro, y cuánto de ella. */
 export interface PaymentLineView {
   id: string
   line_no: number
@@ -994,7 +1031,7 @@ export interface PaymentLineView {
     id: string
     display_number: string
     path: string
-    /** Comprobante del proveedor: "A 00003-00012874". */
+    /** Comprobante: "A 00003-00012874". */
     invoice_label: string
     document_date: string
     due_date: string
@@ -1009,6 +1046,15 @@ export interface PaymentView {
   payment_reference: string
   paid_on: string | null
   payment_method: T.PaymentMethod | null
+  lines: PaymentLineView[]
+}
+
+/** Recibo de cobro: dónde ingresó el dinero, con qué medio y qué facturas cancela. */
+export interface ReceiptView {
+  treasury_account: { id: string; code: string; name: string }
+  payment_method: T.PaymentMethod
+  reference: string
+  received_on: string | null
   lines: PaymentLineView[]
 }
 
@@ -1127,6 +1173,7 @@ export interface DocumentDetail {
   lines: DetailLine[]
   journal: JournalView | null
   payment: PaymentView | null
+  receipt: ReceiptView | null
   rfq: RfqView | null
   quote: QuoteView | null
   transfer: TransferView | null
@@ -1439,15 +1486,21 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                               { label: 'Emitió', ...firstBy(['CONFIRM', 'CREATE']) },
                               { label: 'Controló', name: '', sector: '', at: '' },
                             ]
-                          : [
-                              { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                              { label: 'Controló', name: '', sector: '', at: '' },
-                            ]
+                          : doc.doc_type === 'CUSTOMER_RECEIPT'
+                            ? [
+                                { label: 'Preparó', ...firstBy(['CREATE']) },
+                                { label: 'Cobró', ...firstBy(['CONFIRM']) },
+                              ]
+                            : [
+                                { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                                { label: 'Controló', name: '', sector: '', at: '' },
+                              ]
   return {
     doc: listItem(db, doc),
     lines,
     journal: doc.je ? journalView(db, doc) : null,
     payment: doc.op ? paymentView(db, doc) : null,
+    receipt: doc.rc ? receiptView(db, doc) : null,
     rfq: doc.rq ? rfqView(db, doc) : null,
     quote: doc.sq ? quoteView(db, doc) : null,
     transfer: doc.ft ? transferView(db, doc) : null,
@@ -1526,6 +1579,35 @@ function paymentView(db: DB, doc: T.Document): PaymentView {
           amount: l.amount,
         }
       }),
+  }
+}
+
+function receiptView(db: DB, doc: T.Document): ReceiptView {
+  const rc = doc.rc!
+  const account = db.accounts.find((a) => a.id === rc.treasury_account_id)!
+  return {
+    treasury_account: { id: account.id, code: account.code, name: account.name },
+    payment_method: rc.payment_method,
+    reference: rc.reference,
+    received_on: rc.received_on,
+    lines: receiptLines(db, doc.id).map((l) => {
+      const invoice = db.documents.find((d) => d.id === l.invoice_id)!
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        invoice: {
+          id: invoice.id,
+          display_number: invoice.display_number,
+          path: docPath(db, invoice),
+          invoice_label: salesInvoiceLabel(invoice.fv!),
+          document_date: invoice.document_date,
+          due_date: invoice.fv!.due_date,
+          total: invoice.total,
+          status_info: DOC_STATUSES[invoice.doc_type][invoice.status],
+        },
+        amount: l.amount,
+      }
+    }),
   }
 }
 
@@ -2268,6 +2350,9 @@ export interface ReceivableInvoice {
   overdue: boolean
 }
 
+/** Tramos de la antigüedad de saldos: a vencer y vencido de 1 a 30, de 31 a 60, de 61 a 90 y más de 90 días. */
+export type AgingKey = 'A_VENCER' | 'DE_1_A_30' | 'DE_31_A_60' | 'DE_61_A_90' | 'MAS_DE_90'
+
 export interface ReceivableRow {
   customer: {
     id: string
@@ -2281,6 +2366,28 @@ export interface ReceivableRow {
   invoices: number
   overdue: number
   next_due: string | null
+  /** Lo pendiente según los días que lleva vencido. */
+  aging: Record<AgingKey, number>
+}
+
+/** Hasta cuántos días de vencida entra una factura en cada tramo. */
+const AGING_BUCKETS: [AgingKey, number][] = [
+  ['A_VENCER', 0],
+  ['DE_1_A_30', 30],
+  ['DE_31_A_60', 60],
+  ['DE_61_A_90', 90],
+  ['MAS_DE_90', Infinity],
+]
+
+/** Antigüedad de saldos de unas facturas pendientes. */
+function agingOf(pending: ReceivableInvoice[], today: string): Record<AgingKey, number> {
+  const aging = Object.fromEntries(AGING_BUCKETS.map(([key]) => [key, 0])) as Record<AgingKey, number>
+  for (const i of pending) {
+    const days = daysBetween(i.due_date, today)
+    const [key] = AGING_BUCKETS.find(([, upTo]) => days <= upTo)!
+    aging[key] = round2(aging[key] + i.pending)
+  }
+  return aging
 }
 
 function receivableInvoice(db: DB, doc: T.Document, today: string): ReceivableInvoice {
@@ -2306,7 +2413,7 @@ function registeredSalesInvoices(db: DB, companyId: string) {
   )
 }
 
-/** Lo que debe cada cliente con facturas registradas, por código. */
+/** Lo que debe cada cliente con facturas registradas, por código, con la antigüedad de su saldo. */
 export function listReceivables(db: DB, userId: string, companyId: string): ReceivableRow[] {
   assertPerm(db, userId, companyId, 'receivable.read')
   const today = todayAR()
@@ -2333,6 +2440,7 @@ export function listReceivables(db: DB, userId: string, companyId: string): Rece
         invoices: pending.length,
         overdue: round2(pending.filter((i) => i.overdue).reduce((sum, i) => sum + i.pending, 0)),
         next_due: dues[0] ?? null,
+        aging: agingOf(pending, today),
       }
     })
 }
@@ -2358,7 +2466,7 @@ export interface CustomerAccount {
   credit_used: number
 }
 
-/** Cuenta corriente de un cliente: facturas (y, desde 4c, cobros) con saldo acumulado, y las facturas pendientes. */
+/** Cuenta corriente de un cliente: facturas y cobros con saldo acumulado, y las facturas pendientes. */
 export function customerAccount(db: DB, userId: string, companyId: string, customerId: string): CustomerAccount | null {
   assertPerm(db, userId, companyId, 'receivable.read')
   const customer = db.customers.find((c) => c.id === customerId && c.company_id === companyId)
@@ -2367,22 +2475,65 @@ export function customerAccount(db: DB, userId: string, companyId: string, custo
   const invoices = registeredSalesInvoices(db, companyId)
     .filter((d) => d.customer_id === customer.id)
     .sort((a, b) => compareCodes(a.document_date, b.document_date) || a.number - b.number)
+  const receipts = db.documents.filter(
+    (d) =>
+      d.company_id === companyId &&
+      d.doc_type === 'CUSTOMER_RECEIPT' &&
+      d.status === 'CONFIRMADO' &&
+      d.customer_id === customer.id,
+  )
+  // Facturas (debe) y cobros (haber) por fecha; el mismo día, primero las facturas.
+  const entries = [
+    ...invoices.map((doc) => ({ doc, date: doc.document_date, receipt: false })),
+    ...receipts.map((doc) => ({ doc, date: doc.rc!.received_on!, receipt: true })),
+  ].sort((a, b) => compareCodes(a.date, b.date) || Number(a.receipt) - Number(b.receipt) || a.doc.number - b.doc.number)
   let balance = 0
-  const movements = invoices.map((d) => {
-    balance = round2(balance + d.total)
+  const movements = entries.map(({ doc: d, date: on, receipt }) => {
+    balance = round2(balance + (receipt ? -d.total : d.total))
+    const account = receipt ? db.accounts.find((a) => a.id === d.rc!.treasury_account_id) : undefined
     return {
       document_id: d.id,
       display_number: d.display_number,
       path: docPath(db, d),
-      date: d.document_date,
-      description: `Factura ${salesInvoiceLabel(d.fv!)}`,
-      debit: d.total,
-      credit: 0,
+      date: on,
+      description: receipt
+        ? `Cobro en ${account?.name ?? ''}${d.rc!.reference ? ` (${d.rc!.reference})` : ''}`
+        : `Factura ${salesInvoiceLabel(d.fv!)}`,
+      debit: receipt ? 0 : d.total,
+      credit: receipt ? d.total : 0,
       balance,
     }
   })
   const pending = invoices.map((d) => receivableInvoice(db, d, today)).filter((i) => i.pending > 0)
   return { customer, movements, pending, balance, credit_used: customerCreditUsed(db, customer.id) }
+}
+
+export interface ReceiptCandidate {
+  invoice: ReceivableInvoice
+  /** Lo que ya está en otros recibos en borrador. */
+  committed: number
+  /** Lo que todavía se puede cobrar en un recibo nuevo. */
+  available: number
+}
+
+/** Facturas de un cliente que se pueden cobrar, de la que vence primero (para preparar un recibo de cobro). */
+export function receiptCandidates(db: DB, userId: string, companyId: string, customerId: string): ReceiptCandidate[] {
+  assertPerm(db, userId, companyId, 'customer_receipt.create')
+  const today = todayAR()
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'SALES_INVOICE' &&
+        d.customer_id === customerId &&
+        ['REGISTRADA', 'COBRADA_PARCIAL'].includes(d.status),
+    )
+    .sort((a, b) => compareCodes(a.fv!.due_date, b.fv!.due_date) || a.number - b.number)
+    .map((d) => {
+      const invoice = receivableInvoice(db, d, today)
+      const committed = salesInvoiceCommitted(db, d.id)
+      return { invoice, committed, available: round2(invoice.pending - committed) }
+    })
 }
 
 // ============================================================ Cuentas corrientes de proveedores
@@ -2573,7 +2724,7 @@ export function paymentCandidates(db: DB, userId: string, companyId: string, sup
 
 // ============================================================ Flujo de fondos (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
 
-export type CashConceptKey = 'APERTURA' | 'PAGOS' | 'TRANSFERENCIAS' | 'OTROS'
+export type CashConceptKey = 'APERTURA' | 'COBROS' | 'PAGOS' | 'TRANSFERENCIAS' | 'OTROS'
 
 export interface CashFlowConcept {
   key: CashConceptKey
@@ -2603,6 +2754,7 @@ export interface CashFlow {
 
 const CASH_CONCEPTS: [CashConceptKey, string][] = [
   ['APERTURA', 'Saldos de apertura'],
+  ['COBROS', 'Cobros a clientes'],
   ['PAGOS', 'Pagos a proveedores'],
   ['TRANSFERENCIAS', 'Movimientos entre cajas y bancos'],
   ['OTROS', 'Otros asientos de Contabilidad'],
@@ -2623,6 +2775,7 @@ function cashConcept(db: DB, entry: T.Document): CashConceptKey {
     .filter((l) => l.to_document_id === base.id)
     .map((l) => db.documents.find((d) => d.id === l.from_document_id))
     .find((d) => d && d.doc_type !== 'JOURNAL_ENTRY')
+  if (source?.doc_type === 'CUSTOMER_RECEIPT') return 'COBROS'
   if (source?.doc_type === 'PAYMENT_ORDER') return 'PAGOS'
   if (source?.doc_type === 'FUNDS_TRANSFER') return 'TRANSFERENCIAS'
   return base.je?.origin === 'APERTURA' ? 'APERTURA' : 'OTROS'
@@ -2683,10 +2836,13 @@ export type CashBucketKey = 'VENCIDAS' | 'SEMANA' | 'QUINCENA' | 'MES' | 'DESPUE
 export interface CashProjectionBucket {
   key: CashBucketKey
   label: string
-  /** Lo que falta pagar de las facturas que vencen en el tramo. */
+  /** Lo que falta cobrar de las facturas de venta que vencen en el tramo. */
+  collections: number
+  receivables: number
+  /** Lo que falta pagar de las facturas de proveedores que vencen en el tramo. */
   payments: number
   invoices: number
-  /** Saldo de cajas y bancos que quedaría después de pagar hasta este tramo. */
+  /** Saldo de cajas y bancos que quedaría después de cobrar y pagar hasta este tramo. */
   balance: number
 }
 
@@ -2711,8 +2867,9 @@ const CASH_BUCKETS: [CashBucketKey, string, number][] = [
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000)
 
 /**
- * Flujo de fondos proyectado: desde el saldo de hoy, lo que falta pagar de las
- * facturas de proveedores por vencimiento, y el saldo que quedaría tras cada tramo.
+ * Flujo de fondos proyectado: desde el saldo de hoy, lo que falta cobrar de las
+ * facturas de venta y pagar de las de proveedores, por vencimiento, y el saldo
+ * que quedaría tras cada tramo.
  */
 export function cashProjection(db: DB, userId: string, companyId: string): CashProjection {
   assertPerm(db, userId, companyId, 'treasury.read')
@@ -2726,16 +2883,31 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
   const pending = registeredInvoices(db, companyId)
     .map((d) => payableInvoice(db, d, today))
     .filter((i) => i.pending > 0)
+  const receivable = registeredSalesInvoices(db, companyId)
+    .map((d) => receivableInvoice(db, d, today))
+    .filter((i) => i.pending > 0)
   let running = balance
   const buckets = CASH_BUCKETS.map(([key, label, upTo], i) => {
     const after = i === 0 ? -Infinity : CASH_BUCKETS[i - 1][2]
-    const inBucket = pending.filter((inv) => {
-      const days = daysBetween(today, inv.due_date)
-      return days > after && days <= upTo
-    })
+    const within = <R extends { due_date: string }>(rows: R[]) =>
+      rows.filter((row) => {
+        const days = daysBetween(today, row.due_date)
+        return days > after && days <= upTo
+      })
+    const inBucket = within(pending)
+    const toCollect = within(receivable)
     const payments = round2(inBucket.reduce((sum, inv) => sum + inv.pending, 0))
-    running = round2(running - payments)
-    return { key, label, payments, invoices: inBucket.length, balance: running }
+    const collections = round2(toCollect.reduce((sum, inv) => sum + inv.pending, 0))
+    running = round2(running + collections - payments)
+    return {
+      key,
+      label,
+      collections,
+      receivables: toCollect.length,
+      payments,
+      invoices: inBucket.length,
+      balance: running,
+    }
   })
   return { today, balance, buckets, shortfall: buckets.find((b) => b.balance < 0)?.key ?? null }
 }

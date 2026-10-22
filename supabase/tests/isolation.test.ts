@@ -92,6 +92,8 @@ async function snapshot(company: string) {
     'delivery_note_lines',
     'sales_invoices',
     'sales_invoice_lines',
+    'customer_receipts',
+    'customer_receipt_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -133,7 +135,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                             ? B.delivery
                             : fn.startsWith('fv_')
                               ? B.salesInvoice
-                              : B.order
+                              : fn.startsWith('rc_')
+                                ? B.customerReceipt
+                                : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -194,6 +198,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     carrier_name: 'Intruso',
     delivery_date: null,
     customer_reference: 'Intruso',
+    payment_method: 'TRANSFERENCIA',
   }
   const values: Record<string, unknown> = {
     p_company_id: company,
@@ -491,6 +496,20 @@ beforeAll(async () => {
       p_register: true,
     })
   ).id
+  // Un cobro de B, en parte, al banco.
+  B.customerReceipt = (
+    await rpc<{ id: string }>('docenteB', 'rc_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        customer_id: B.customer,
+        treasury_account_id: B.bank,
+        payment_method: 'TRANSFERENCIA',
+        reference: 'TRF 1',
+        lines: [{ invoice_id: B.salesInvoice, amount: 100000 }],
+      }),
+      p_confirm: true,
+    })
+  ).id
 
   bIds = new Set(
     (
@@ -521,6 +540,7 @@ beforeAll(async () => {
          union select id::text from public.sales_order_lines where company_id = $1
          union select id::text from public.delivery_note_lines where company_id = $1
          union select id::text from public.sales_invoice_lines where company_id = $1
+         union select id::text from public.customer_receipt_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

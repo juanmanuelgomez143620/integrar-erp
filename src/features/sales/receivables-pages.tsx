@@ -1,11 +1,13 @@
 import { Link, useNavigate, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Wallet } from 'lucide-react'
+import { HandCoins, Wallet } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTable } from '@/components/common/data-table'
 import { EmptyState, KpiCard, Loading, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, type ReceivableRow } from '@/lib/api'
+import { api, type AgingKey, type ReceivableRow } from '@/lib/api'
 import { VAT_CONDITIONS } from '@/lib/domain/catalog'
 import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -17,6 +19,29 @@ const crumbs = (company: ReturnType<typeof useCompany>, extra: { label: string; 
   { label: 'Cuentas corrientes de clientes', to: extra.length ? company.to('ventas/clientes') : undefined },
   ...extra,
 ]
+
+/** Tramos de la antigüedad de saldos, según los días que lleva vencida cada factura. */
+const AGING: [AgingKey, string][] = [
+  ['A_VENCER', 'A vencer'],
+  ['DE_1_A_30', '1 a 30 días'],
+  ['DE_31_A_60', '31 a 60 días'],
+  ['DE_61_A_90', '61 a 90 días'],
+  ['MAS_DE_90', 'Más de 90 días'],
+]
+
+/** Botón para registrar un cobro (sólo quien cobra: Tesorería). */
+function CollectButton({ customerCode }: { customerCode?: string }) {
+  const company = useCompany()
+  if (!company.can('customer_receipt.create')) return null
+  const to = company.docPath('CUSTOMER_RECEIPT', 'nuevo')
+  return (
+    <Button asChild>
+      <Link to={customerCode ? `${to}?cliente=${customerCode}` : to}>
+        <HandCoins /> Registrar cobro
+      </Link>
+    </Button>
+  )
+}
 
 /** Lo que debe cada cliente: sale de las facturas de venta registradas menos lo cobrado. */
 export function ReceivablesPage() {
@@ -38,6 +63,7 @@ export function ReceivablesPage() {
         crumbs={crumbs(company)}
         title="Cuentas corrientes de clientes"
         description="Lo que cada cliente le debe a la empresa. El saldo no se edita: sale de las facturas de venta registradas y de los cobros."
+        actions={<CollectButton />}
       />
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         <KpiCard label="Deuda de los clientes" value={money(total)} icon={Wallet} />
@@ -49,45 +75,153 @@ export function ReceivablesPage() {
         />
         <KpiCard label="Clientes con saldo" value={data.filter((r) => r.balance > 0).length} />
       </div>
-      <DataTable<ReceivableRow>
-        rows={data}
-        loading={isLoading}
-        error={error}
-        rowKey={(r) => r.customer.id}
-        search={(r) => `${r.customer.code} ${r.customer.legal_name} ${r.customer.tax_id}`}
-        searchPlaceholder="Buscar cliente…"
-        onRowClick={(r) => navigate(company.to(`ventas/clientes/${r.customer.code}`))}
-        empty="Todavía no hay facturas de venta registradas."
-        columns={[
-          { key: 'code', header: 'Código', sort: (r) => r.customer.code, cell: (r) => <Mono>{r.customer.code}</Mono> },
-          {
-            key: 'name',
-            header: 'Cliente',
-            sort: (r) => r.customer.legal_name,
-            cell: (r) => <span className="font-medium">{r.customer.legal_name}</span>,
-          },
-          { key: 'invoices', header: 'Facturas pendientes', align: 'right', cell: (r) => r.invoices },
-          { key: 'due', header: 'Próximo vencimiento', sort: (r) => r.next_due ?? '', cell: (r) => date(r.next_due) },
-          {
-            key: 'overdue',
-            header: 'Vencido',
-            align: 'right',
-            cell: (r) => (
-              <span className={cn('tabular', r.overdue > 0 && 'font-semibold text-red-700')}>
-                {r.overdue ? money(r.overdue) : '—'}
-              </span>
-            ),
-          },
-          {
-            key: 'balance',
-            header: 'Saldo',
-            align: 'right',
-            sort: (r) => r.balance,
-            cell: (r) => <span className="tabular font-semibold">{money(r.balance)}</span>,
-          },
-        ]}
-      />
+      <Tabs defaultValue="balances">
+        <TabsList>
+          <TabsTrigger value="balances">Saldos por cliente</TabsTrigger>
+          <TabsTrigger value="aging">Antigüedad de saldos</TabsTrigger>
+        </TabsList>
+        <TabsContent value="balances" className="mt-3">
+          <DataTable<ReceivableRow>
+            rows={data}
+            loading={isLoading}
+            error={error}
+            rowKey={(r) => r.customer.id}
+            search={(r) => `${r.customer.code} ${r.customer.legal_name} ${r.customer.tax_id}`}
+            searchPlaceholder="Buscar cliente…"
+            onRowClick={(r) => navigate(company.to(`ventas/clientes/${r.customer.code}`))}
+            empty="Todavía no hay facturas de venta registradas."
+            columns={[
+              {
+                key: 'code',
+                header: 'Código',
+                sort: (r) => r.customer.code,
+                cell: (r) => <Mono>{r.customer.code}</Mono>,
+              },
+              {
+                key: 'name',
+                header: 'Cliente',
+                sort: (r) => r.customer.legal_name,
+                cell: (r) => <span className="font-medium">{r.customer.legal_name}</span>,
+              },
+              { key: 'invoices', header: 'Facturas pendientes', align: 'right', cell: (r) => r.invoices },
+              {
+                key: 'due',
+                header: 'Próximo vencimiento',
+                sort: (r) => r.next_due ?? '',
+                cell: (r) => date(r.next_due),
+              },
+              {
+                key: 'overdue',
+                header: 'Vencido',
+                align: 'right',
+                cell: (r) => (
+                  <span className={cn('tabular', r.overdue > 0 && 'font-semibold text-red-700')}>
+                    {r.overdue ? money(r.overdue) : '—'}
+                  </span>
+                ),
+              },
+              {
+                key: 'balance',
+                header: 'Saldo',
+                align: 'right',
+                sort: (r) => r.balance,
+                cell: (r) => <span className="tabular font-semibold">{money(r.balance)}</span>,
+              },
+            ]}
+          />
+        </TabsContent>
+        <TabsContent value="aging" className="mt-3">
+          <AgingTable rows={data.filter((r) => r.balance > 0)} />
+        </TabsContent>
+      </Tabs>
     </>
+  )
+}
+
+/**
+ * Antigüedad de saldos: la deuda de cada cliente según cuánto hace que venció.
+ * Lo vencido hace más tiempo es lo más difícil de cobrar.
+ */
+function AgingTable({ rows }: { rows: ReceivableRow[] }) {
+  const company = useCompany()
+  const totals = Object.fromEntries(AGING.map(([key]) => [key, rows.reduce((s, r) => s + r.aging[key], 0)])) as Record<
+    AgingKey,
+    number
+  >
+  const total = rows.reduce((s, r) => s + r.balance, 0)
+  const head = 'px-3 py-2 text-right whitespace-nowrap'
+  return (
+    <Section
+      title="Antigüedad de saldos"
+      description="Lo que debe cada cliente según los días que lleva vencida cada factura. Los clientes con deuda vencida son morosos: para venderles a crédito hace falta la autorización de Gerencia."
+      bodyClassName="p-0"
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b bg-muted/50 text-left text-xs text-slate-600">
+              <th className="px-3 py-2">Cliente</th>
+              {AGING.map(([key, label]) => (
+                <th key={key} className={head}>
+                  {label}
+                </th>
+              ))}
+              <th className={head}>Saldo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.customer.id} className="border-b">
+                <td className="min-w-52 px-3 py-2">
+                  <Link
+                    to={company.to(`ventas/clientes/${r.customer.code}`)}
+                    className="font-mono text-xs text-brand-blue hover:underline"
+                  >
+                    {r.customer.code}
+                  </Link>{' '}
+                  {r.customer.legal_name}
+                </td>
+                {AGING.map(([key]) => (
+                  <td
+                    key={key}
+                    className={cn(
+                      'tabular px-3 py-2 text-right',
+                      key !== 'A_VENCER' && r.aging[key] > 0 && 'font-semibold text-red-700',
+                    )}
+                  >
+                    {r.aging[key] ? money(r.aging[key]) : '—'}
+                  </td>
+                ))}
+                <td className="tabular px-3 py-2 text-right font-semibold">{money(r.balance)}</td>
+              </tr>
+            ))}
+            {!rows.length && (
+              <tr>
+                <td colSpan={AGING.length + 2} className="px-3 py-8 text-center text-muted-foreground">
+                  Ningún cliente debe nada.
+                </td>
+              </tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="font-semibold text-navy">
+              <td className="px-3 py-2">Total</td>
+              {AGING.map(([key]) => (
+                <td key={key} className="tabular px-3 py-2 text-right">
+                  {money(totals[key])}
+                  {total > 0 && (
+                    <div className="text-xs font-normal text-muted-foreground">
+                      {Math.round((totals[key] / total) * 100)} %
+                    </div>
+                  )}
+                </td>
+              ))}
+              <td className="tabular px-3 py-2 text-right">{money(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </Section>
   )
 }
 
@@ -117,6 +251,7 @@ export function CustomerAccountPage() {
         description={`${data.customer.tax_id ? `CUIT ${data.customer.tax_id} (simulado) · ` : ''}${VAT_CONDITIONS[data.customer.vat_condition]} · condición de pago ${
           data.customer.payment_terms_days ? `${data.customer.payment_terms_days} días` : 'contado'
         }`}
+        actions={data.balance > 0 ? <CollectButton customerCode={data.customer.code} /> : undefined}
       />
       <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
         <Section

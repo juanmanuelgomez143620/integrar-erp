@@ -272,6 +272,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       }),
     paymentCandidates: (companyId, supplierId) =>
       rpc('payment_candidates', { ...company(companyId), p_supplier_id: supplierId }),
+    receiptCandidates: (companyId, customerId) =>
+      rpc('receipt_candidates', { ...company(companyId), p_customer_id: customerId }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
     fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
     journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
@@ -371,6 +373,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('fv_create', { ...company(companyId), p_input: input, p_register: register }),
     confirmSalesInvoice: (docId) => rpc('fv_confirm', doc(docId)),
     cancelSalesInvoice: (docId, reason) => rpc('fv_cancel', { ...doc(docId), p_reason: reason }),
+    createCustomerReceipt: (companyId, input, confirm) =>
+      rpc('rc_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
+    confirmCustomerReceipt: (docId) => rpc('rc_confirm', doc(docId)),
+    cancelCustomerReceipt: (docId, reason) => rpc('rc_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

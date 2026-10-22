@@ -89,6 +89,7 @@ export function buildSeed(): DB {
     soLines: [],
     dnLines: [],
     fvLines: [],
+    rcLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],

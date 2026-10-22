@@ -15,6 +15,7 @@ import {
   ClipboardList,
   FileSearch,
   GraduationCap,
+  HandCoins,
   Handshake,
   History,
   Inbox,
@@ -99,6 +100,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Cuentas corrientes', path: 'pagos/proveedores', icon: Wallet, permission: 'payable.read' },
       { label: 'Órdenes de pago', path: 'pagos/ordenes', icon: Banknote, permission: 'payment_order.read' },
+      { label: 'Recibos de cobro', path: 'pagos/cobros', icon: HandCoins, permission: 'customer_receipt.read' },
       { label: 'Cajas y bancos', path: 'pagos/cajas-y-bancos', icon: Landmark, permission: 'treasury.read' },
       {
         label: 'Transferencias',

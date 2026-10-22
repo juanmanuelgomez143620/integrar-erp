@@ -128,6 +128,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['sales_order_lines', mock.soLines],
     ['delivery_note_lines', mock.dnLines],
     ['sales_invoice_lines', mock.fvLines],
+    ['customer_receipt_lines', mock.rcLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -2064,6 +2065,250 @@ describe('paridad de comandos', () => {
     await reads('con las facturas')
   })
 
+  it('cobros: recibo con su asiento, estados de la factura, separación de funciones, fondos y anulación', async () => {
+    const companyPg = pg(company)
+    const customer = (code: string) => mock.customers.find((c) => c.company_id === company && c.code === code)!.id
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const status = (id: string) => mock.documents.find((d) => d.id === id)!.status
+    const invoiceOf = (code: string, statuses: string[]) =>
+      mock.documents
+        .filter(
+          (d) => d.doc_type === 'SALES_INVOICE' && d.customer_id === customer(code) && statuses.includes(d.status),
+        )
+        .sort((a, b) => a.number - b.number)[0]
+    // De la prueba de ventas: la factura A del resto a CLI-004, la anulada y la B al exento CLI-007.
+    const a = invoiceOf('CLI-004', ['REGISTRADA'])
+    const cancelled = invoiceOf('CLI-004', ['ANULADA'])
+    const exempt = invoiceOf('CLI-007', ['REGISTRADA'])
+    // La de la demo (CLI-001), cobrada en parte y con otra parte reservada en un borrador del escenario.
+    const demo = invoiceOf('CLI-001', ['COBRADA_PARCIAL'])
+    const receipt = (
+      invoiceId: string | null,
+      amount: number,
+      over: Partial<E.CustomerReceiptInput> = {},
+      extra: { invoice_id: string; amount: number }[] = [],
+    ) => {
+      const input: E.CustomerReceiptInput = {
+        customer_id: invoiceId ? mock.documents.find((d) => d.id === invoiceId)!.customer_id! : customer('CLI-004'),
+        treasury_account_id: account('1.1.01.03'),
+        payment_method: 'TRANSFERENCIA',
+        reference: '',
+        notes: '',
+        lines: [...(invoiceId ? [{ invoice_id: invoiceId, amount }] : []), ...extra],
+        ...over,
+      }
+      const pgInput = {
+        ...input,
+        customer_id: pg(input.customer_id),
+        treasury_account_id: pg(input.treasury_account_id),
+        lines: input.lines.map((l) => ({ ...l, invoice_id: pg(l.invoice_id) })),
+      }
+      return { input, pgInput }
+    }
+    const create = (label: string, username: string, r: ReturnType<typeof receipt>, confirm: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateCustomerReceipt(c, company, r.input, confirm),
+        (b) => b.commands.createCustomerReceipt(companyPg, r.pgInput, confirm),
+      )
+    const createdReceipt = (label: string, username: string, r: ReturnType<typeof receipt>, confirm: boolean) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdCreateCustomerReceipt(c, company, r.input, confirm),
+        (b) => b.commands.createCustomerReceipt(companyPg, r.pgInput, confirm),
+      )
+    const confirm = (label: string, username: string, id: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdConfirmCustomerReceipt(c, id),
+        (b) => b.commands.confirmCustomerReceipt(pg(id)),
+      )
+    const cancel = (label: string, username: string, id: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelCustomerReceipt(c, id, reason),
+        (b) => b.commands.cancelCustomerReceipt(pg(id), reason),
+      )
+    const reads = async (label: string) => {
+      for (const username of ['tesoreria', 'ventas', 'gerencia']) {
+        await sameRead(
+          `cuentas corrientes de clientes ${label} (${username})`,
+          username,
+          (b) => b.api.receivables(companyPg),
+          (u) => Q.listReceivables(mock, u, company),
+        )
+        for (const code of ['CLI-001', 'CLI-004', 'CLI-007'])
+          await sameRead(
+            `cuenta corriente de ${code} ${label} (${username})`,
+            username,
+            (b) => b.api.customerAccount(companyPg, pg(customer(code))),
+            (u) => Q.customerAccount(mock, u, company, customer(code)),
+          )
+      }
+      for (const code of ['CLI-001', 'CLI-004', 'CLI-007'])
+        await sameRead(
+          `facturas para cobrar de ${code} ${label}`,
+          'tesoreria',
+          (b) => b.api.receiptCandidates(companyPg, pg(customer(code))),
+          (u) => Q.receiptCandidates(mock, u, company, customer(code)),
+        )
+      await sameRead(
+        `flujo de fondos proyectado ${label}`,
+        'tesoreria',
+        (b) => b.api.cashProjection(companyPg),
+        (u) => Q.cashProjection(mock, u, company),
+      )
+      const month = todayAR().slice(0, 8)
+      await sameRead(
+        `flujo de fondos del mes ${label}`,
+        'tesoreria',
+        (b) => b.api.cashFlow(companyPg, `${month}01`, todayAR()),
+        (u) => Q.cashFlow(mock, u, company, `${month}01`, todayAR()),
+      )
+    }
+
+    // Controles: quién cobra, el medio, la cuenta, las facturas del cliente y los importes.
+    const remaining = E.round2(E.salesInvoicePending(mock, demo) - E.salesInvoiceCommitted(mock, demo.id))
+    for (const [label, username, r] of [
+      ['Ventas no cobra', 'ventas', receipt(a.id, 1000)],
+      ['cheque sin número', 'tesoreria', receipt(a.id, 1000, { payment_method: 'CHEQUE' })],
+      ['cheque con letras', 'tesoreria', receipt(a.id, 1000, { payment_method: 'CHEQUE', reference: 'Cheque 1' })],
+      ['un medio que no existe', 'tesoreria', receipt(a.id, 1000, { payment_method: 'GIRO' as never })],
+      ['referencia muy larga', 'tesoreria', receipt(a.id, 1000, { reference: 'x'.repeat(61) })],
+      [
+        'una cuenta que no es caja ni banco',
+        'tesoreria',
+        receipt(a.id, 1000, { treasury_account_id: account('1.1.03.01') }),
+      ],
+      ['factura de otro cliente', 'tesoreria', receipt(a.id, 1000, { customer_id: customer('CLI-002') })],
+      ['importe con tres decimales', 'tesoreria', receipt(a.id, 10.005)],
+      ['más que el saldo', 'tesoreria', receipt(a.id, a.total + 1)],
+      ['más que lo que no está reservado', 'tesoreria', receipt(demo.id, remaining + 0.01)],
+      ['sin facturas', 'tesoreria', receipt(null, 0)],
+      ['la misma factura dos veces', 'tesoreria', receipt(a.id, 1000, {}, [{ invoice_id: a.id, amount: 1000 }])],
+      ['una factura anulada', 'tesoreria', receipt(cancelled.id, 1000)],
+    ] as const)
+      expect(await create(label, username, r, true), label).toBeNull()
+
+    // Un cobro parcial por transferencia, y el resto en borrador: la factura no se anula mientras lo reserva.
+    const partial = await createdReceipt(
+      'cobro parcial',
+      'tesoreria',
+      receipt(a.id, 100000, { reference: 'TRF 1201' }),
+      true,
+    )
+    expect(status(partial)).toBe('CONFIRMADO')
+    expect(status(a.id)).toBe('COBRADA_PARCIAL')
+    const rest = await createdReceipt(
+      'el resto, en borrador',
+      'tesoreria',
+      receipt(a.id, E.round2(a.total - 100000), {
+        payment_method: 'EFECTIVO',
+        treasury_account_id: account('1.1.01.01'),
+      }),
+      false,
+    )
+    expect(
+      await step(
+        'anular una factura cobrada en parte',
+        'ventas',
+        (c) => E.cmdCancelSalesInvoice(c, a.id, 'Error de carga'),
+        (b) => b.commands.cancelSalesInvoice(pg(a.id), 'Error de carga'),
+      ),
+    ).toBeNull()
+    await reads('con un cobro parcial y un borrador')
+
+    // Separación de funciones: ventas emitió la factura; con el rol de Tesorería tampoco la puede cobrar.
+    const tes = mock.sectors.find((s) => s.company_id === company && s.code === 'TES')!.id
+    await ok(
+      'el docente le suma Tesorería a ventas',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('ventas'), 'TESORERIA', tes),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('ventas')), 'TESORERIA', pg(tes)),
+    )
+    expect(await confirm('cobrar una factura que emitió', 'ventas', rest)).toBeNull()
+    await sameRead(
+      'el recibo, como quien emitió la factura',
+      'ventas',
+      (b) => b.api.document(companyPg, 'CUSTOMER_RECEIPT', mock.documents.find((d) => d.id === rest)!.display_number),
+      (u) =>
+        Q.documentDetail(
+          mock,
+          u,
+          company,
+          'CUSTOMER_RECEIPT',
+          mock.documents.find((d) => d.id === rest)!.display_number,
+        ),
+    )
+    expect(await confirm('confirmar el resto', 'tesoreria', rest)).not.toBeNull()
+    expect(await confirm('confirmarlo otra vez', 'tesoreria', rest)).toBeNull()
+    expect(status(a.id)).toBe('COBRADA')
+
+    // Un cheque del cliente a Valores a depositar: si ya se depositó, el cobro no se anula.
+    const cheque = await createdReceipt(
+      'cobro con cheque',
+      'tesoreria',
+      receipt(exempt.id, exempt.total, {
+        payment_method: 'CHEQUE',
+        reference: '00009876',
+        treasury_account_id: account('1.1.01.04'),
+      }),
+      true,
+    )
+    expect(status(exempt.id)).toBe('COBRADA')
+    const depositInput: E.FundsTransferInput = {
+      from_account_id: account('1.1.01.04'),
+      to_account_id: account('1.1.01.03'),
+      amount: exempt.total,
+      reference: 'Depósito del cheque 00009876',
+      notes: '',
+    }
+    const deposit = await created(
+      'depositar el cheque',
+      'tesoreria',
+      (c) => E.cmdCreateFundsTransfer(c, company, depositInput, true),
+      (b) =>
+        b.commands.createFundsTransfer(
+          companyPg,
+          {
+            ...depositInput,
+            from_account_id: pg(depositInput.from_account_id),
+            to_account_id: pg(depositInput.to_account_id),
+          },
+          true,
+        ),
+    )
+    expect(await cancel('anular sin motivo', 'tesoreria', cheque, '')).toBeNull()
+    expect(await cancel('anular un cobro ya depositado', 'tesoreria', cheque, 'El cheque fue rechazado')).toBeNull()
+    expect(await cancel('Gerencia no anula cobros', 'gerencia', cheque, 'El cheque fue rechazado')).toBeNull()
+    await ok(
+      'anular el depósito',
+      'tesoreria',
+      (c) => E.cmdCancelFundsTransfer(c, deposit, 'El banco rechazó el cheque'),
+      (b) => b.commands.cancelFundsTransfer(pg(deposit), 'El banco rechazó el cheque'),
+    )
+    expect(await cancel('anular el cobro', 'tesoreria', cheque, 'El cheque fue rechazado')).not.toBeNull()
+    expect(status(exempt.id)).toBe('REGISTRADA')
+    expect(await cancel('anularlo otra vez', 'tesoreria', cheque, 'Error')).toBeNull()
+
+    // Un borrador se anula sin más y libera lo que reservaba.
+    const draft = await createdReceipt('un borrador', 'tesoreria', receipt(exempt.id, 1000), false)
+    expect(
+      await step(
+        'anular una factura en un recibo en borrador',
+        'ventas',
+        (c) => E.cmdCancelSalesInvoice(c, exempt.id, 'Error de carga'),
+        (b) => b.commands.cancelSalesInvoice(pg(exempt.id), 'Error de carga'),
+      ),
+    ).toBeNull()
+    expect(await cancel('anular el borrador', 'tesoreria', draft, 'El cliente pagó otro importe')).not.toBeNull()
+    await reads('después de los cobros')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -2081,6 +2326,7 @@ describe('paridad de comandos', () => {
       'SALES_ORDER',
       'DELIVERY_NOTE',
       'SALES_INVOICE',
+      'CUSTOMER_RECEIPT',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

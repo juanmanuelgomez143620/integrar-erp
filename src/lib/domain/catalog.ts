@@ -46,6 +46,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   sales_order: 'sales',
   sales_invoice: 'sales',
   receivable: 'sales',
+  customer_receipt: 'sales',
   goods_receipt: 'inventory',
   delivery_note: 'inventory',
   stock: 'inventory',
@@ -134,7 +135,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read',
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
-    'sales_invoice.read', 'receivable.read',
+    'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -151,7 +152,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   VENTAS: [
     ...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read',
     'sales_order.read', 'sales_order.create', 'sales_order.cancel', 'delivery_note.read',
-    'sales_invoice.read', 'sales_invoice.create', 'sales_invoice.cancel', 'receivable.read',
+    'sales_invoice.read', 'sales_invoice.create', 'sales_invoice.cancel', 'receivable.read', 'customer_receipt.read',
   ],
   DEPOSITO: [
     ...CORE_READ,
@@ -179,7 +180,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read', 'funds_transfer.read',
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
-    'receivable.read',
+    'receivable.read', 'customer_receipt.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -187,13 +188,14 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'payment_order.read', 'payment_order.create', 'payment_order.pay', 'payment_order.cancel', 'treasury.read',
     'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel', 'bank_reconciliation.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
-    'receivable.read',
+    // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
+    'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel',
   ],
   RRHH: [...CORE_READ],
   IMPUESTOS: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
-    'receivable.read',
+    'receivable.read', 'customer_receipt.read',
   ],
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
@@ -208,7 +210,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...LEDGER_READ, 'journal_entry.export', 'ledger.export',
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
-    'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read',
+    'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
   ],
   DOCENTE: [],
 }
@@ -297,6 +299,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'SALES_INVOICE', prefix: 'FV', name: 'Factura de venta', plural: 'Facturas de venta',
     resource: 'sales_invoice', module: 'sales', path: 'ventas/facturas',
     description: 'Comprobante simulado que la empresa le emite al cliente por lo que se le entregó. Al registrarse genera el asiento de venta y la deuda del cliente en su cuenta corriente.',
+  },
+  CUSTOMER_RECEIPT: {
+    code: 'CUSTOMER_RECEIPT', prefix: 'RBO', name: 'Recibo de cobro', plural: 'Recibos de cobro',
+    resource: 'customer_receipt', module: 'sales', path: 'pagos/cobros',
+    description: 'Constancia de lo que pagó un cliente: qué facturas cancela, cuánto de cada una, con qué medio y en qué caja o banco ingresa. Al confirmarse genera el asiento de cobro y baja la deuda del cliente.',
   },
 }
 
@@ -398,7 +405,14 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
   SALES_INVOICE: {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Ventas la está preparando: todavía no tiene número ni generó deuda.' },
     REGISTRADA: { label: 'Registrada', badge: 'info', final: false, description: 'Emitida: está en la cuenta corriente del cliente y en el libro diario. Falta cobrarla.' },
+    COBRADA_PARCIAL: { label: 'Cobrada parcialmente', badge: 'warning', final: false, description: 'El cliente pagó una parte; queda saldo pendiente.' },
+    COBRADA: { label: 'Cobrada', badge: 'success', final: true, description: 'Se cobró completa: la deuda del cliente quedó cancelada.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba registrada, un contraasiento revirtió la venta y su número no se vuelve a usar.' },
+  },
+  CUSTOMER_RECEIPT: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Tesorería lo está preparando: lo que cobra queda reservado, pero todavía no ingresó el dinero.' },
+    CONFIRMADO: { label: 'Cobrado', badge: 'success', final: true, description: 'El dinero ingresó a la caja o al banco: la deuda del cliente bajó y el cobro está en el libro diario.' },
+    ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba cobrado, un contraasiento revirtió el cobro y las facturas volvieron a tener saldo.' },
   },
 }
 
@@ -539,6 +553,17 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('SALES_INVOICE', 'BORRADOR', 'CONFIRM', 'REGISTRADA', 'sales_invoice.create', 'Registrar factura', 'Le asigna el número, controla las cantidades contra lo entregado y genera el asiento de venta y la deuda del cliente.'),
   t('SALES_INVOICE', 'BORRADOR', 'CANCEL', 'ANULADA', 'sales_invoice.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
   t('SALES_INVOICE', 'REGISTRADA', 'CANCEL', 'ANULADA', 'sales_invoice.cancel', 'Anular con contraasiento', 'Revierte el asiento de venta y la deuda del cliente. Sólo si todavía no tiene cobros.', true, 'destructive'),
+  t('SALES_INVOICE', 'REGISTRADA', 'SYSTEM', 'COBRADA_PARCIAL', null, '', ''),
+  t('SALES_INVOICE', 'REGISTRADA', 'SYSTEM', 'COBRADA', null, '', ''),
+  t('SALES_INVOICE', 'COBRADA_PARCIAL', 'SYSTEM', 'COBRADA', null, '', ''),
+  t('SALES_INVOICE', 'COBRADA_PARCIAL', 'SYSTEM', 'REGISTRADA', null, '', ''),
+  t('SALES_INVOICE', 'COBRADA', 'SYSTEM', 'COBRADA_PARCIAL', null, '', ''),
+  t('SALES_INVOICE', 'COBRADA', 'SYSTEM', 'REGISTRADA', null, '', ''),
+
+  // Recibo de cobro
+  t('CUSTOMER_RECEIPT', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'customer_receipt.create', 'Confirmar cobro', 'Registra el ingreso en la caja o el banco: genera el asiento de cobro y baja la deuda del cliente.'),
+  t('CUSTOMER_RECEIPT', 'BORRADOR', 'CANCEL', 'ANULADO', 'customer_receipt.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('CUSTOMER_RECEIPT', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'customer_receipt.cancel', 'Anular con contraasiento', 'Revierte el cobro con un contraasiento: las facturas vuelven a tener saldo. Sólo si el dinero sigue en la caja o el banco.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -607,6 +632,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'SALES_ORDER', status: 'ENTREGADO_PARCIAL', taskType: 'DESPACHAR_PEDIDO', assignee: 'ROLE', role: 'DEPOSITO', title: 'Despachar el saldo de {number}', description: 'Queda mercadería reservada pendiente de entrega.' },
   { docType: 'DELIVERY_NOTE', status: 'BORRADOR', taskType: 'DESPACHAR_REMITO', assignee: 'CREATOR', title: 'Despachar {number}', description: 'Controlar la mercadería preparada contra el remito y despacharlo.' },
   { docType: 'SALES_INVOICE', status: 'BORRADOR', taskType: 'REGISTRAR_FV', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar las cantidades contra lo entregado y registrar la factura de venta.' },
+  { docType: 'CUSTOMER_RECEIPT', status: 'BORRADOR', taskType: 'CONFIRMAR_RBO', assignee: 'CREATOR', title: 'Confirmar {number} por {total}', description: 'Revisar las facturas, los importes, el medio de cobro y la caja o el banco, y confirmar el cobro.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -630,6 +656,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   DESPACHAR_PEDIDO: 'Despachar pedido',
   DESPACHAR_REMITO: 'Despachar remito',
   REGISTRAR_FV: 'Registrar factura de venta',
+  CONFIRMAR_RBO: 'Confirmar cobro',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -749,6 +776,13 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       SERVICIO: 'Servicios cobrados al cliente',
       IVA_DEBITO: 'IVA de la factura',
       DEUDORES: 'Lo que debe el cliente',
+    },
+  },
+  COBRO: {
+    label: 'Cobro a clientes (recibo de cobro confirmado)',
+    keys: {
+      // La contrapartida es la caja o el banco del recibo, no una regla.
+      DEUDORES: 'Lo que el cliente deja de deber',
     },
   },
   COSTO_VENTA: {

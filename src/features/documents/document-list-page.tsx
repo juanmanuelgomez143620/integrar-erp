@@ -8,7 +8,14 @@ import { Mono } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { DocStatus, StatusBadge } from '@/components/common/status-badge'
 import { api, type DocumentListItem } from '@/lib/api'
-import { ADJUSTMENT_REASONS, DOC_STATUSES, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES } from '@/lib/domain/catalog'
+import {
+  ADJUSTMENT_REASONS,
+  DOC_STATUSES,
+  DOC_TYPES,
+  JOURNAL_ORIGINS,
+  PAYMENT_METHODS,
+  PRIORITIES,
+} from '@/lib/domain/catalog'
 import type { DocType } from '@/lib/domain/types'
 import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -33,6 +40,11 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   SALES_ORDER: { area: 'Ventas', newLabel: 'Nuevo pedido', createPerm: 'sales_order.create' },
   DELIVERY_NOTE: { area: 'Depósito', newLabel: 'Preparar remito', createPerm: 'delivery_note.create' },
   SALES_INVOICE: { area: 'Ventas', newLabel: 'Nueva factura', createPerm: 'sales_invoice.create' },
+  CUSTOMER_RECEIPT: {
+    area: 'Pagos y tesorería',
+    newLabel: 'Nuevo recibo de cobro',
+    createPerm: 'customer_receipt.create',
+  },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -303,6 +315,29 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'CUSTOMER_RECEIPT') {
+    columns.push(
+      { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
+      { key: 'invoices', header: 'Facturas', cell: (d) => <span className="font-mono text-xs">{d.summary}</span> },
+      {
+        key: 'method',
+        header: 'Medio',
+        cell: (d) => (
+          <span className="text-xs">
+            {PAYMENT_METHODS[d.rc!.payment_method]}
+            {d.rc!.reference ? ` ${d.rc!.reference}` : ''}
+          </span>
+        ),
+      },
+      {
+        key: 'total',
+        header: 'Importe',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   if (docType === 'JOURNAL_ENTRY') {
     columns.push(
       {
@@ -336,7 +371,9 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
 
   const newPath = company.docPath(
     docType,
-    ['STOCK_ADJUSTMENT', 'JOURNAL_ENTRY', 'SALES_ORDER', 'DELIVERY_NOTE'].includes(docType) ? 'nuevo' : 'nueva',
+    ['STOCK_ADJUSTMENT', 'JOURNAL_ENTRY', 'SALES_ORDER', 'DELIVERY_NOTE', 'CUSTOMER_RECEIPT'].includes(docType)
+      ? 'nuevo'
+      : 'nueva',
   )
 
   return (
@@ -385,7 +422,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         searchPlaceholder={
           docType === 'JOURNAL_ENTRY'
             ? 'Buscar por número o leyenda…'
-            : docType === 'SALES_ORDER' || docType === 'DELIVERY_NOTE' || docType === 'SALES_INVOICE'
+            : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT'].includes(docType)
               ? 'Buscar por número, cliente, producto…'
               : 'Buscar por número, proveedor, producto…'
         }

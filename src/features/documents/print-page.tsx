@@ -4,7 +4,14 @@ import { ArrowLeft, Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Loading } from '@/components/common/blocks'
 import { api, type ComparisonQuote } from '@/lib/api'
-import { ADJUSTMENT_REASONS, DOC_TYPES, JOURNAL_ORIGINS, PRIORITIES, VAT_CONDITIONS } from '@/lib/domain/catalog'
+import {
+  ADJUSTMENT_REASONS,
+  DOC_TYPES,
+  JOURNAL_ORIGINS,
+  PAYMENT_METHODS,
+  PRIORITIES,
+  VAT_CONDITIONS,
+} from '@/lib/domain/catalog'
 import { date, dateTime, money, qty } from '@/lib/format'
 import { useCompany } from '@/app/company'
 
@@ -20,7 +27,7 @@ export function PrintPage() {
   })
   if (isLoading || error) return <Loading error={error} />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
-  const { doc, lines, supplier, warehouse, journal, payment, rfq, quote, transfer, reconciliation } = data
+  const { doc, lines, supplier, warehouse, journal, payment, receipt, rfq, quote, transfer, reconciliation } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]
   const priced =
@@ -262,18 +269,17 @@ export function PrintPage() {
               </div>
             </>
           )}
-          {(doc.doc_type === 'SALES_ORDER' || doc.doc_type === 'DELIVERY_NOTE' || doc.doc_type === 'SALES_INVOICE') &&
-            customer && (
-              <div className="col-span-2 rounded border border-slate-300 p-2">
-                <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
-                <div className="font-semibold">{customer.legal_name}</div>
-                <div>
-                  {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
-                  {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} (
-                  {customer.province})
-                </div>
+          {['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT'].includes(doc.doc_type) && customer && (
+            <div className="col-span-2 rounded border border-slate-300 p-2">
+              <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
+              <div className="font-semibold">{customer.legal_name}</div>
+              <div>
+                {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
+                {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} ({customer.province}
+                )
               </div>
-            )}
+            </div>
+          )}
           {doc.doc_type === 'SALES_ORDER' && data.sales_order && (
             <>
               <div>
@@ -325,6 +331,24 @@ export function PrintPage() {
                   <b>IVA:</b> incluido en los precios para el cliente
                 </div>
               )}
+            </>
+          )}
+          {receipt && (
+            <>
+              <div className="col-span-2">
+                Recibimos de {customer?.legal_name} la suma de <b>{money(doc.total)}</b> por las facturas que se
+                detallan.
+              </div>
+              <div>
+                <b>Medio:</b> {PAYMENT_METHODS[receipt.payment_method]}
+                {receipt.reference ? ` N.º ${receipt.reference}` : ''}
+              </div>
+              <div>
+                <b>Ingresa en:</b> {receipt.treasury_account.code} {receipt.treasury_account.name}
+              </div>
+              <div>
+                <b>Cobro:</b> {receipt.received_on ? date(receipt.received_on) : 'pendiente (borrador)'}
+              </div>
             </>
           )}
           {doc.doc_type === 'STOCK_ADJUSTMENT' && doc.sa && (
@@ -432,6 +456,39 @@ export function PrintPage() {
           </table>
         )}
 
+        {receipt && (
+          <table className="mt-4 w-full border-collapse">
+            <thead>
+              <tr>
+                <th className={th}>#</th>
+                <th className={th}>Factura</th>
+                <th className={th}>Comprobante (simulado)</th>
+                <th className={th}>Vence</th>
+                <th className={`${th} text-right`}>Total de la factura</th>
+                <th className={`${th} text-right`}>Se cobra</th>
+              </tr>
+            </thead>
+            <tbody>
+              {receipt.lines.map((l) => (
+                <tr key={l.id}>
+                  <td className={td}>{l.line_no}</td>
+                  <td className={`${td} font-mono`}>{l.invoice.display_number}</td>
+                  <td className={td}>Factura {l.invoice.invoice_label}</td>
+                  <td className={td}>{date(l.invoice.due_date)}</td>
+                  <td className={`${td} text-right`}>{money(l.invoice.total)}</td>
+                  <td className={`${td} text-right`}>{money(l.amount)}</td>
+                </tr>
+              ))}
+              <tr className="font-bold">
+                <td className={td} colSpan={5}>
+                  TOTAL COBRADO
+                </td>
+                <td className={`${td} text-right`}>{money(doc.total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
         {reconciliation &&
           (
             [
@@ -468,7 +525,7 @@ export function PrintPage() {
             </div>
           ))}
 
-        {!journal && !payment && !transfer && !reconciliation && (
+        {!journal && !payment && !receipt && !transfer && !reconciliation && (
           <table className="mt-4 w-full border-collapse">
             <thead>
               <tr>

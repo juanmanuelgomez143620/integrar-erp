@@ -7,6 +7,7 @@ import {
   Banknote,
   FilePlus2,
   FileSearch,
+  HandCoins,
   Info,
   Lightbulb,
   Pencil,
@@ -117,6 +118,10 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmSalesInvoice(id),
     CANCEL: (id, t) => commands.cancelSalesInvoice(id, t),
   },
+  CUSTOMER_RECEIPT: {
+    CONFIRM: (id) => commands.confirmCustomerReceipt(id),
+    CANCEL: (id, t) => commands.cancelCustomerReceipt(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -134,6 +139,7 @@ const AREA: Record<DocType, string> = {
   SALES_ORDER: 'Ventas',
   DELIVERY_NOTE: 'Depósito',
   SALES_INVOICE: 'Ventas',
+  CUSTOMER_RECEIPT: 'Pagos y tesorería',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -203,6 +209,11 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
     doc.doc_type === 'SALES_ORDER' &&
     ['CONFIRMADO', 'ENTREGADO_PARCIAL'].includes(doc.status) &&
     company.can('delivery_note.create')
+  const canCollect =
+    doc.doc_type === 'SALES_INVOICE' &&
+    ['REGISTRADA', 'COBRADA_PARCIAL'].includes(doc.status) &&
+    !!detail.customer &&
+    company.can('customer_receipt.create')
   const canInvoiceSale =
     doc.doc_type === 'SALES_ORDER' &&
     ['ENTREGADO_PARCIAL', 'ENTREGADO', 'CERRADO'].includes(doc.status) &&
@@ -315,6 +326,13 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               <Button asChild>
                 <Link to={`${company.docPath('DELIVERY_NOTE', 'nuevo')}?pv=${doc.display_number}`}>
                   <Truck /> Preparar remito
+                </Link>
+              </Button>
+            )}
+            {canCollect && (
+              <Button variant="outline" asChild>
+                <Link to={`${company.docPath('CUSTOMER_RECEIPT', 'nuevo')}?cliente=${detail.customer!.code}`}>
+                  <HandCoins /> Registrar cobro
                 </Link>
               </Button>
             )}
@@ -605,6 +623,49 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
             ? `${date(payment.paid_on)}${payment.payment_method ? ` · ${PAYMENT_METHODS[payment.payment_method]}` : ''}${payment.payment_reference ? ` N.º ${payment.payment_reference}` : ''}`
             : 'Todavía no se pagó'}
         </InfoRow>
+        <InfoRow label="Preparó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'CUSTOMER_RECEIPT' && detail.receipt) {
+    const { receipt, customer } = detail
+    return (
+      <dl className={grid}>
+        <InfoRow label="Cliente">
+          {customer && company.can('receivable.read') ? (
+            <Link className="hover:underline" to={company.to(`ventas/clientes/${customer.code}`)}>
+              {customer.legal_name}
+            </Link>
+          ) : (
+            customer?.legal_name
+          )}
+        </InfoRow>
+        <InfoRow label="CUIT (simulado)">
+          {customer?.tax_id || 'Sin CUIT'} · {customer ? VAT_CONDITIONS[customer.vat_condition] : ''}
+        </InfoRow>
+        <InfoRow label="Ingresa en">
+          {company.can('ledger.read') ? (
+            <Link
+              className="hover:underline"
+              to={company.to(`contabilidad/mayor?cuenta=${receipt.treasury_account.id}`)}
+            >
+              {receipt.treasury_account.name}
+            </Link>
+          ) : (
+            receipt.treasury_account.name
+          )}{' '}
+          <span className="font-mono text-xs text-muted-foreground">{receipt.treasury_account.code}</span>
+        </InfoRow>
+        <InfoRow label="Medio">
+          {PAYMENT_METHODS[receipt.payment_method]}
+          {receipt.reference ? ` N.º ${receipt.reference}` : ''}
+        </InfoRow>
+        <InfoRow label="Importe">{money(doc.total)}</InfoRow>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Cobro">{receipt.received_on ? date(receipt.received_on) : 'Todavía no se cobró'}</InfoRow>
         <InfoRow label="Preparó">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
@@ -994,7 +1055,18 @@ function JournalLines({ journal }: { journal: NonNullable<DocumentDetail['journa
   )
 }
 
-function PaymentLines({ payment, total }: { payment: NonNullable<DocumentDetail['payment']>; total: number }) {
+/** Las facturas que cancela una orden de pago o un recibo de cobro, y cuánto de cada una. */
+function SettledInvoices({
+  lines,
+  total,
+  amountLabel,
+  totalLabel,
+}: {
+  lines: NonNullable<DocumentDetail['payment']>['lines']
+  total: number
+  amountLabel: string
+  totalLabel: string
+}) {
   const head = 'h-9 text-xs font-semibold text-slate-600'
   return (
     <div className="overflow-x-auto rounded-xl border bg-card">
@@ -1005,11 +1077,11 @@ function PaymentLines({ payment, total }: { payment: NonNullable<DocumentDetail[
             <TableHead className={head}>Factura</TableHead>
             <TableHead className={head}>Vence</TableHead>
             <TableHead className={cn(head, 'text-right')}>Total de la factura</TableHead>
-            <TableHead className={cn(head, 'text-right')}>Paga esta orden</TableHead>
+            <TableHead className={cn(head, 'text-right')}>{amountLabel}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {payment.lines.map((l) => (
+          {lines.map((l) => (
             <TableRow key={l.id}>
               <TableCell className="text-xs text-muted-foreground">{l.line_no}</TableCell>
               <TableCell className="text-sm">
@@ -1028,7 +1100,7 @@ function PaymentLines({ payment, total }: { payment: NonNullable<DocumentDetail[
           ))}
         </TableBody>
         <TableFooter>
-          <TotalRow label="Total de la orden" value={total} span={4} strong />
+          <TotalRow label={totalLabel} value={total} span={4} strong />
         </TableFooter>
       </Table>
     </div>
@@ -1072,7 +1144,24 @@ function Lines({ detail }: { detail: DocumentDetail }) {
   const company = useCompany()
   const { doc, lines } = detail
   if (detail.journal) return <JournalLines journal={detail.journal} />
-  if (detail.payment) return <PaymentLines payment={detail.payment} total={doc.total} />
+  if (detail.payment)
+    return (
+      <SettledInvoices
+        lines={detail.payment.lines}
+        total={doc.total}
+        amountLabel="Paga esta orden"
+        totalLabel="Total de la orden"
+      />
+    )
+  if (detail.receipt)
+    return (
+      <SettledInvoices
+        lines={detail.receipt.lines}
+        total={doc.total}
+        amountLabel="Cobra este recibo"
+        totalLabel="Total del recibo"
+      />
+    )
   if (detail.transfer) return <TransferLines transfer={detail.transfer} total={doc.total} />
   if (detail.reconciliation) return <ReconciliationLines view={detail.reconciliation} />
   const product = (l: (typeof lines)[number]) => (
