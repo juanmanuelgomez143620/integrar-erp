@@ -35,7 +35,8 @@ export function PrintPage() {
     doc.doc_type === 'SUPPLIER_INVOICE' ||
     doc.doc_type === 'SUPPLIER_QUOTE' ||
     doc.doc_type === 'SALES_ORDER' ||
-    doc.doc_type === 'SALES_INVOICE'
+    doc.doc_type === 'SALES_INVOICE' ||
+    doc.doc_type === 'SALES_QUOTE'
   const customer = data.customer
   const th = 'border-b border-slate-300 px-2 py-1.5 text-left text-[11px] font-semibold uppercase text-slate-600'
   const td = 'border-b border-slate-200 px-2 py-1.5 align-top'
@@ -269,16 +270,38 @@ export function PrintPage() {
               </div>
             </>
           )}
-          {['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT'].includes(doc.doc_type) && customer && (
-            <div className="col-span-2 rounded border border-slate-300 p-2">
-              <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
-              <div className="font-semibold">{customer.legal_name}</div>
-              <div>
-                {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
-                {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} ({customer.province}
-                )
+          {['SALES_QUOTE', 'SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT'].includes(
+            doc.doc_type,
+          ) &&
+            customer && (
+              <div className="col-span-2 rounded border border-slate-300 p-2">
+                <div className="text-[11px] font-semibold text-slate-600 uppercase">Cliente</div>
+                <div className="font-semibold">{customer.legal_name}</div>
+                <div>
+                  {customer.tax_id ? `CUIT ${customer.tax_id} (simulado) · ` : ''}
+                  {VAT_CONDITIONS[customer.vat_condition]} · {customer.address_line}, {customer.city} (
+                  {customer.province})
+                </div>
               </div>
-            </div>
+            )}
+          {doc.doc_type === 'SALES_QUOTE' && data.sales_quote && (
+            <>
+              <div className="col-span-2">
+                Le cotizamos lo siguiente, a entregar desde {warehouse?.name}. Precios sin IVA.
+              </div>
+              <div>
+                <b>Válido hasta:</b> {date(data.sales_quote.valid_until)}
+              </div>
+              <div>
+                <b>Condición de pago:</b>{' '}
+                {data.sales_quote.payment_terms_days ? `${data.sales_quote.payment_terms_days} días` : 'Contado'}
+              </div>
+              {data.sales_quote.customer_reference && (
+                <div>
+                  <b>Referencia del cliente:</b> {data.sales_quote.customer_reference}
+                </div>
+              )}
+            </>
           )}
           {doc.doc_type === 'SALES_ORDER' && data.sales_order && (
             <>

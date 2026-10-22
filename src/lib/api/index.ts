@@ -55,6 +55,9 @@ export type {
   PendingRequisitionLine,
   PeriodView,
   PostingRuleRow,
+  PriceListDetail,
+  PriceListProduct,
+  PriceListRow,
   ProductDetail,
   ProductRow,
   QuoteView,
@@ -69,6 +72,7 @@ export type {
   RfqView,
   SalesCustomer,
   SalesOrderView,
+  SalesQuoteView,
   SellableProduct,
   StockRow,
   SupplierAccount,
@@ -91,11 +95,13 @@ export type {
   GoodsReceiptInput,
   JournalEntryInput,
   PaymentOrderInput,
+  PriceListInput,
   PurchaseOrderInput,
   RequisitionInput,
   RfqInput,
   SalesInvoiceInput,
   SalesOrderInput,
+  SalesQuoteInput,
   SchoolSettingsInput,
   StockAdjustmentInput,
   SupplierInvoiceInput,
@@ -214,6 +220,8 @@ const mockApi = {
     query((db, u) => Q.paymentCandidates(db, u, companyId, supplierId)),
   receiptCandidates: (companyId: string, customerId: string) =>
     query((db, u) => Q.receiptCandidates(db, u, companyId, customerId)),
+  priceLists: (companyId: string) => query((db, u) => Q.listPriceLists(db, u, companyId)),
+  priceList: (companyId: string, code: string) => query((db, u) => Q.priceListDetail(db, u, companyId, code)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -331,6 +339,23 @@ const mockCommands = {
   confirmCustomerReceipt: (docId: string) => command((c) => E.cmdConfirmCustomerReceipt(c, docId)),
   cancelCustomerReceipt: (docId: string, reason: string) =>
     command((c) => E.cmdCancelCustomerReceipt(c, docId, reason)),
+  createPriceList: (companyId: string, input: E.PriceListInput) =>
+    command((c) => E.cmdCreatePriceList(c, companyId, input)),
+  updatePriceList: (companyId: string, listId: string, input: { name: string; description: string }) =>
+    command((c) => E.cmdUpdatePriceList(c, companyId, listId, input)),
+  setPriceListActive: (companyId: string, listId: string, active: boolean) =>
+    command((c) => E.cmdSetPriceListActive(c, companyId, listId, active)),
+  setPriceListPrice: (companyId: string, listId: string, productId: string, price: number | null) =>
+    command((c) => E.cmdSetPriceListPrice(c, companyId, listId, productId, price)),
+  adjustPriceList: (companyId: string, listId: string, percent: number) =>
+    command((c) => E.cmdAdjustPriceList(c, companyId, listId, percent)),
+  createSalesQuote: (companyId: string, input: E.SalesQuoteInput, send: boolean) =>
+    command((c) => E.cmdCreateSalesQuote(c, companyId, input, send)),
+  sendSalesQuote: (docId: string) => command((c) => E.cmdSendSalesQuote(c, docId)),
+  acceptSalesQuote: (docId: string) => command((c) => E.cmdAcceptSalesQuote(c, docId)),
+  rejectSalesQuote: (docId: string, reason: string) => command((c) => E.cmdRejectSalesQuote(c, docId, reason)),
+  expireSalesQuote: (docId: string) => command((c) => E.cmdExpireSalesQuote(c, docId)),
+  cancelSalesQuote: (docId: string, reason: string) => command((c) => E.cmdCancelSalesQuote(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

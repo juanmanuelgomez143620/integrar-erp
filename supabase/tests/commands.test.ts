@@ -129,6 +129,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['delivery_note_lines', mock.dnLines],
     ['sales_invoice_lines', mock.fvLines],
     ['customer_receipt_lines', mock.rcLines],
+    ['sales_quote_lines', mock.qtLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -2309,6 +2310,272 @@ describe('paridad de comandos', () => {
     await reads('después de los cobros')
   })
 
+  it('listas de precios y presupuestos: precios, ajustes, la lista del cliente y el pedido que nace de la aceptación', async () => {
+    const companyPg = pg(company)
+    const customer = (code: string) => mock.customers.find((c) => c.company_id === company && c.code === code)!
+    const status = (id: string) => mock.documents.find((d) => d.id === id)!.status
+    const listInput = (over: Partial<E.PriceListInput> = {}): E.PriceListInput => ({
+      code: 'MIN',
+      name: 'Minorista',
+      description: 'Para el mostrador',
+      copy_from: 'SALE_PRICE',
+      percent: 10,
+      ...over,
+    })
+    const createList = (label: string, username: string, input: E.PriceListInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreatePriceList(c, company, input),
+        (b) =>
+          b.commands.createPriceList(companyPg, {
+            ...input,
+            copy_from: mock.priceLists.some((l) => l.id === input.copy_from) ? pg(input.copy_from) : input.copy_from,
+          }),
+      )
+    const setPrice = (label: string, username: string, listId: string, code: string, price: number | null) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSetPriceListPrice(c, company, listId, product(code).id, price),
+        (b) => b.commands.setPriceListPrice(companyPg, pg(listId), pg(product(code).id), price),
+      )
+    const adjust = (label: string, username: string, listId: string, percent: number) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdAdjustPriceList(c, company, listId, percent),
+        (b) => b.commands.adjustPriceList(companyPg, pg(listId), percent),
+      )
+    const setActive = (label: string, listId: string, active: boolean) =>
+      step(
+        label,
+        'ventas',
+        (c) => E.cmdSetPriceListActive(c, company, listId, active),
+        (b) => b.commands.setPriceListActive(companyPg, pg(listId), active),
+      )
+    const assign = (label: string, code: string, listId: string) =>
+      step(
+        label,
+        'ventas',
+        (c) =>
+          E.cmdSaveMaster(c, 'customer', company, {
+            id: customer(code).id,
+            code,
+            legal_name: customer(code).legal_name,
+            price_list_id: listId,
+          }),
+        (b) =>
+          b.commands.saveMaster('customer', companyPg, {
+            id: pg(customer(code).id),
+            code,
+            legal_name: customer(code).legal_name,
+            price_list_id: listId ? pg(listId) : '',
+          }),
+      )
+    const reads = async (label: string) => {
+      for (const username of ['ventas', 'gerencia', 'contabilidad']) {
+        await sameRead(
+          `listas de precios ${label} (${username})`,
+          username,
+          (b) => b.api.priceLists(companyPg),
+          (u) => Q.listPriceLists(mock, u, company),
+        )
+        for (const code of ['MAY', 'MIN'])
+          await sameRead(
+            `lista ${code} ${label} (${username})`,
+            username,
+            (b) => b.api.priceList(companyPg, code),
+            (u) => Q.priceListDetail(mock, u, company, code),
+          )
+      }
+      await sameRead(
+        `clientes para vender ${label}`,
+        'ventas',
+        (b) => b.api.salesCustomers(companyPg),
+        (u) => Q.salesCustomers(mock, u, company),
+      )
+      await sameRead(
+        `catálogo de venta ${label}`,
+        'ventas',
+        (b) => b.api.salesCatalog(companyPg),
+        (u) => Q.salesCatalog(mock, u, company),
+      )
+    }
+
+    // Listas: controles, una nueva copiada de los precios de venta y sus cambios.
+    for (const [label, username, input] of [
+      ['Tesorería no arma listas', 'tesoreria', listInput()],
+      ['código con espacios', 'ventas', listInput({ code: 'MIN 2' })],
+      ['código repetido', 'ventas', listInput({ code: 'MAY' })],
+      ['nombre de una letra', 'ventas', listInput({ name: 'M' })],
+      ['porcentaje de -90', 'ventas', listInput({ percent: -90 })],
+      ['porcentaje con tres decimales', 'ventas', listInput({ percent: 1.005 })],
+      ['copiar de una lista que no existe', 'ventas', listInput({ copy_from: crypto.randomUUID() })],
+    ] as const)
+      expect(await createList(label, username, input), label).toBeNull()
+    const newList = await ok(
+      'lista minorista: los precios de venta con un 10 % más',
+      'ventas',
+      (c) => E.cmdCreatePriceList(c, company, listInput()),
+      (b) => b.commands.createPriceList(companyPg, listInput()),
+    )
+    loaded.link(newList.mock.id, (newList.pg as { id: string }).id)
+    const min = newList.mock.id
+    expect(await setPrice('una materia prima no va en la lista', 'ventas', min, 'MP-001', 1000)).toBeNull()
+    expect(await setPrice('precio con tres decimales', 'ventas', min, 'PT-001', 1000.005)).toBeNull()
+    expect(await setPrice('Depósito no cambia precios', 'deposito', min, 'PT-001', 1000)).toBeNull()
+    expect(await setPrice('cambiar un precio', 'ventas', min, 'PT-002', 140000)).not.toBeNull()
+    expect(await setPrice('el mismo precio otra vez', 'ventas', min, 'PT-002', 140000)).not.toBeNull()
+    expect(await setPrice('sacar el flete', 'ventas', min, 'SV-001', null)).not.toBeNull()
+    expect(await setPrice('sacarlo otra vez', 'ventas', min, 'SV-001', null)).toBeNull()
+    expect(await setPrice('volver a agregarlo', 'ventas', min, 'SV-001', 50000)).not.toBeNull()
+    expect(await adjust('ajuste de cero', 'ventas', min, 0)).toBeNull()
+    expect(await adjust('ajuste de -95 %', 'ventas', min, -95)).toBeNull()
+    expect(await adjust('subir la lista un 3,5 %', 'ventas', min, 3.5)).not.toBeNull()
+    await ok(
+      'cambiarle el nombre',
+      'ventas',
+      (c) => E.cmdUpdatePriceList(c, company, min, { name: 'Minorista 2027', description: '' }),
+      (b) => b.commands.updatePriceList(companyPg, pg(min), { name: 'Minorista 2027', description: '' }),
+    )
+    await reads('con la lista minorista')
+
+    // La lista del cliente: una desactivada no se asigna; sin lista, vuelve al precio de venta.
+    expect(await setActive('desactivar la minorista', min, false)).not.toBeNull()
+    expect(await assign('asignar una lista inactiva', 'CLI-005', min)).toBeNull()
+    expect(await setActive('activarla de nuevo', min, true)).not.toBeNull()
+    expect(await assign('asignarla a CLI-005', 'CLI-005', min)).not.toBeNull()
+    expect(await assign('sacarle la lista a CLI-008', 'CLI-008', '')).not.toBeNull()
+    expect(customer('CLI-005').price_list_id).toBe(min)
+    await reads('con la lista asignada')
+
+    // Presupuestos: controles, enviado, rechazado sin motivo, aceptado (genera el pedido) y vencido.
+    const quoteInput = (code: string, lines: [string, number][], over: Partial<E.SalesQuoteInput> = {}) => {
+      const input: E.SalesQuoteInput = {
+        customer_id: customer(code).id,
+        warehouse_id: warehouse('DEP-PT'),
+        valid_until: addDays(todayAR(), 10),
+        payment_terms_days: 15,
+        customer_reference: 'Pedido de precios 77',
+        notes: '',
+        lines: lines.map(([p, quantity]) => ({
+          product_id: product(p).id,
+          quantity,
+          unit_price: E.listPriceFor(mock, customer(code), product(p)),
+        })),
+        ...over,
+      }
+      return {
+        input,
+        pgInput: {
+          ...input,
+          customer_id: pg(input.customer_id),
+          warehouse_id: pg(input.warehouse_id),
+          lines: input.lines.map((l) => ({ ...l, product_id: pg(l.product_id) })),
+        },
+      }
+    }
+    const createQuote = (label: string, username: string, q: ReturnType<typeof quoteInput>, send: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateSalesQuote(c, company, q.input, send),
+        (b) => b.commands.createSalesQuote(companyPg, q.pgInput, send),
+      )
+    const createdQuote = (label: string, q: ReturnType<typeof quoteInput>, send: boolean) =>
+      created(
+        label,
+        'ventas',
+        (c) => E.cmdCreateSalesQuote(c, company, q.input, send),
+        (b) => b.commands.createSalesQuote(companyPg, q.pgInput, send),
+      )
+    const quoteAction = (
+      label: string,
+      username: string,
+      id: string,
+      action: 'send' | 'reject' | 'expire' | 'cancel',
+      text = '',
+    ) =>
+      step(
+        label,
+        username,
+        (c) =>
+          action === 'send'
+            ? E.cmdSendSalesQuote(c, id)
+            : action === 'reject'
+              ? E.cmdRejectSalesQuote(c, id, text)
+              : action === 'expire'
+                ? E.cmdExpireSalesQuote(c, id)
+                : E.cmdCancelSalesQuote(c, id, text),
+        (b) =>
+          action === 'send'
+            ? b.commands.sendSalesQuote(pg(id))
+            : action === 'reject'
+              ? b.commands.rejectSalesQuote(pg(id), text)
+              : action === 'expire'
+                ? b.commands.expireSalesQuote(pg(id))
+                : b.commands.cancelSalesQuote(pg(id), text),
+      )
+    for (const [label, username, q] of [
+      ['Depósito no presupuesta', 'deposito', quoteInput('CLI-005', [['PT-001', 1]])],
+      ['validez vencida', 'ventas', quoteInput('CLI-005', [['PT-001', 1]], { valid_until: addDays(todayAR(), -1) })],
+      ['validez inválida', 'ventas', quoteInput('CLI-005', [['PT-001', 1]], { valid_until: '2027-02-30' })],
+      ['una materia prima no se vende', 'ventas', quoteInput('CLI-005', [['MP-001', 1]])],
+      ['sin ítems', 'ventas', quoteInput('CLI-005', [])],
+    ] as const)
+      expect(await createQuote(label, username, q, false), label).toBeNull()
+    const first = await createdQuote(
+      'presupuesto a CLI-005 con los precios de su lista',
+      quoteInput('CLI-005', [
+        ['PT-002', 6],
+        ['SV-001', 1],
+      ]),
+      false,
+    )
+    expect(await quoteAction('dar por vencido un borrador', 'ventas', first, 'expire')).toBeNull()
+    expect(await quoteAction('enviarlo', 'ventas', first, 'send')).not.toBeNull()
+    expect(await quoteAction('enviarlo otra vez', 'ventas', first, 'send')).toBeNull()
+    expect(await quoteAction('rechazar sin motivo', 'ventas', first, 'reject', '')).toBeNull()
+    expect(await quoteAction('darlo por vencido estando vigente', 'ventas', first, 'expire')).toBeNull()
+    // La lista cambia después: el pedido toma los precios del presupuesto.
+    expect(await adjust('subir la minorista otra vez', 'ventas', min, 2)).not.toBeNull()
+    const order = await created(
+      'el cliente lo acepta: se genera el pedido',
+      'ventas',
+      (c) => E.cmdAcceptSalesQuote(c, first),
+      (b) => b.commands.acceptSalesQuote(pg(first)),
+    )
+    expect(status(first)).toBe('ACEPTADO')
+    expect(status(order)).toBe('BORRADOR')
+    expect(mock.soLines.filter((l) => l.document_id === order).map((l) => l.list_price)).toEqual(
+      mock.qtLines.filter((l) => l.document_id === first).map((l) => l.list_price),
+    )
+
+    const declined = await createdQuote('otro, enviado', quoteInput('CLI-003', [['PT-004', 1]]), true)
+    expect(
+      await quoteAction('el cliente no acepta', 'ventas', declined, 'reject', 'Lo compra el año que viene'),
+    ).not.toBeNull()
+    const late = await createdQuote('uno que vence', quoteInput('CLI-009', [['PT-002', 2]]), true)
+    const past = addDays(todayAR(), -3)
+    mock.documents.find((d) => d.id === late)!.qt!.valid_until = past
+    await db.admin('update public.sales_quotes set valid_until = $1 where document_id = $2', [past, pg(late)])
+    expect(
+      await step(
+        'aceptar un presupuesto vencido',
+        'ventas',
+        (c) => E.cmdAcceptSalesQuote(c, late),
+        (b) => b.commands.acceptSalesQuote(pg(late)),
+      ),
+    ).toBeNull()
+    expect(await quoteAction('Contabilidad no lo da por vencido', 'contabilidad', late, 'expire')).toBeNull()
+    expect(await quoteAction('darlo por vencido', 'ventas', late, 'expire')).not.toBeNull()
+    const draft = await createdQuote('un borrador', quoteInput('CLI-004', [['MR-001', 1]]), false)
+    expect(await quoteAction('anularlo sin motivo', 'ventas', draft, 'cancel', '')).toBeNull()
+    expect(await quoteAction('anularlo', 'ventas', draft, 'cancel', 'Se cargó al cliente equivocado')).not.toBeNull()
+    await reads('después de los presupuestos')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -2327,6 +2594,7 @@ describe('paridad de comandos', () => {
       'DELIVERY_NOTE',
       'SALES_INVOICE',
       'CUSTOMER_RECEIPT',
+      'SALES_QUOTE',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

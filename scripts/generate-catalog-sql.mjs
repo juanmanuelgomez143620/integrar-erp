@@ -5,7 +5,7 @@
 // claves de la imputación automática (posting_keys, desde la Fase 3).
 //
 // Uso: npm run db:catalog [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de catálogos (la de la Fase 4c).
+// Sin argumento reescribe la última migración de catálogos (la de la Fase 4d).
 // Una migración ya aplicada en alguna instancia no se reescribe: si cambian
 // los catálogos después, se genera una nueva con otro nombre (el script es
 // idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias).
@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261022120100_catalog_data_cobros.sql'
+const target = process.argv[2] ?? '20261022130100_catalog_data_precios_presupuestos.sql'
 
 const server = await createServer({
   root,
@@ -158,7 +158,7 @@ try {
   )
 
   const out = [
-    '-- Datos de los catálogos del sistema (con los de los recibos de cobro, Fase 4c).',
+    '-- Datos de los catálogos del sistema (con los de las listas de precios y los presupuestos, Fase 4d).',
     '-- GENERADO por scripts/generate-catalog-sql.mjs desde src/lib/domain/catalog.ts: no editar a mano.',
     '-- Idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias.',
     '',

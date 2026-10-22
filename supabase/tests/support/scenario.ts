@@ -412,6 +412,67 @@ export function buildScenario(): DB {
     true,
   )
 
+  // Listas de precios: la mayorista (los precios de venta con un 10 % menos,
+  // después +5 % y sin el flete) para CLI-008, y la de empleados, copiada de ella.
+  // Presupuestos: uno aceptado (generó su pedido en borrador), uno rechazado,
+  // uno enviado, uno vencido y un borrador.
+  const wholesale = E.cmdCreatePriceList(as('ventas'), company, {
+    code: 'MAY',
+    name: 'Mayorista',
+    description: 'Mueblerías y distribuidores',
+    copy_from: 'SALE_PRICE',
+    percent: -10,
+  })
+  E.cmdAdjustPriceList(as('ventas'), company, wholesale.id, 5)
+  E.cmdSetPriceListPrice(as('ventas'), company, wholesale.id, product('SV-001').id, null)
+  E.cmdCreatePriceList(as('ventas'), company, {
+    code: 'EMP',
+    name: 'Empleados',
+    description: '',
+    copy_from: wholesale.id,
+    percent: -5,
+  })
+  const decoraciones = db.customers.find((c) => c.company_id === company && c.code === 'CLI-008')!
+  E.cmdSaveMaster(as('ventas'), 'customer', company, {
+    id: decoraciones.id,
+    code: decoraciones.code,
+    legal_name: decoraciones.legal_name,
+    price_list_id: wholesale.id,
+  })
+  const salesQuote = (customerCode: string, lines: [string, number][]): E.SalesQuoteInput => {
+    const buyer = db.customers.find((c) => c.id === customer(customerCode))!
+    return {
+      customer_id: buyer.id,
+      warehouse_id: warehouse('DEP-PT'),
+      valid_until: addDays(todayAR(), 15),
+      payment_terms_days: 30,
+      customer_reference: '',
+      notes: '',
+      lines: lines.map(([code, quantity]) => ({
+        product_id: product(code).id,
+        quantity,
+        unit_price: E.listPriceFor(db, buyer, product(code)),
+      })),
+    }
+  }
+  const accepted = E.cmdCreateSalesQuote(
+    as('ventas'),
+    company,
+    salesQuote('CLI-008', [
+      ['PT-002', 4],
+      ['PT-003', 1],
+    ]),
+    true,
+  )
+  E.cmdAcceptSalesQuote(as('ventas'), accepted.id)
+  const declined = E.cmdCreateSalesQuote(as('ventas'), company, salesQuote('CLI-010', [['PT-004', 2]]), true)
+  E.cmdRejectSalesQuote(as('ventas'), declined.id, 'Compró en otra mueblería')
+  E.cmdCreateSalesQuote(as('ventas'), company, salesQuote('CLI-002', [['PT-001', 1]]), true)
+  const late = E.cmdCreateSalesQuote(as('ventas'), company, salesQuote('CLI-006', [['MR-001', 2]]), true)
+  db.documents.find((d) => d.id === late.id)!.qt!.valid_until = addDays(todayAR(), -2)
+  E.cmdExpireSalesQuote(as('ventas'), late.id)
+  E.cmdCreateSalesQuote(as('ventas'), company, salesQuote('CLI-004', [['PT-002', 2]]), false)
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

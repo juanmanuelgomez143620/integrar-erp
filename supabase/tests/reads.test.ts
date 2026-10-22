@@ -52,6 +52,7 @@ const DOC_TYPES: DocType[] = [
   'DELIVERY_NOTE',
   'SALES_INVOICE',
   'CUSTOMER_RECEIPT',
+  'SALES_QUOTE',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -208,6 +209,14 @@ describe('ventas', () => {
       await same(u, () => Q.dispatchableOrders(mock, userId(u), company), 'orders_dispatchable', [companyPg])
       await same(u, () => Q.invoiceableSalesOrders(mock, userId(u), company), 'sales_orders_invoiceable', [companyPg])
       await same(u, () => Q.listReceivables(mock, userId(u), company), 'receivables_list', [companyPg])
+    }
+  })
+
+  it('listas de precios: el listado y cada lista con sus productos, clientes y faltantes', async () => {
+    for (const u of USERS) {
+      await same(u, () => Q.listPriceLists(mock, userId(u), company), 'price_lists_list', [companyPg])
+      for (const code of ['MAY', 'EMP', 'NO-EXISTE'])
+        await same(u, () => Q.priceListDetail(mock, userId(u), company, code), 'price_list_detail', [companyPg, code])
     }
   })
 

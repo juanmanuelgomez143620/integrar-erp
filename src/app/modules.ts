@@ -4,6 +4,7 @@
 import type { ComponentType } from 'react'
 import {
   ArrowLeftRight,
+  BadgeDollarSign,
   Banknote,
   Bell,
   BookMarked,
@@ -13,6 +14,7 @@ import {
   CalendarRange,
   ClipboardCheck,
   ClipboardList,
+  FilePen,
   FileSearch,
   GraduationCap,
   HandCoins,
@@ -90,9 +92,16 @@ export const NAV: NavGroup[] = [
   {
     label: 'Ventas',
     items: [
+      { label: 'Presupuestos', path: 'ventas/presupuestos', icon: FilePen, permission: 'sales_quote.read' },
       { label: 'Pedidos de venta', path: 'ventas/pedidos', icon: Handshake, permission: 'sales_order.read' },
       { label: 'Facturas de venta', path: 'ventas/facturas', icon: ReceiptText, permission: 'sales_invoice.read' },
       { label: 'Cuentas corrientes', path: 'ventas/clientes', icon: Wallet, permission: 'receivable.read' },
+      {
+        label: 'Listas de precios',
+        path: 'ventas/listas-de-precios',
+        icon: BadgeDollarSign,
+        permission: 'price_list.read',
+      },
     ],
   },
   {

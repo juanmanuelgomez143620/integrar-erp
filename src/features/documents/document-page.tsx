@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -122,6 +122,14 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmCustomerReceipt(id),
     CANCEL: (id, t) => commands.cancelCustomerReceipt(id, t),
   },
+  SALES_QUOTE: {
+    SEND: (id) => commands.sendSalesQuote(id),
+    // Aceptar genera el pedido de venta: la página lo abre.
+    CONFIRM: (id) => commands.acceptSalesQuote(id),
+    REJECT: (id, t) => commands.rejectSalesQuote(id, t),
+    CLOSE: (id) => commands.expireSalesQuote(id),
+    CANCEL: (id, t) => commands.cancelSalesQuote(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -140,6 +148,7 @@ const AREA: Record<DocType, string> = {
   DELIVERY_NOTE: 'Depósito',
   SALES_INVOICE: 'Ventas',
   CUSTOMER_RECEIPT: 'Pagos y tesorería',
+  SALES_QUOTE: 'Ventas',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -163,8 +172,13 @@ export function DocumentPage({ docType }: { docType: DocType }) {
   return <DocumentView detail={data} />
 }
 
+/** Un documento creado por una acción (aceptar un presupuesto genera el pedido). */
+const isCreated = (r: unknown): r is { id: string; display_number: string } =>
+  !!r && typeof r === 'object' && 'display_number' in r
+
 function DocumentView({ detail }: { detail: DocumentDetail }) {
   const company = useCompany()
+  const navigate = useNavigate()
   const { doc } = detail
   const info = DOC_TYPES[doc.doc_type]
   const [pending, setPending] = useState<AvailableAction | null>(null)
@@ -173,8 +187,14 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
   const run = useCommand(
     (action: AvailableAction, text: string) => RUNNERS[doc.doc_type][action.action]!(doc.id, text),
     {
-      success: 'Listo. El cambio quedó registrado en el historial.',
-      onSuccess: () => setPending(null),
+      success: (r) =>
+        isCreated(r)
+          ? `Se generó ${r.display_number} en borrador: revisalo y confirmalo.`
+          : 'Listo. El cambio quedó registrado en el historial.',
+      onSuccess: (r) => {
+        setPending(null)
+        if (doc.doc_type === 'SALES_QUOTE' && isCreated(r)) navigate(company.docPath('SALES_ORDER', r.display_number))
+      },
     },
   )
 
@@ -880,7 +900,42 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
           {so.payment_terms_days ? `${so.payment_terms_days} días` : 'Contado'}
         </InfoRow>
         <InfoRow label="Referencia del cliente">{so.customer_reference || '—'}</InfoRow>
+        {doc.reference_label && <InfoRow label="Presupuesto">{doc.reference_label}</InfoRow>}
         <InfoRow label="Vendió">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'SALES_QUOTE' && detail.sales_quote) {
+    const quote = detail.sales_quote
+    const { customer } = detail
+    return (
+      <dl className={grid}>
+        <InfoRow label="Cliente">{customer?.legal_name}</InfoRow>
+        <InfoRow label="CUIT (simulado)">
+          {customer?.tax_id || 'Sin CUIT'} · {customer ? VAT_CONDITIONS[customer.vat_condition] : ''}
+        </InfoRow>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Válido hasta">
+          {date(quote.valid_until)}
+          {quote.expired && <span className="text-red-700"> · vencido</span>}
+        </InfoRow>
+        <InfoRow label="Entrega desde">{warehouse?.name}</InfoRow>
+        <InfoRow label="Condición de pago">
+          {quote.payment_terms_days ? `${quote.payment_terms_days} días` : 'Contado'}
+        </InfoRow>
+        <InfoRow label="Referencia del cliente">{quote.customer_reference || '—'}</InfoRow>
+        {quote.order && (
+          <InfoRow label="Pedido de venta">
+            <Link className="font-mono hover:underline" to={quote.order.path}>
+              {quote.order.display_number}
+            </Link>{' '}
+            <DocStatus info={quote.order.status_info} />
+          </InfoRow>
+        )}
+        <InfoRow label="Preparó">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
@@ -1179,7 +1234,9 @@ function Lines({ detail }: { detail: DocumentDetail }) {
         ? { span: 6, trailing: 0 }
         : doc.doc_type === 'SALES_ORDER'
           ? { span: 5, trailing: 2 }
-          : null
+          : doc.doc_type === 'SALES_QUOTE'
+            ? { span: 5, trailing: 0 }
+            : null
   return (
     <div className="overflow-x-auto rounded-xl border bg-card">
       <Table>
@@ -1252,6 +1309,14 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
                 <TableHead className={cn(head, 'text-right')}>Entregado</TableHead>
                 <TableHead className={cn(head, 'text-right')}>Facturado</TableHead>
+              </>
+            )}
+            {doc.doc_type === 'SALES_QUOTE' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Cantidad</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Precio unit.</TableHead>
+                <TableHead className={cn(head, 'text-right')}>IVA</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
               </>
             )}
             {doc.doc_type === 'SALES_INVOICE' && (
@@ -1415,6 +1480,21 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                   >
                     {qty(l.qty_invoiced)}
                   </TableCell>
+                </>
+              )}
+              {doc.doc_type === 'SALES_QUOTE' && (
+                <>
+                  <TableCell className="tabular text-right">{qty(l.quantity, l.product.uom_code)}</TableCell>
+                  <TableCell className="tabular text-right">
+                    {money(l.unit_price)}
+                    {!!l.list_price && (l.unit_price ?? 0) < l.list_price && (
+                      <div className="text-xs text-amber-700">
+                        Bonif. {Math.round((1 - (l.unit_price ?? 0) / l.list_price) * 1000) / 10}%
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
               )}
               {doc.doc_type === 'SALES_INVOICE' && (

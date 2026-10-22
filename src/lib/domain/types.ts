@@ -43,6 +43,7 @@ export type DocType =
   | 'DELIVERY_NOTE'
   | 'SALES_INVOICE'
   | 'CUSTOMER_RECEIPT'
+  | 'SALES_QUOTE'
 
 /** Cómo se pagó una orden de pago o se cobró un recibo. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -209,6 +210,27 @@ export interface Partner extends Audited {
 
 export interface Customer extends Partner {
   credit_limit: number | null
+  /** Lista de precios que se le propone (4d); sin lista, el precio de venta de cada producto. */
+  price_list_id: string | null
+}
+
+/** Lista de precios de una empresa (tabla price_lists): el precio sin IVA de cada producto que se vende. */
+export interface PriceList extends Audited {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  description: string
+  is_active: boolean
+}
+
+/** El precio de un producto en una lista (tabla price_list_items). */
+export interface PriceListItem {
+  id: string
+  company_id: string
+  price_list_id: string
+  product_id: string
+  unit_price: number
 }
 
 export interface Supplier extends Partner {
@@ -392,6 +414,16 @@ export interface SalesInvoiceHeader {
   registered_at: string | null
 }
 
+/** Presupuesto (tabla sales_quotes, 1 a 1 con documents): lo que Ventas le cotiza a un cliente y hasta cuándo vale la oferta. */
+export interface SalesQuoteHeader {
+  /** Hasta cuándo vale la oferta: después no se acepta. */
+  valid_until: string
+  /** Desde dónde se entregaría: pasa al pedido. */
+  warehouse_id: string
+  payment_terms_days: number
+  customer_reference: string
+}
+
 /** Recibo de cobro (tabla customer_receipts, 1 a 1 con documents): qué facturas de un cliente se cobran y dónde ingresa el dinero. */
 export interface CustomerReceiptHeader {
   /** Caja o banco donde ingresa el dinero: los cheques de terceros, a Valores a depositar. */
@@ -401,6 +433,22 @@ export interface CustomerReceiptHeader {
   reference: string
   /** Fecha del cobro (al confirmarse: la del asiento). */
   received_on: string | null
+}
+
+/** Un ítem del presupuesto: el precio de lista que se propuso y el que se cotizó. */
+export interface SalesQuoteLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  product_id: string
+  quantity: number
+  list_price: number
+  unit_price: number
+  vat_rate: number
+  line_subtotal: number
+  line_tax: number
+  line_total: number
 }
 
 /** Una factura (y cuánto de ella) que cancela un recibo de cobro. */
@@ -454,6 +502,7 @@ export interface Document extends Audited {
   dn?: DeliveryNoteHeader
   fv?: SalesInvoiceHeader
   rc?: CustomerReceiptHeader
+  qt?: SalesQuoteHeader
 }
 
 export interface RequisitionLine {

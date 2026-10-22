@@ -1698,6 +1698,13 @@ function masterData(
   if (taxId && !/^\d{2}-\d{8}-\d$/.test(taxId)) fail('DATO_INVALIDO', 'El CUIT debe tener el formato 30-12345678-9.')
   const email = text('email')
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail('DATO_INVALIDO', 'Ingresá un email válido.')
+  // "" en la lista de precios es "sin lista"; una desactivada no se asigna (salvo que el cliente ya la tuviera).
+  const priceListId = kind === 'customer' ? text('price_list_id') || null : null
+  if (priceListId) {
+    const list = db.priceLists.find((l) => l.id === priceListId && l.company_id === companyId)
+    if (!list || (!list.is_active && priceListId !== (previous as T.Customer | undefined)?.price_list_id))
+      fail('DATO_INVALIDO', 'La lista de precios debe estar activa y pertenecer a esta empresa.')
+  }
   return {
     legal_name: text('legal_name'),
     trade_name: text('trade_name'),
@@ -1712,7 +1719,7 @@ function masterData(
     payment_terms_days: number('payment_terms_days', 0, true),
     notes: text('notes'),
     ...(kind === 'customer'
-      ? { credit_limit: number('credit_limit', null) }
+      ? { credit_limit: number('credit_limit', null), price_list_id: priceListId }
       : { category: text('category'), lead_time_days: number('lead_time_days', null, true) }),
   }
 }
@@ -3042,7 +3049,12 @@ export interface SupplierQuoteInput {
 /** Proveedores a los que, como mínimo, se pide cotización (a validar). */
 export const MIN_RFQ_SUPPLIERS = 2
 
-const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s))
+/** Una fecha AAAA-MM-DD que existe (el 30 de febrero, no: el motor de JS lo pasaría al 2 de marzo). */
+function isIsoDate(s: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const time = Date.parse(s)
+  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === s
+}
 
 export const rfqLinesOf = (db: DB, rfqId: string) =>
   db.rfqLines.filter((l) => l.document_id === rfqId).sort((a, b) => a.line_no - b.line_no)
@@ -3627,7 +3639,7 @@ export interface SalesOrderInput {
   payment_terms_days: number
   customer_reference: string
   notes: string
-  /** Precio unitario sin IVA: se propone el de venta del producto. */
+  /** Precio unitario sin IVA: se propone el de la lista del cliente (o el de venta del producto). */
   lines: { product_id: string; quantity: number; unit_price: number }[]
 }
 
@@ -3830,8 +3842,26 @@ function validateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrderInput)
 }
 
 export function cmdCreateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrderInput, confirm: boolean) {
-  const { db } = ctx
   const actor = requirePermission(ctx, companyId, 'sales_order.create')
+  const doc = insertSalesOrder(ctx, companyId, actor, input)
+  if (confirm) confirmSalesOrder(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/**
+ * Carga el pedido en borrador. El precio de lista de cada ítem (contra el que
+ * se mide la bonificación) es el de la lista del cliente o, si el pedido sale
+ * de un presupuesto, el que se le propuso en él.
+ */
+function insertSalesOrder(
+  ctx: Ctx,
+  companyId: string,
+  actor: Actor,
+  input: SalesOrderInput,
+  listPrices?: Map<string, number>,
+) {
+  const { db } = ctx
   const { customer, lines } = validateSalesOrder(ctx, companyId, input)
   const doc = newDocument(ctx, companyId, 'SALES_ORDER', actor, {
     customer_id: customer.id,
@@ -3855,7 +3885,7 @@ export function cmdCreateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrd
       line_no: i + 1,
       product_id: l.product.id,
       quantity: l.quantity,
-      list_price: l.product.sale_price ?? 0,
+      list_price: listPrices?.get(l.product.id) ?? listPriceFor(db, customer, l.product),
       unit_price: l.unit_price,
       vat_rate: l.vat_rate,
       line_subtotal: subtotal,
@@ -3879,9 +3909,7 @@ export function cmdCreateSalesOrder(ctx: Ctx, companyId: string, input: SalesOrd
     to_status: 'BORRADOR',
     summary: `Creó ${doc.display_number} a ${customer.legal_name} por ${money(doc.total)}`,
   })
-  if (confirm) confirmSalesOrder(ctx, doc)
-  else openTasksForStatus(ctx, doc, actor)
-  return { id: doc.id, display_number: doc.display_number }
+  return doc
 }
 
 /**
@@ -4688,6 +4716,443 @@ export function cmdCancelCustomerReceipt(ctx: Ctx, docId: string, reason: string
     summary: `Anuló ${doc.display_number}${reversal ? ` y su cobro con el contraasiento ${reversal.display_number}` : ''} — ${comment}`,
   })
   for (const l of receiptLines(db, doc.id)) recomputeSalesInvoice(ctx, l.invoice_id)
+}
+
+// ============================================================ Listas de precios (docs/FASE_4_VENTAS_Y_CLIENTES.md §6)
+
+export interface PriceListInput {
+  code: string
+  name: string
+  description: string
+  /** De dónde salen los precios de una lista nueva: '' (de ningún lado), 'SALE_PRICE' (los de venta) o el id de otra lista. */
+  copy_from: string
+  /** Porcentaje que se aplica a los precios copiados: −10 es un 10 % menos. */
+  percent: number
+}
+
+const priceListLabel = (l: T.PriceList) => `${l.code} ${l.name}`
+
+/** "+8 %", "−10 %" o "2,5 %": un porcentaje dentro de una frase. */
+const percentLabel = (percent: number) => `${percent > 0 ? '+' : ''}${fmtQty(percent)} %`
+
+/** El precio de lista de un producto para un cliente: el de su lista (si está activa y lo tiene) o el de venta. */
+export function listPriceFor(db: DB, customer: T.Customer, product: T.Product) {
+  const list = customer.price_list_id ? db.priceLists.find((l) => l.id === customer.price_list_id) : undefined
+  const item = list?.is_active
+    ? db.priceListItems.find((i) => i.price_list_id === list.id && i.product_id === product.id)
+    : undefined
+  return item ? item.unit_price : (product.sale_price ?? 0)
+}
+
+function getPriceList(db: DB, companyId: string, id: string) {
+  const list = db.priceLists.find((l) => l.id === id && l.company_id === companyId)
+  if (!list) fail('DATO_INVALIDO', 'La lista de precios no existe.')
+  return list
+}
+
+/** Porcentaje de un ajuste: con hasta 2 decimales, mayor que −90 y de hasta 1000. */
+function validPercent(percent: number) {
+  if (!Number.isFinite(percent) || round2(percent) !== percent || percent <= -90 || percent > 1000)
+    fail('DATO_INVALIDO', 'El porcentaje debe tener hasta 2 decimales, ser mayor que −90 y de hasta 1000.')
+  return percent
+}
+
+/** Un precio ajustado por un porcentaje, con 2 decimales. */
+const adjustedPrice = (price: number, percent: number) => round2((price * (100 + percent)) / 100)
+
+/** Un precio de lista: mayor que cero y con hasta 2 decimales. */
+function validListPrice(price: number, product: T.Product) {
+  if (!Number.isFinite(price) || !(price > 0) || round2(price) !== price || price >= 1e12)
+    fail('DATO_INVALIDO', `El precio de ${product.code} debe ser mayor que cero y tener hasta 2 decimales.`)
+  return price
+}
+
+/**
+ * Crea una lista de precios: vacía, con los precios de venta de los productos
+ * que se venden o con los de otra lista, en los dos casos con un porcentaje.
+ */
+export function cmdCreatePriceList(ctx: Ctx, companyId: string, input: PriceListInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'price_list.create')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código de la lista tiene de 1 a 12 letras, números o guiones.')
+  if (db.priceLists.some((l) => l.company_id === companyId && l.code === code))
+    fail('DATO_INVALIDO', `Ya existe una lista de precios con el código ${code}.`)
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 60) fail('DATO_INVALIDO', 'El nombre de la lista tiene de 2 a 60 caracteres.')
+  const description = input.description.trim()
+  if (description.length > 200) fail('DATO_INVALIDO', 'La descripción tiene hasta 200 caracteres.')
+  const percent = validPercent(input.percent)
+  let from: T.PriceList | null = null
+  let source: { product: T.Product; price: number }[] = []
+  if (input.copy_from === 'SALE_PRICE') {
+    source = db.products
+      .filter(
+        (p) =>
+          p.company_id === companyId &&
+          p.is_active &&
+          SELLABLE_PRODUCT_TYPES.includes(p.product_type) &&
+          (p.sale_price ?? 0) > 0,
+      )
+      .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0))
+      .map((p) => ({ product: p, price: p.sale_price! }))
+  } else if (input.copy_from) {
+    from = getPriceList(db, companyId, input.copy_from)
+    source = db.priceListItems
+      .filter((i) => i.price_list_id === from!.id)
+      .map((i) => ({ product: db.products.find((p) => p.id === i.product_id)!, price: i.unit_price }))
+      .sort((a, b) => (a.product.code < b.product.code ? -1 : a.product.code > b.product.code ? 1 : 0))
+  }
+  const items = source.map((s) => ({ product: s.product, price: adjustedPrice(s.price, percent) }))
+  const zero = items.find((i) => !(i.price > 0))
+  if (zero) fail('DATO_INVALIDO', `El precio de ${zero.product.code} quedaría en cero: usá un porcentaje menor.`)
+  const list: T.PriceList = {
+    id: uid(),
+    company_id: companyId,
+    code,
+    name,
+    description,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.priceLists.push(list)
+  for (const i of items)
+    db.priceListItems.push({
+      id: uid(),
+      company_id: companyId,
+      price_list_id: list.id,
+      product_id: i.product.id,
+      unit_price: i.price,
+    })
+  const origin =
+    input.copy_from === 'SALE_PRICE'
+      ? ` con ${items.length} productos a su precio de venta`
+      : from
+        ? ` con ${items.length} productos de la lista ${priceListLabel(from)}`
+        : ''
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'price_list',
+    entity_id: list.id,
+    entity_label: priceListLabel(list),
+    summary: `Creó la lista de precios ${priceListLabel(list)}${origin}${origin && percent ? ` ${percentLabel(percent)}` : ''}`,
+  })
+  return { id: list.id, code: list.code }
+}
+
+/** Cambia el nombre y la descripción de una lista. */
+export function cmdUpdatePriceList(
+  ctx: Ctx,
+  companyId: string,
+  listId: string,
+  input: { name: string; description: string },
+) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'price_list.update')
+  const list = getPriceList(db, companyId, listId)
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 60) fail('DATO_INVALIDO', 'El nombre de la lista tiene de 2 a 60 caracteres.')
+  const description = input.description.trim()
+  if (description.length > 200) fail('DATO_INVALIDO', 'La descripción tiene hasta 200 caracteres.')
+  const before = { ...list }
+  Object.assign(list, { name, description, updated_at: ctx.now, updated_by: ctx.userId })
+  const changes = diff(before, list, ['name', 'description'])
+  if (Object.keys(changes).length)
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'price_list',
+      entity_id: list.id,
+      entity_label: priceListLabel(list),
+      summary: `Modificó la lista de precios ${priceListLabel(list)}`,
+      changes,
+    })
+}
+
+/** Una lista desactivada deja de proponerse a sus clientes (vuelven al precio de venta). */
+export function cmdSetPriceListActive(ctx: Ctx, companyId: string, listId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'price_list.update')
+  const list = getPriceList(db, companyId, listId)
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si la lista está activa.')
+  if (list.is_active === active) return
+  Object.assign(list, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'price_list',
+    entity_id: list.id,
+    entity_label: priceListLabel(list),
+    summary: `${active ? 'Activó' : 'Desactivó'} la lista de precios ${priceListLabel(list)}`,
+  })
+}
+
+/** Pone, cambia o saca (precio null) el precio de un producto en una lista. */
+export function cmdSetPriceListPrice(
+  ctx: Ctx,
+  companyId: string,
+  listId: string,
+  productId: string,
+  price: number | null,
+) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'price_list.update')
+  const list = getPriceList(db, companyId, listId)
+  const product = getProduct(db, companyId, productId)
+  if (!SELLABLE_PRODUCT_TYPES.includes(product.product_type))
+    fail(
+      'DATO_INVALIDO',
+      `${product.code} es ${PRODUCT_TYPES[product.product_type].toLowerCase()}: no se vende.`,
+      'En las listas de precios van los productos terminados, las mercaderías de reventa y los servicios.',
+    )
+  const item = db.priceListItems.find((i) => i.price_list_id === list.id && i.product_id === product.id)
+  let summary: string
+  if (price === null) {
+    if (!item) fail('DATO_INVALIDO', `${product.code} no está en la lista ${priceListLabel(list)}.`)
+    db.priceListItems.splice(db.priceListItems.indexOf(item), 1)
+    summary = `Sacó ${product.code} de la lista de precios ${priceListLabel(list)}`
+  } else {
+    const value = validListPrice(price, product)
+    if (item?.unit_price === value) return
+    summary = item
+      ? `Cambió el precio de ${product.code} en la lista ${priceListLabel(list)}: de ${money(item.unit_price)} a ${money(value)}`
+      : `Agregó ${product.code} a la lista de precios ${priceListLabel(list)} a ${money(value)}`
+    if (item) item.unit_price = value
+    else
+      db.priceListItems.push({
+        id: uid(),
+        company_id: companyId,
+        price_list_id: list.id,
+        product_id: product.id,
+        unit_price: value,
+      })
+  }
+  Object.assign(list, { updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'price_list',
+    entity_id: list.id,
+    entity_label: priceListLabel(list),
+    summary,
+  })
+}
+
+/** Actualiza todos los precios de una lista por un porcentaje (por ejemplo, +8 % por la inflación del mes). */
+export function cmdAdjustPriceList(ctx: Ctx, companyId: string, listId: string, percent: number) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'price_list.update')
+  const list = getPriceList(db, companyId, listId)
+  validPercent(percent)
+  if (percent === 0) fail('DATO_INVALIDO', 'Indicá un porcentaje distinto de cero.')
+  const items = db.priceListItems.filter((i) => i.price_list_id === list.id)
+  if (!items.length) fail('DATO_INVALIDO', `La lista ${priceListLabel(list)} todavía no tiene productos.`)
+  const updates = items.map((i) => ({ item: i, price: adjustedPrice(i.unit_price, percent) }))
+  // El primero (por código de producto) que quedaría en cero.
+  const zero = updates
+    .filter((u) => !(u.price > 0))
+    .map((u) => db.products.find((x) => x.id === u.item.product_id)!.code)
+    .sort()[0]
+  if (zero) fail('DATO_INVALIDO', `El precio de ${zero} quedaría en cero: usá un porcentaje menor.`)
+  for (const u of updates) u.item.unit_price = u.price
+  Object.assign(list, { updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'price_list',
+    entity_id: list.id,
+    entity_label: priceListLabel(list),
+    summary: `Actualizó la lista de precios ${priceListLabel(list)} un ${percentLabel(percent)} (${items.length} productos)`,
+  })
+}
+
+// ============================================================ Presupuestos (docs/FASE_4_VENTAS_Y_CLIENTES.md §6)
+
+export interface SalesQuoteInput {
+  customer_id: string
+  /** Desde dónde se entregaría: pasa al pedido. */
+  warehouse_id: string
+  /** Hasta cuándo vale la oferta. */
+  valid_until: string
+  payment_terms_days: number
+  customer_reference: string
+  notes: string
+  /** Precio unitario sin IVA: se propone el de la lista del cliente. */
+  lines: { product_id: string; quantity: number; unit_price: number }[]
+}
+
+/** Validez que se propone para un presupuesto nuevo (a validar). */
+export const QUOTE_VALIDITY_DAYS = 15
+
+export const salesQuoteLines = (db: DB, docId: string) =>
+  db.qtLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** La oferta venció: ya pasó el día hasta el que valía. */
+export const quoteExpired = (db: DB, doc: T.Document) =>
+  doc.qt!.valid_until < businessDate(getCompany(db, doc.company_id))
+
+/** El pedido que nació de un presupuesto aceptado. */
+export function orderFromSalesQuote(db: DB, quoteId: string) {
+  const ids = new Set(db.docLinks.filter((l) => l.from_document_id === quoteId).map((l) => l.to_document_id))
+  return db.documents.find((d) => ids.has(d.id) && d.doc_type === 'SALES_ORDER')
+}
+
+export function cmdCreateSalesQuote(ctx: Ctx, companyId: string, input: SalesQuoteInput, send: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'sales_quote.create')
+  const { customer, lines } = validateSalesOrder(ctx, companyId, { ...input, delivery_date: null })
+  if (!isIsoDate(input.valid_until)) fail('DATO_INVALIDO', 'Indicá hasta cuándo vale la oferta.')
+  if (input.valid_until < businessDate(getCompany(db, companyId)))
+    fail('DATO_INVALIDO', 'La validez de la oferta no puede ser anterior a hoy.')
+  const doc = newDocument(ctx, companyId, 'SALES_QUOTE', actor, {
+    customer_id: customer.id,
+    notes: input.notes.trim(),
+    qt: {
+      valid_until: input.valid_until,
+      warehouse_id: input.warehouse_id,
+      payment_terms_days: input.payment_terms_days,
+      customer_reference: input.customer_reference.trim(),
+    },
+  })
+  lines.forEach((l, i) => {
+    const subtotal = round2(l.quantity * l.unit_price)
+    const tax = round2((subtotal * l.vat_rate) / 100)
+    db.qtLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: l.product.id,
+      quantity: l.quantity,
+      list_price: listPriceFor(db, customer, l.product),
+      unit_price: l.unit_price,
+      vat_rate: l.vat_rate,
+      line_subtotal: subtotal,
+      line_tax: tax,
+      line_total: round2(subtotal + tax),
+    })
+  })
+  const docLines = salesQuoteLines(db, doc.id)
+  doc.subtotal = round2(docLines.reduce((s, l) => s + l.line_subtotal, 0))
+  doc.tax_total = round2(docLines.reduce((s, l) => s + l.line_tax, 0))
+  doc.total = round2(doc.subtotal + doc.tax_total)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'sales_quote',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: presupuesto a ${customer.legal_name} por ${money(doc.total)}, válido hasta el ${fmtDate(input.valid_until)}`,
+  })
+  if (send) sendSalesQuote(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Se envía al cliente mientras la oferta está vigente. */
+function sendSalesQuote(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'SEND')
+  if (quoteExpired(db, doc))
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} valía hasta el ${fmtDate(doc.qt!.valid_until)}: anulalo y prepará otro con los precios del día.`,
+    )
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  transition(ctx, doc, 'SEND', {
+    summary: `Envió ${doc.display_number} a ${customer.legal_name}: ${money(doc.total)}, válido hasta el ${fmtDate(doc.qt!.valid_until)}`,
+  })
+}
+
+export function cmdSendSalesQuote(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'SALES_QUOTE')
+  requirePermission(ctx, doc.company_id, 'sales_quote.create')
+  sendSalesQuote(ctx, doc)
+}
+
+/**
+ * El cliente aceptó: si la oferta sigue vigente, se genera el pedido de venta
+ * en borrador con los mismos ítems y precios (y la bonificación medida contra
+ * los precios de lista del presupuesto), enlazado a él.
+ */
+export function cmdAcceptSalesQuote(ctx: Ctx, docId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'SALES_QUOTE')
+  requireTransition(doc, 'CONFIRM')
+  requirePermission(ctx, doc.company_id, 'sales_quote.create')
+  const actor = requirePermission(ctx, doc.company_id, 'sales_order.create')
+  if (quoteExpired(db, doc))
+    fail(
+      'TRANSICION_INVALIDA',
+      `La oferta de ${doc.display_number} venció el ${fmtDate(doc.qt!.valid_until)}: ya no se acepta. Prepará otro presupuesto con los precios del día.`,
+    )
+  const lines = salesQuoteLines(db, doc.id)
+  const order = insertSalesOrder(
+    ctx,
+    doc.company_id,
+    actor,
+    {
+      customer_id: doc.customer_id!,
+      warehouse_id: doc.qt!.warehouse_id,
+      delivery_date: null,
+      payment_terms_days: doc.qt!.payment_terms_days,
+      customer_reference: doc.qt!.customer_reference,
+      notes: `Según ${doc.display_number}.`,
+      lines: lines.map((l) => ({ product_id: l.product_id, quantity: l.quantity, unit_price: l.unit_price })),
+    },
+    new Map(lines.map((l) => [l.product_id, l.list_price])),
+  )
+  link(ctx, doc.company_id, doc.id, order.id)
+  openTasksForStatus(ctx, order, actor)
+  const customer = db.customers.find((c) => c.id === doc.customer_id)!
+  transition(ctx, doc, 'CONFIRM', {
+    actor,
+    summary: `Registró la aceptación de ${doc.display_number} por ${customer.legal_name}: generó ${order.display_number} en borrador`,
+  })
+  return { id: order.id, display_number: order.display_number }
+}
+
+/** El cliente no aceptó: queda el motivo. */
+export function cmdRejectSalesQuote(ctx: Ctx, docId: string, reason: string) {
+  const doc = getDoc(ctx.db, docId, 'SALES_QUOTE')
+  const customer = ctx.db.customers.find((c) => c.id === doc.customer_id)
+  transition(ctx, doc, 'REJECT', {
+    comment: reason,
+    summary: `Registró el rechazo de ${doc.display_number} por ${customer?.legal_name ?? ''} — ${reason.trim()}`,
+  })
+}
+
+/** Pasada la validez sin respuesta, Ventas lo da por vencido. */
+export function cmdExpireSalesQuote(ctx: Ctx, docId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'SALES_QUOTE')
+  requireTransition(doc, 'CLOSE')
+  requirePermission(ctx, doc.company_id, 'sales_quote.cancel')
+  if (!quoteExpired(db, doc))
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} vale hasta el ${fmtDate(doc.qt!.valid_until)}: todavía no venció.`,
+    )
+  transition(ctx, doc, 'CLOSE', {
+    summary: `Dio por vencido ${doc.display_number} (valía hasta el ${fmtDate(doc.qt!.valid_until)})`,
+  })
+}
+
+export function cmdCancelSalesQuote(ctx: Ctx, docId: string, reason: string) {
+  transition(ctx, getDoc(ctx.db, docId, 'SALES_QUOTE'), 'CANCEL', { comment: reason })
 }
 
 // ============================================================ Tareas y notificaciones

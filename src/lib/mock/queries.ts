@@ -41,6 +41,8 @@ import {
   lastReconciliation,
   onHandQuantity,
   orderFromQuote,
+  orderFromSalesQuote,
+  quoteExpired,
   quoteIsValid,
   quotesOf,
   receiptLines,
@@ -59,6 +61,7 @@ import {
   salesInvoicePending,
   salesLetter,
   salesOrderLines,
+  salesQuoteLines,
   type AccountLine,
 } from './engine'
 
@@ -389,6 +392,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.fvLines.filter((l) => l.document_id === doc.id).length
     case 'CUSTOMER_RECEIPT':
       return db.rcLines.filter((l) => l.document_id === doc.id).length
+    case 'SALES_QUOTE':
+      return db.qtLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -420,6 +425,8 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return deliveryNoteLines(db, doc.id)
     case 'SALES_INVOICE':
       return salesInvoiceLines(db, doc.id)
+    case 'SALES_QUOTE':
+      return salesQuoteLines(db, doc.id)
   }
 }
 
@@ -507,6 +514,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'PAYMENT_ORDER',
     'FUNDS_TRANSFER',
     'BANK_RECONCILIATION',
+    'SALES_QUOTE',
     'SALES_ORDER',
     'DELIVERY_NOTE',
     'SALES_INVOICE',
@@ -639,6 +647,12 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       db.rcLines.some((l) => l.document_id === doc.id && invoiceRegistrant(db, l.invoice_id) === userId)
     ) {
       reason = 'Separación de funciones: emitiste una de las facturas; tiene que cobrarla otro integrante de Tesorería.'
+    }
+    if (doc.doc_type === 'SALES_QUOTE') {
+      const expired = quoteExpired(db, doc)
+      if ((tr.action === 'SEND' || tr.action === 'CONFIRM') && expired)
+        reason = `La oferta venció el ${date(doc.qt!.valid_until)}: prepará otro presupuesto con los precios del día.`
+      if (tr.action === 'CLOSE' && !expired) reason = `Vale hasta el ${date(doc.qt!.valid_until)}: todavía no venció.`
     }
     if (doc.doc_type === 'CUSTOMER_RECEIPT' && doc.status === 'CONFIRMADO' && tr.action === 'CANCEL') {
       const account = db.accounts.find((a) => a.id === doc.rc!.treasury_account_id)!
@@ -917,6 +931,27 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: 'Tesorería',
         text: `El cliente pagó una parte: quedan ${money(salesInvoicePending(db, doc))} en su cuenta corriente (vence el ${date(doc.fv?.due_date)}). El saldo se cancela con otro recibo de cobro.`,
       }
+    case 'SALES_QUOTE:BORRADOR':
+      return {
+        who: 'Ventas',
+        text: quoteExpired(db, doc)
+          ? `Venció el ${date(doc.qt?.valid_until)}: anularlo y, si hace falta, preparar otro con los precios del día.`
+          : 'Revisar los ítems, los precios y la validez, e imprimir el presupuesto para enviárselo al cliente.',
+      }
+    case 'SALES_QUOTE:ENVIADO':
+      return {
+        who: 'Ventas',
+        text: quoteExpired(db, doc)
+          ? `La oferta venció el ${date(doc.qt?.valid_until)}: darlo por vencido y, si el cliente sigue interesado, preparar otro con los precios del día.`
+          : `El cliente tiene hasta el ${date(doc.qt?.valid_until)} para responder. Si acepta, se registra la aceptación y se genera el pedido de venta; si no, el rechazo con su motivo.`,
+      }
+    case 'SALES_QUOTE:ACEPTADO':
+      return {
+        who: 'Ventas',
+        text: `El cliente lo aceptó: se generó ${orderFromSalesQuote(db, doc.id)?.display_number ?? 'el pedido de venta'} en borrador. Ventas lo revisa y lo confirma: ahí se controlan el stock y el crédito.`,
+      }
+    case 'SALES_QUOTE:RECHAZADO':
+      return { who: '—', text: `Motivo del cliente: "${doc.status_reason}".` }
     case 'CUSTOMER_RECEIPT:BORRADOR':
       return {
         who: 'Tesorería',
@@ -1160,6 +1195,16 @@ export interface SalesOrderView {
   credit_used: number
 }
 
+/** Presupuesto: hasta cuándo vale la oferta y, si se aceptó, el pedido que generó. */
+export interface SalesQuoteView {
+  valid_until: string
+  /** La oferta venció (mientras está en borrador o enviado). */
+  expired: boolean
+  payment_terms_days: number
+  customer_reference: string
+  order: DocRef | null
+}
+
 /** Remito: quién lo lleva, cuándo salió y a qué costo. */
 export interface DeliveryView {
   carrier_name: string
@@ -1179,6 +1224,7 @@ export interface DocumentDetail {
   transfer: TransferView | null
   reconciliation: ReconciliationView | null
   sales_order: SalesOrderView | null
+  sales_quote: SalesQuoteView | null
   delivery: DeliveryView | null
   supplier: T.Supplier | null
   customer: T.Customer | null
@@ -1377,6 +1423,21 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
       }
     })
   }
+  if (doc.doc_type === 'SALES_QUOTE') {
+    lines = salesQuoteLines(db, doc.id).map((l) => ({
+      id: l.id,
+      line_no: l.line_no,
+      product: product(l.product_id),
+      quantity: l.quantity,
+      notes: '',
+      unit_price: l.unit_price,
+      list_price: l.list_price,
+      vat_rate: l.vat_rate,
+      line_subtotal: l.line_subtotal,
+      line_tax: l.line_tax,
+      line_total: l.line_total,
+    }))
+  }
   if (doc.doc_type === 'DELIVERY_NOTE') {
     lines = deliveryNoteLines(db, doc.id).map((l) => {
       const sl = db.soLines.find((x) => x.id === l.so_line_id)!
@@ -1420,7 +1481,8 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     doc.sa?.warehouse_id ??
     doc.rq?.warehouse_id ??
     doc.so?.warehouse_id ??
-    doc.dn?.warehouse_id
+    doc.dn?.warehouse_id ??
+    doc.qt?.warehouse_id
   const orderId =
     doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id ?? doc.dn?.sales_order_id ?? doc.fv?.sales_order_id
   const relatedOrder = orderId ? db.documents.find((d) => d.id === orderId) : undefined
@@ -1491,10 +1553,15 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                                 { label: 'Preparó', ...firstBy(['CREATE']) },
                                 { label: 'Cobró', ...firstBy(['CONFIRM']) },
                               ]
-                            : [
-                                { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                                { label: 'Controló', name: '', sector: '', at: '' },
-                              ]
+                            : doc.doc_type === 'SALES_QUOTE'
+                              ? [
+                                  { label: 'Preparó', ...firstBy(['CREATE']) },
+                                  { label: 'Conformidad del cliente', name: '', sector: '', at: '' },
+                                ]
+                              : [
+                                  { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                                  { label: 'Controló', name: '', sector: '', at: '' },
+                                ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1506,6 +1573,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     transfer: doc.ft ? transferView(db, doc) : null,
     reconciliation: doc.br ? reconciliationView(db, doc) : null,
     sales_order: doc.so ? salesOrderView(db, doc) : null,
+    sales_quote: doc.qt ? salesQuoteView(db, doc) : null,
     delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     customer: db.customers.find((c) => c.id === doc.customer_id) ?? null,
@@ -1539,6 +1607,18 @@ function salesOrderView(db: DB, doc: T.Document): SalesOrderView {
     confirmed_at: so.confirmed_at,
     credit_limit: customer.credit_limit,
     credit_used: customerCreditUsed(db, customer.id, doc.id),
+  }
+}
+
+function salesQuoteView(db: DB, doc: T.Document): SalesQuoteView {
+  const qt = doc.qt!
+  const order = doc.status === 'ACEPTADO' ? orderFromSalesQuote(db, doc.id) : undefined
+  return {
+    valid_until: qt.valid_until,
+    expired: ['BORRADOR', 'ENVIADO'].includes(doc.status) && quoteExpired(db, doc),
+    payment_terms_days: qt.payment_terms_days,
+    customer_reference: qt.customer_reference,
+    order: order ? docRef(db, order) : null,
   }
 }
 
@@ -2175,6 +2255,8 @@ export interface SalesCustomer {
   credit_limit: number | null
   /** Lo que ya usa del crédito: pedidos sin facturar (y, desde 4b, facturas sin cobrar). */
   credit_used: number
+  /** Su lista de precios, si tiene una activa (4d). */
+  price_list: { id: string; code: string; name: string } | null
 }
 
 export function salesCustomers(db: DB, userId: string, companyId: string): SalesCustomer[] {
@@ -2190,7 +2272,14 @@ export function salesCustomers(db: DB, userId: string, companyId: string): Sales
       payment_terms_days: c.payment_terms_days,
       credit_limit: c.credit_limit,
       credit_used: customerCreditUsed(db, c.id),
+      price_list: activeListOf(db, c),
     }))
+}
+
+/** La lista de precios activa de un cliente, si tiene. */
+function activeListOf(db: DB, customer: T.Customer) {
+  const list = customer.price_list_id ? db.priceLists.find((l) => l.id === customer.price_list_id) : undefined
+  return list?.is_active ? { id: list.id, code: list.code, name: list.name } : null
 }
 
 /** Lo que hay de un producto en un depósito, lo reservado para pedidos y lo disponible. */
@@ -2213,6 +2302,8 @@ export interface SellableProduct {
   vat_rate: number
   /** Por depósito, en orden de código; vacío en los servicios. */
   stock: WarehouseAvailability[]
+  /** Su precio en cada lista activa que lo tiene, por código de lista (4d). */
+  list_prices: { price_list_id: string; unit_price: number }[]
 }
 
 function availabilityOf(db: DB, companyId: string, productId: string): WarehouseAvailability[] {
@@ -2243,7 +2334,98 @@ export function salesCatalog(db: DB, userId: string, companyId: string): Sellabl
       sale_price: p.sale_price,
       vat_rate: company.vat_condition === 'RESPONSABLE_INSCRIPTO' ? p.vat_rate : 0,
       stock: p.is_stockable ? availabilityOf(db, companyId, p.id) : [],
+      list_prices: db.priceListItems
+        .filter((i) => i.product_id === p.id)
+        .map((i) => ({ item: i, list: db.priceLists.find((l) => l.id === i.price_list_id)! }))
+        .filter(({ list }) => list.is_active)
+        .sort((a, b) => compareCodes(a.list.code, b.list.code))
+        .map(({ item }) => ({ price_list_id: item.price_list_id, unit_price: item.unit_price })),
     }))
+}
+
+// ============================================================ Listas de precios (docs/FASE_4_VENTAS_Y_CLIENTES.md §6)
+
+export interface PriceListRow {
+  list: T.PriceList
+  /** Productos con precio en la lista. */
+  items: number
+  /** Clientes que la tienen asignada. */
+  customers: number
+}
+
+/** Las listas de precios de la empresa, por código. */
+export function listPriceLists(db: DB, userId: string, companyId: string): PriceListRow[] {
+  assertPerm(db, userId, companyId, 'price_list.read')
+  return db.priceLists
+    .filter((l) => l.company_id === companyId)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((l) => ({
+      list: l,
+      items: db.priceListItems.filter((i) => i.price_list_id === l.id).length,
+      customers: db.customers.filter((c) => c.price_list_id === l.id).length,
+    }))
+}
+
+export interface PriceListProduct {
+  id: string
+  code: string
+  name: string
+  uom_code: string
+  product_type: T.ProductType
+  sale_price: number | null
+  is_active: boolean
+}
+
+export interface PriceListDetail {
+  list: T.PriceList
+  /** El precio de cada producto de la lista, por código. */
+  items: { product: PriceListProduct; unit_price: number }[]
+  customers: { id: string; code: string; legal_name: string; is_active: boolean }[]
+  /** Lo que se vende y todavía no está en la lista: para agregarlo. */
+  missing: PriceListProduct[]
+}
+
+const priceListProduct = (p: T.Product): PriceListProduct => ({
+  id: p.id,
+  code: p.code,
+  name: p.name,
+  uom_code: p.uom_code,
+  product_type: p.product_type,
+  sale_price: p.sale_price,
+  is_active: p.is_active,
+})
+
+/** Una lista de precios con sus productos, sus clientes y lo que le falta (null si no existe). */
+export function priceListDetail(db: DB, userId: string, companyId: string, code: string): PriceListDetail | null {
+  assertPerm(db, userId, companyId, 'price_list.read')
+  const list = db.priceLists.find((l) => l.company_id === companyId && l.code === code)
+  if (!list) return null
+  const items = db.priceListItems
+    .filter((i) => i.price_list_id === list.id)
+    .map((i) => ({
+      product: priceListProduct(db.products.find((p) => p.id === i.product_id)!),
+      unit_price: i.unit_price,
+    }))
+    .sort((a, b) => compareCodes(a.product.code, b.product.code))
+  const inList = new Set(items.map((i) => i.product.id))
+  return {
+    list,
+    items,
+    customers: db.customers
+      .filter((c) => c.company_id === companyId && c.price_list_id === list.id)
+      .sort((a, b) => compareCodes(a.code, b.code))
+      .map((c) => ({ id: c.id, code: c.code, legal_name: c.legal_name, is_active: c.is_active })),
+    missing: db.products
+      .filter(
+        (p) =>
+          p.company_id === companyId &&
+          p.is_active &&
+          SELLABLE_PRODUCT_TYPES.includes(p.product_type) &&
+          !inList.has(p.id),
+      )
+      .sort((a, b) => compareCodes(a.code, b.code))
+      .map(priceListProduct),
+  }
 }
 
 export interface DispatchableOrder {

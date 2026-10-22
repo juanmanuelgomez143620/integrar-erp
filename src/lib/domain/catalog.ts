@@ -47,6 +47,8 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   sales_invoice: 'sales',
   receivable: 'sales',
   customer_receipt: 'sales',
+  price_list: 'sales',
+  sales_quote: 'sales',
   goods_receipt: 'inventory',
   delivery_note: 'inventory',
   stock: 'inventory',
@@ -135,7 +137,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read',
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
-    'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
+    'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -153,6 +155,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read',
     'sales_order.read', 'sales_order.create', 'sales_order.cancel', 'delivery_note.read',
     'sales_invoice.read', 'sales_invoice.create', 'sales_invoice.cancel', 'receivable.read', 'customer_receipt.read',
+    'price_list.read', 'price_list.create', 'price_list.update',
+    'sales_quote.read', 'sales_quote.create', 'sales_quote.cancel',
   ],
   DEPOSITO: [
     ...CORE_READ,
@@ -180,7 +184,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'payment_order.read', 'payment_order.create', 'payment_order.cancel', 'treasury.read', 'funds_transfer.read',
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
-    'receivable.read', 'customer_receipt.read',
+    'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -189,13 +193,13 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'funds_transfer.create', 'funds_transfer.cancel', 'bank_reconciliation.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
-    'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel',
+    'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
   ],
   RRHH: [...CORE_READ],
   IMPUESTOS: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
-    'receivable.read', 'customer_receipt.read',
+    'receivable.read', 'customer_receipt.read', 'sales_quote.read',
   ],
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
@@ -211,6 +215,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
+    'price_list.read', 'sales_quote.read',
   ],
   DOCENTE: [],
 }
@@ -304,6 +309,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'CUSTOMER_RECEIPT', prefix: 'RBO', name: 'Recibo de cobro', plural: 'Recibos de cobro',
     resource: 'customer_receipt', module: 'sales', path: 'pagos/cobros',
     description: 'Constancia de lo que pagó un cliente: qué facturas cancela, cuánto de cada una, con qué medio y en qué caja o banco ingresa. Al confirmarse genera el asiento de cobro y baja la deuda del cliente.',
+  },
+  SALES_QUOTE: {
+    code: 'SALES_QUOTE', prefix: 'PRE', name: 'Presupuesto', plural: 'Presupuestos',
+    resource: 'sales_quote', module: 'sales', path: 'ventas/presupuestos',
+    description: 'Oferta que Ventas le hace a un cliente: productos, cantidades, precios y hasta cuándo vale. No compromete stock ni crédito: si el cliente la acepta, se genera el pedido de venta.',
   },
 }
 
@@ -413,6 +423,14 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Tesorería lo está preparando: lo que cobra queda reservado, pero todavía no ingresó el dinero.' },
     CONFIRMADO: { label: 'Cobrado', badge: 'success', final: true, description: 'El dinero ingresó a la caja o al banco: la deuda del cliente bajó y el cobro está en el libro diario.' },
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba cobrado, un contraasiento revirtió el cobro y las facturas volvieron a tener saldo.' },
+  },
+  SALES_QUOTE: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Ventas lo está preparando: el cliente todavía no lo recibió.' },
+    ENVIADO: { label: 'Enviado', badge: 'info', final: false, description: 'El cliente lo recibió: Ventas espera su respuesta mientras la oferta esté vigente.' },
+    ACEPTADO: { label: 'Aceptado', badge: 'success', final: true, description: 'El cliente lo aceptó: se generó el pedido de venta con sus ítems y precios.' },
+    RECHAZADO: { label: 'Rechazado', badge: 'danger', final: true, description: 'El cliente no lo aceptó.' },
+    VENCIDO: { label: 'Vencido', badge: 'neutral', final: true, description: 'Pasó la validez sin respuesta del cliente: para venderle, se prepara otro con los precios del día.' },
+    ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto.' },
   },
 }
 
@@ -564,6 +582,14 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('CUSTOMER_RECEIPT', 'BORRADOR', 'CONFIRM', 'CONFIRMADO', 'customer_receipt.create', 'Confirmar cobro', 'Registra el ingreso en la caja o el banco: genera el asiento de cobro y baja la deuda del cliente.'),
   t('CUSTOMER_RECEIPT', 'BORRADOR', 'CANCEL', 'ANULADO', 'customer_receipt.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
   t('CUSTOMER_RECEIPT', 'CONFIRMADO', 'CANCEL', 'ANULADO', 'customer_receipt.cancel', 'Anular con contraasiento', 'Revierte el cobro con un contraasiento: las facturas vuelven a tener saldo. Sólo si el dinero sigue en la caja o el banco.', true, 'destructive'),
+
+  // Presupuesto
+  t('SALES_QUOTE', 'BORRADOR', 'SEND', 'ENVIADO', 'sales_quote.create', 'Enviar al cliente', 'Imprimilo y mandáselo al cliente: Ventas recibe la tarea de seguirlo hasta que responda.'),
+  t('SALES_QUOTE', 'BORRADOR', 'CANCEL', 'ANULADO', 'sales_quote.cancel', 'Anular', 'El borrador queda sin efecto.', true, 'destructive'),
+  t('SALES_QUOTE', 'ENVIADO', 'CONFIRM', 'ACEPTADO', 'sales_quote.create', 'Registrar la aceptación', 'El cliente aceptó: se genera el pedido de venta en borrador con estos ítems y precios.'),
+  t('SALES_QUOTE', 'ENVIADO', 'REJECT', 'RECHAZADO', 'sales_quote.create', 'Registrar el rechazo', 'El cliente no aceptó: anotá su motivo (el precio, el plazo, compró en otra empresa…).', true, 'destructive'),
+  t('SALES_QUOTE', 'ENVIADO', 'CLOSE', 'VENCIDO', 'sales_quote.cancel', 'Dar por vencido', 'Pasó la validez sin respuesta del cliente.', false, 'outline'),
+  t('SALES_QUOTE', 'ENVIADO', 'CANCEL', 'ANULADO', 'sales_quote.cancel', 'Anular', 'Queda sin efecto (por ejemplo, se cargó mal): si hace falta, se prepara otro.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -633,6 +659,8 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'DELIVERY_NOTE', status: 'BORRADOR', taskType: 'DESPACHAR_REMITO', assignee: 'CREATOR', title: 'Despachar {number}', description: 'Controlar la mercadería preparada contra el remito y despacharlo.' },
   { docType: 'SALES_INVOICE', status: 'BORRADOR', taskType: 'REGISTRAR_FV', assignee: 'CREATOR', title: 'Registrar {number}', description: 'Revisar las cantidades contra lo entregado y registrar la factura de venta.' },
   { docType: 'CUSTOMER_RECEIPT', status: 'BORRADOR', taskType: 'CONFIRMAR_RBO', assignee: 'CREATOR', title: 'Confirmar {number} por {total}', description: 'Revisar las facturas, los importes, el medio de cobro y la caja o el banco, y confirmar el cobro.' },
+  { docType: 'SALES_QUOTE', status: 'BORRADOR', taskType: 'ENVIAR_PRE', assignee: 'CREATOR', title: 'Enviar {number} al cliente', description: 'Revisar los ítems, los precios y la validez, y enviar el presupuesto al cliente.' },
+  { docType: 'SALES_QUOTE', status: 'ENVIADO', taskType: 'SEGUIR_PRE', assignee: 'ROLE', role: 'VENTAS', title: 'Seguir {number} por {total}', description: 'Registrar la aceptación o el rechazo del cliente antes de que venza la oferta.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -657,6 +685,8 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   DESPACHAR_REMITO: 'Despachar remito',
   REGISTRAR_FV: 'Registrar factura de venta',
   CONFIRMAR_RBO: 'Confirmar cobro',
+  ENVIAR_PRE: 'Enviar presupuesto',
+  SEGUIR_PRE: 'Seguir presupuesto',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }

@@ -274,6 +274,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('payment_candidates', { ...company(companyId), p_supplier_id: supplierId }),
     receiptCandidates: (companyId, customerId) =>
       rpc('receipt_candidates', { ...company(companyId), p_customer_id: customerId }),
+    priceLists: (companyId) => rpc('price_lists_list', company(companyId)),
+    priceList: (companyId, code) => rpc('price_list_detail', { ...company(companyId), p_code: code }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
     fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
     journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
@@ -377,6 +379,22 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('rc_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
     confirmCustomerReceipt: (docId) => rpc('rc_confirm', doc(docId)),
     cancelCustomerReceipt: (docId, reason) => rpc('rc_cancel', { ...doc(docId), p_reason: reason }),
+    createPriceList: (companyId, input) => rpc('pl_create', { ...company(companyId), p_input: input }),
+    updatePriceList: (companyId, listId, input) =>
+      rpc('pl_update', { ...company(companyId), p_price_list_id: listId, p_input: input }),
+    setPriceListActive: (companyId, listId, active) =>
+      rpc('pl_set_active', { ...company(companyId), p_price_list_id: listId, p_active: active }),
+    setPriceListPrice: (companyId, listId, productId, price) =>
+      rpc('pl_set_price', { ...company(companyId), p_price_list_id: listId, p_product_id: productId, p_price: price }),
+    adjustPriceList: (companyId, listId, percent) =>
+      rpc('pl_adjust', { ...company(companyId), p_price_list_id: listId, p_percent: percent }),
+    createSalesQuote: (companyId, input, send) =>
+      rpc('pre_create', { ...company(companyId), p_input: input, p_send: send }),
+    sendSalesQuote: (docId) => rpc('pre_send', doc(docId)),
+    acceptSalesQuote: (docId) => rpc('pre_accept', doc(docId)),
+    rejectSalesQuote: (docId, reason) => rpc('pre_reject', { ...doc(docId), p_reason: reason }),
+    expireSalesQuote: (docId) => rpc('pre_expire', doc(docId)),
+    cancelSalesQuote: (docId, reason) => rpc('pre_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

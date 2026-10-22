@@ -233,10 +233,10 @@ const source = `// Generado por scripts/generate-partner-bank.mjs (npm run data:
 // nombre coincida con un comercio real de la zona (DATABASE.md §16).
 import type * as T from '../domain/types'
 
-/** Un proveedor o cliente listo para cmdSaveMaster: sin id, empresa ni auditoría. */
+/** Un proveedor o cliente listo para cmdSaveMaster: sin id, empresa, lista de precios ni auditoría. */
 export type BankPartner<P extends T.Partner> = Omit<
   P,
-  'id' | 'company_id' | 'is_active' | 'created_at' | 'created_by' | 'updated_at' | 'updated_by'
+  'id' | 'company_id' | 'is_active' | 'price_list_id' | 'created_at' | 'created_by' | 'updated_at' | 'updated_by'
 >
 
 export const BANK_SUPPLIERS: BankPartner<T.Supplier>[] = ${JSON.stringify(suppliers)}

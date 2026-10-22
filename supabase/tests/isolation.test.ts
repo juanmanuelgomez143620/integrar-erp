@@ -94,6 +94,10 @@ async function snapshot(company: string) {
     'sales_invoice_lines',
     'customer_receipts',
     'customer_receipt_lines',
+    'price_lists',
+    'price_list_items',
+    'sales_quotes',
+    'sales_quote_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -137,7 +141,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                               ? B.salesInvoice
                               : fn.startsWith('rc_')
                                 ? B.customerReceipt
-                                : B.order
+                                : fn.startsWith('pre_')
+                                  ? B.salesQuote
+                                  : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -199,6 +205,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     delivery_date: null,
     customer_reference: 'Intruso',
     payment_method: 'TRANSFERENCIA',
+    copy_from: B.priceList,
+    percent: 5,
+    price_list_id: B.priceList,
   }
   const values: Record<string, unknown> = {
     p_company_id: company,
@@ -211,7 +220,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_id: B.product,
     p_kind: fn === 'export_rows' ? 'stock' : 'product',
     p_slug: B.slug,
-    p_code: 'MP-001',
+    // La lista de B se busca por su código.
+    p_code: fn === 'price_list_detail' ? 'MAY' : 'MP-001',
     p_doc_type: 'PURCHASE_ORDER',
     p_display_number: 'OC-00001',
     p_input: JSON.stringify(input),
@@ -241,6 +251,10 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_year: 2028,
     p_from: '2027-01-01',
     p_to: '2027-12-31',
+    p_price_list_id: B.priceList,
+    p_product_id: B.product,
+    p_price: 1,
+    p_percent: 5,
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {
@@ -510,6 +524,52 @@ beforeAll(async () => {
       p_confirm: true,
     })
   ).id
+  // Una lista de precios de B, asignada a su cliente, y un presupuesto enviado.
+  B.priceList = (
+    await rpc<{ id: string }>('docenteB', 'pl_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        code: 'MAY',
+        name: 'Mayorista',
+        description: '',
+        copy_from: 'SALE_PRICE',
+        percent: -10,
+      }),
+    })
+  ).id
+  await rpc('docenteB', 'master_save', {
+    p_kind: 'customer',
+    p_company_id: B.id,
+    p_data: JSON.stringify({
+      id: B.customer,
+      code: 'CLI-001',
+      legal_name: (await one(`select legal_name from public.customers where id = $1`, [B.customer])).legal_name,
+      price_list_id: B.priceList,
+    }),
+  })
+  B.salesQuote = (
+    await rpc<{ id: string }>('docenteB', 'pre_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        customer_id: B.customer,
+        warehouse_id: (await one(`select id from public.warehouses where company_id = $1 and code = 'DEP-PT'`, [B.id]))
+          .id,
+        valid_until: '2099-12-31',
+        payment_terms_days: 30,
+        customer_reference: '',
+        notes: '',
+        lines: [
+          {
+            product_id: (await one(`select id from public.products where company_id = $1 and code = 'PT-002'`, [B.id]))
+              .id,
+            quantity: 2,
+            unit_price: 112500,
+          },
+        ],
+      }),
+      p_send: true,
+    })
+  ).id
 
   bIds = new Set(
     (
@@ -541,6 +601,9 @@ beforeAll(async () => {
          union select id::text from public.delivery_note_lines where company_id = $1
          union select id::text from public.sales_invoice_lines where company_id = $1
          union select id::text from public.customer_receipt_lines where company_id = $1
+         union select id::text from public.price_lists where company_id = $1
+         union select id::text from public.price_list_items where company_id = $1
+         union select id::text from public.sales_quote_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

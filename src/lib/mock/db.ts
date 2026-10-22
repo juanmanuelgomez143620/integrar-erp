@@ -48,6 +48,9 @@ export interface DB {
   dnLines: T.DeliveryNoteLine[]
   fvLines: T.SalesInvoiceLine[]
   rcLines: T.CustomerReceiptLine[]
+  qtLines: T.SalesQuoteLine[]
+  priceLists: T.PriceList[]
+  priceListItems: T.PriceListItem[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -62,7 +65,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 10
+export const DB_VERSION = 11
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -109,6 +112,9 @@ const COLLECTIONS = [
   'dnLines',
   'fvLines',
   'rcLines',
+  'qtLines',
+  'priceLists',
+  'priceListItems',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -140,6 +146,9 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   dnLines: 8,
   fvLines: 9,
   rcLines: 10,
+  qtLines: 11,
+  priceLists: 11,
+  priceListItems: 11,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -231,6 +240,13 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.rcLines ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+  },
+  // v10 → v11: listas de precios y presupuestos (Fase 4d); los clientes todavía no tienen lista.
+  10: (db) => {
+    db.qtLines ??= []
+    db.priceLists ??= []
+    db.priceListItems ??= []
+    for (const c of db.customers) c.price_list_id ??= null
   },
 }
 

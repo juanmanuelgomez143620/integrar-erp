@@ -17,7 +17,7 @@ import {
   PRIORITIES,
 } from '@/lib/domain/catalog'
 import type { DocType } from '@/lib/domain/types'
-import { date, money } from '@/lib/format'
+import { date, money, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
 
@@ -45,6 +45,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
     newLabel: 'Nuevo recibo de cobro',
     createPerm: 'customer_receipt.create',
   },
+  SALES_QUOTE: { area: 'Ventas', newLabel: 'Nuevo presupuesto', createPerm: 'sales_quote.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -315,6 +316,33 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'SALES_QUOTE') {
+    columns.push(
+      { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
+      { key: 'items', header: 'Productos', cell: (d) => <span className="text-xs">{d.summary}</span> },
+      {
+        key: 'valid',
+        header: 'Válido hasta',
+        sort: (d) => d.qt!.valid_until,
+        cell: (d) => (
+          <span
+            className={cn(
+              ['BORRADOR', 'ENVIADO'].includes(d.status) && d.qt!.valid_until < todayAR() && 'font-medium text-red-700',
+            )}
+          >
+            {date(d.qt!.valid_until)}
+          </span>
+        ),
+      },
+      {
+        key: 'total',
+        header: 'Total',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   if (docType === 'CUSTOMER_RECEIPT') {
     columns.push(
       { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
@@ -371,7 +399,9 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
 
   const newPath = company.docPath(
     docType,
-    ['STOCK_ADJUSTMENT', 'JOURNAL_ENTRY', 'SALES_ORDER', 'DELIVERY_NOTE', 'CUSTOMER_RECEIPT'].includes(docType)
+    ['STOCK_ADJUSTMENT', 'JOURNAL_ENTRY', 'SALES_ORDER', 'DELIVERY_NOTE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(
+      docType,
+    )
       ? 'nuevo'
       : 'nueva',
   )
@@ -422,7 +452,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         searchPlaceholder={
           docType === 'JOURNAL_ENTRY'
             ? 'Buscar por número o leyenda…'
-            : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT'].includes(docType)
+            : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
               ? 'Buscar por número, cliente, producto…'
               : 'Buscar por número, proveedor, producto…'
         }

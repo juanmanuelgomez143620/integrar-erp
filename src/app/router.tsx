@@ -44,6 +44,9 @@ const DeliveryFormPage = lazyPage(() =>
   import('@/features/inventory/deliveries/delivery-form').then((m) => m.DeliveryFormPage),
 )
 const SalesOrderFormPage = lazyPage(() => import('@/features/sales/order-form').then((m) => m.SalesOrderFormPage))
+const SalesQuoteFormPage = lazyPage(() => import('@/features/sales/order-form').then((m) => m.SalesQuoteFormPage))
+const PriceListsPage = lazyPage(() => import('@/features/sales/price-lists-pages').then((m) => m.PriceListsPage))
+const PriceListPage = lazyPage(() => import('@/features/sales/price-lists-pages').then((m) => m.PriceListPage))
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -181,6 +184,9 @@ export const router = createBrowserRouter(
                 { path: 'deposito/remitos', element: <DocumentListPage key="dn" docType="DELIVERY_NOTE" /> },
                 { path: 'deposito/remitos/nuevo', element: <DeliveryFormPage /> },
                 { path: 'deposito/remitos/:number', element: <DocumentPage key="dn" docType="DELIVERY_NOTE" /> },
+                { path: 'ventas/presupuestos', element: <DocumentListPage key="qt" docType="SALES_QUOTE" /> },
+                { path: 'ventas/presupuestos/nuevo', element: <SalesQuoteFormPage /> },
+                { path: 'ventas/presupuestos/:number', element: <DocumentPage key="qt" docType="SALES_QUOTE" /> },
                 { path: 'ventas/pedidos', element: <DocumentListPage key="so" docType="SALES_ORDER" /> },
                 { path: 'ventas/pedidos/nuevo', element: <SalesOrderFormPage /> },
                 { path: 'ventas/pedidos/:number', element: <DocumentPage key="so" docType="SALES_ORDER" /> },
@@ -189,6 +195,8 @@ export const router = createBrowserRouter(
                 { path: 'ventas/facturas/:number', element: <DocumentPage key="fv" docType="SALES_INVOICE" /> },
                 { path: 'ventas/clientes', element: <ReceivablesPage /> },
                 { path: 'ventas/clientes/:code', element: <CustomerAccountPage /> },
+                { path: 'ventas/listas-de-precios', element: <PriceListsPage /> },
+                { path: 'ventas/listas-de-precios/:code', element: <PriceListPage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

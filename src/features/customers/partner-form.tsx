@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -8,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Field } from '@/components/common/blocks'
 import { SimpleSelect } from '@/components/common/pickers'
-import { commands } from '@/lib/api'
+import { api, commands } from '@/lib/api'
 import { VAT_CONDITIONS } from '@/lib/domain/catalog'
 import type { Customer, Supplier, VatCondition } from '@/lib/domain/types'
 import { useCommand } from '@/hooks/use-command'
@@ -31,6 +32,7 @@ const schema = z.object({
   contact_name: z.string(),
   payment_terms_days: z.string().regex(/^\d*$/, 'Sólo números'),
   credit_limit: z.string().regex(/^\d*$/, 'Sólo números'),
+  price_list_id: z.string(),
   lead_time_days: z.string().regex(/^\d*$/, 'Sólo números'),
   category: z.string(),
   notes: z.string(),
@@ -52,6 +54,7 @@ const empty: FormValues = {
   contact_name: '',
   payment_terms_days: '30',
   credit_limit: '',
+  price_list_id: '',
   lead_time_days: '',
   category: '',
   notes: '',
@@ -75,6 +78,12 @@ export function PartnerSheet({
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: empty })
   // Por defecto, la provincia de la empresa simulada: es un dato, no va escrita en el código.
   const defaultProvince = company.company.province
+  // Las listas de precios del cliente (4d): sólo si se pueden consultar; si no, no se toca la que tenga.
+  const lists = useQuery({
+    queryKey: ['price-lists', company.companyId],
+    queryFn: () => api.priceLists(company.companyId),
+    enabled: open && kind === 'customer' && company.can('price_list.read'),
+  })
 
   useEffect(() => {
     if (!open) return
@@ -107,7 +116,10 @@ export function PartnerSheet({
         payment_terms_days: Number(values.payment_terms_days) || 0,
         notes: values.notes,
         ...(kind === 'customer'
-          ? { credit_limit: values.credit_limit ? Number(values.credit_limit) : null }
+          ? {
+              credit_limit: values.credit_limit ? Number(values.credit_limit) : null,
+              ...(lists.data ? { price_list_id: values.price_list_id } : {}),
+            }
           : {
               category: values.category,
               lead_time_days: values.lead_time_days ? Number(values.lead_time_days) : null,
@@ -120,6 +132,7 @@ export function PartnerSheet({
   // useWatch (no form.watch) para no perder la memoización: form.watch() devuelve
   // una función que React Compiler no puede memoizar de forma segura.
   const vatCondition = useWatch({ control: form.control, name: 'vat_condition' })
+  const priceListId = useWatch({ control: form.control, name: 'price_list_id' })
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
@@ -176,9 +189,30 @@ export function PartnerSheet({
             <Input inputMode="numeric" {...form.register('payment_terms_days')} />
           </Field>
           {kind === 'customer' ? (
-            <Field label="Límite de crédito ($)" error={err.credit_limit?.message}>
-              <Input inputMode="numeric" {...form.register('credit_limit')} />
-            </Field>
+            <>
+              <Field label="Límite de crédito ($)" error={err.credit_limit?.message}>
+                <Input inputMode="numeric" {...form.register('credit_limit')} />
+              </Field>
+              {lists.data && (
+                <Field
+                  label="Lista de precios"
+                  className="sm:col-span-2"
+                  hint="En sus pedidos y presupuestos se proponen los precios de esta lista."
+                >
+                  <SimpleSelect
+                    value={priceListId}
+                    onChange={(v: string) => form.setValue('price_list_id', v)}
+                    emptyLabel="Sin lista: el precio de venta de cada producto"
+                    options={lists.data
+                      .filter((r) => r.list.is_active || r.list.id === priceListId)
+                      .map((r) => ({
+                        value: r.list.id,
+                        label: `${r.list.code} · ${r.list.name}${r.list.is_active ? '' : ' (inactiva)'}`,
+                      }))}
+                  />
+                </Field>
+              )}
+            </>
           ) : (
             <>
               <Field label="Demora de entrega (días)" error={err.lead_time_days?.message}>
