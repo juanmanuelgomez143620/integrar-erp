@@ -7,6 +7,8 @@ import {
   cmdAcceptSalesQuote,
   cmdAdjustPriceList,
   cmdCancelSalesQuote,
+  cmdCreateCompanyFromTemplate,
+  cmdCreateCourse,
   cmdCreatePriceList,
   cmdCreateSalesOrder,
   cmdCreateSalesQuote,
@@ -189,6 +191,17 @@ describe('listas de precios', () => {
     expect(salesCustomers(db, userId('ventas'), companyId()).find((c) => c.code === 'CLI-001')!.price_list).toBeNull()
     // Una lista desactivada no se asigna a otro cliente.
     expectBusinessError(() => assign('CLI-002', id), 'DATO_INVALIDO')
+  })
+
+  it('una empresa creada desde la plantilla no hereda sus listas: los clientes empiezan sin lista', () => {
+    // En el simulador, la empresa demo es la plantilla.
+    assign('CLI-001', wholesale().id)
+    const course = cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º B', orientation: 'Gestión' })
+    const { id } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
+    expect(db.customers.filter((c) => c.company_id === id).map((c) => c.price_list_id)).toEqual(
+      db.customers.filter((c) => c.company_id === id).map(() => null),
+    )
+    expect(db.priceLists.filter((l) => l.company_id === id)).toEqual([])
   })
 })
 

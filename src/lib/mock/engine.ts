@@ -5675,7 +5675,8 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   copy(db.approvalRules)
   for (const m of of(db.companyModules)) db.companyModules.push({ ...m, company_id: companyId })
   const supplierIds = copy(db.suppliers, () => audited)
-  copy(db.customers, () => audited)
+  // Las listas de precios no se copian: los clientes empiezan sin lista (como en la base).
+  copy(db.customers, () => ({ ...audited, price_list_id: null }))
   const productIds = copy(db.products, (p) => ({
     ...audited,
     default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,
