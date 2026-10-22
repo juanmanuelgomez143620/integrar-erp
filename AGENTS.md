@@ -7,7 +7,7 @@ Este proyecto se desarrolla con Claude Code, que usa `CLAUDE.md`. Esta guía es 
 1. Leé **`CLAUDE.md` completo**: reglas, arquitectura y la sección "Estado" (dónde quedó el trabajo).
 2. Leé **`docs/PLAN_DE_ACCION.md`**: el primer paso que no dice "Hecho" es el que sigue.
 3. Si vas a trabajar en una fase, leé su diseño (`docs/FASE_*.md`). Si todavía no existe, escribilo primero (§3).
-4. Corré `git status` y `git log --oneline -10`. Si hay cambios sin commitear que no son tuyos, no los toques.
+4. Corré `git status` y `git log --oneline -10`. Si hay cambios sin commitear, mostráselos al usuario antes de tocarlos: pueden ser trabajo a medio hacer de Claude Code.
 
 ## 2. Reglas que no se negocian
 
