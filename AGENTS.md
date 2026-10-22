@@ -4,6 +4,8 @@ Este proyecto se desarrolla con Claude Code, que usa `CLAUDE.md`. Esta guía es 
 
 ## 1. Antes de empezar
 
+Abrí el agente en **`C:\Proyectos\GESTAR-ERP-supabase`** (el worktree de `mejoras/integracion`), nunca en `C:\Proyectos\GESTAR-ERP`: esa carpeta tiene trabajo de otro agente. Si Claude Code dejó cambios sin commitear, los vas a ver ahí y no se duplica el trabajo.
+
 1. Leé **`CLAUDE.md` completo**: reglas, arquitectura y la sección "Estado" (dónde quedó el trabajo).
 2. Leé **`docs/PLAN_DE_ACCION.md`**: el primer paso que no dice "Hecho" es el que sigue.
 3. Si vas a trabajar en una fase, leé su diseño (`docs/FASE_*.md`). Si todavía no existe, escribilo primero (§3).
