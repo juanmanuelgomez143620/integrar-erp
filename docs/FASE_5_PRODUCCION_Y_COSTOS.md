@@ -8,7 +8,7 @@ Forestal del Norte fabrica muebles: hasta ahora el stock de productos terminados
 
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
-| 5a | Listas de materiales; orden de producción: planificada → liberada (reserva los materiales) → en proceso (Depósito entrega los materiales) → terminada (entra el producto al costo de los materiales) | Lo que se vende se fabrica, con su consumo y su costo | Pendiente |
+| 5a | Listas de materiales; orden de producción: planificada → liberada (reserva los materiales) → en proceso (Depósito entrega los materiales) → terminada (entra el producto al costo de los materiales) | Lo que se vende se fabrica, con su consumo y su costo | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 5b | Centros de trabajo, horas y costos de conversión (mano de obra directa y carga fabril aplicadas); costo previsto contra real de cada orden | El costo del mueble suma los tres elementos y se ven los desvíos | Pendiente |
 | 5c | Necesidades de materiales de las órdenes y solicitud de compra de lo que falta | Producción le pide a Compras exactamente lo que necesita | Pendiente |
 
