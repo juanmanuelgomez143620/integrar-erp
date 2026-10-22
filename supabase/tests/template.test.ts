@@ -62,6 +62,15 @@ const mockRules = (() => {
     .sort()
 })()
 
+/** Listas de materiales de la demo: "producto línea componente cantidad". */
+const mockBoms = ofTemplate(seed.boms)
+  .flatMap((b) =>
+    seed.bomLines
+      .filter((l) => l.bom_id === b.id)
+      .map((l) => `${mockProduct[b.product_id]} ${l.line_no} ${mockProduct[l.component_id]} ${l.quantity}`),
+  )
+  .sort()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -118,6 +127,21 @@ const rules = async (company: string) =>
     )
   )
     .map((r) => r.rule)
+    .sort()
+
+const boms = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select p.code || ' ' || l.line_no || ' ' || c.code || ' ' || (l.quantity::float8)::text as line
+         from public.boms b
+         join public.products p on p.id = b.product_id
+         join public.bom_lines l on l.bom_id = b.id
+         join public.products c on c.id = l.component_id
+        where b.company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
     .sort()
 
 const createFor = async (user: string, courseId: string) =>
@@ -293,6 +317,11 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await rules(template)).toEqual(mockRules)
   })
 
+  it('tiene las mismas listas de materiales que la demo', async () => {
+    expect(mockBoms.length).toBeGreaterThan(0)
+    expect(await boms(template)).toEqual(mockBoms)
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -355,6 +384,7 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await count('accounts', created.id)).toBe(await count('accounts', template))
     expect(await opening(created.id)).toEqual(mockOpening)
     expect(await rules(created.id)).toEqual(mockRules)
+    expect(await boms(created.id)).toEqual(mockBoms)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

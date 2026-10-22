@@ -26,6 +26,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   purchasing: { name: 'Compras', lockable: true },
   sales: { name: 'Ventas y cobranzas', lockable: true },
   inventory: { name: 'Depósito y stock', lockable: true },
+  production: { name: 'Producción y costos', lockable: true },
   payables: { name: 'Pagos y tesorería', lockable: true },
   accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
@@ -53,6 +54,8 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   delivery_note: 'inventory',
   stock: 'inventory',
   stock_adjustment: 'inventory',
+  bom: 'production',
+  production_order: 'production',
   supplier_invoice: 'purchasing',
   payable: 'payables',
   payment_order: 'payables',
@@ -94,8 +97,8 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones y libros contables (obligaciones en fases siguientes).' },
   TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Prepara y ejecuta los pagos a proveedores y controla los saldos de caja y bancos.' },
   RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Legajos y sueldos en fases siguientes.' },
-  PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Detecta necesidades de materiales y las solicita a Compras.' },
-  DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, controla el stock y pide reposición.' },
+  PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
+  DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.' },
   LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Consulta recepciones y stock (despachos en fases siguientes).' },
   DOCENTE: { code: 'DOCENTE', name: 'Docente (supervisor)', island: null, defaultSector: null, isSupervisor: true, description: 'Todos los permisos en la empresa; puede actuar como supervisor.' },
 }
@@ -138,6 +141,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
+    'bom.read', 'production_order.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -150,13 +154,15 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'supplier_invoice.create', 'supplier_invoice.cancel', 'payable.read',
     'rfq.read', 'rfq.create', 'rfq.cancel', 'rfq.award',
     'supplier_quote.read', 'supplier_quote.create', 'supplier_quote.cancel',
+    // Ve qué se fabrica y con qué materiales, para comprarlos a tiempo.
+    'bom.read', 'production_order.read',
   ],
   VENTAS: [
     ...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read',
     'sales_order.read', 'sales_order.create', 'sales_order.cancel', 'delivery_note.read',
     'sales_invoice.read', 'sales_invoice.create', 'sales_invoice.cancel', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'price_list.create', 'price_list.update',
-    'sales_quote.read', 'sales_quote.create', 'sales_quote.cancel',
+    'sales_quote.read', 'sales_quote.create', 'sales_quote.cancel', 'production_order.read',
   ],
   DEPOSITO: [
     ...CORE_READ,
@@ -166,12 +172,16 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.read', 'goods_receipt.read', 'goods_receipt.create', 'goods_receipt.cancel',
     'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'delivery_note.create', 'delivery_note.cancel',
+    // Entrega los materiales de las órdenes de producción liberadas.
+    'bom.read', 'production_order.read', 'production_order.issue',
   ],
   PRODUCCION: [
     ...CORE_READ,
     'supplier.read', 'product.read', 'stock.read',
     'purchase_requisition.read', 'purchase_requisition.create', 'purchase_requisition.update', 'purchase_requisition.cancel',
     'purchase_order.read', 'goods_receipt.read',
+    'bom.read', 'bom.create', 'bom.update',
+    'production_order.read', 'production_order.create', 'production_order.cancel',
   ],
   CONTABILIDAD: [
     ...CORE_READ,
@@ -185,6 +195,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
+    'bom.read', 'production_order.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -215,7 +226,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
-    'price_list.read', 'sales_quote.read',
+    'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read',
   ],
   DOCENTE: [],
 }
@@ -314,6 +325,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'SALES_QUOTE', prefix: 'PRE', name: 'Presupuesto', plural: 'Presupuestos',
     resource: 'sales_quote', module: 'sales', path: 'ventas/presupuestos',
     description: 'Oferta que Ventas le hace a un cliente: productos, cantidades, precios y hasta cuándo vale. No compromete stock ni crédito: si el cliente la acepta, se genera el pedido de venta.',
+  },
+  PRODUCTION_ORDER: {
+    code: 'PRODUCTION_ORDER', prefix: 'OPR', name: 'Orden de producción', plural: 'Órdenes de producción',
+    resource: 'production_order', module: 'production', path: 'produccion/ordenes',
+    description: 'Lo que Producción va a fabricar: qué producto, cuántas unidades y con qué materiales, según su lista. Al liberarse reserva los materiales; Depósito los entrega y, al terminarla, el producto entra al stock a su costo real.',
   },
 }
 
@@ -431,6 +447,13 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     RECHAZADO: { label: 'Rechazado', badge: 'danger', final: true, description: 'El cliente no lo aceptó.' },
     VENCIDO: { label: 'Vencido', badge: 'neutral', final: true, description: 'Pasó la validez sin respuesta del cliente: para venderle, se prepara otro con los precios del día.' },
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto.' },
+  },
+  PRODUCTION_ORDER: {
+    BORRADOR: { label: 'Planificada', badge: 'neutral', final: false, description: 'Producción la está planificando: todavía no reservó materiales.' },
+    LIBERADA: { label: 'Liberada', badge: 'info', final: false, description: 'Los materiales están reservados: Depósito tiene que entregarlos.' },
+    EN_PROCESO: { label: 'En proceso', badge: 'warning', final: false, description: 'Depósito entregó los materiales: Producción está fabricando.' },
+    TERMINADA: { label: 'Terminada', badge: 'success', final: true, description: 'El producto entró al stock a su costo real.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto. Si estaba en proceso, los materiales volvieron al depósito y un contraasiento revirtió el consumo.' },
   },
 }
 
@@ -590,6 +613,14 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('SALES_QUOTE', 'ENVIADO', 'REJECT', 'RECHAZADO', 'sales_quote.create', 'Registrar el rechazo', 'El cliente no aceptó: anotá su motivo (el precio, el plazo, compró en otra empresa…).', true, 'destructive'),
   t('SALES_QUOTE', 'ENVIADO', 'CLOSE', 'VENCIDO', 'sales_quote.cancel', 'Dar por vencido', 'Pasó la validez sin respuesta del cliente.', false, 'outline'),
   t('SALES_QUOTE', 'ENVIADO', 'CANCEL', 'ANULADO', 'sales_quote.cancel', 'Anular', 'Queda sin efecto (por ejemplo, se cargó mal): si hace falta, se prepara otro.', true, 'destructive'),
+
+  // Orden de producción
+  t('PRODUCTION_ORDER', 'BORRADOR', 'RELEASE', 'LIBERADA', 'production_order.create', 'Liberar', 'Controla que haya materiales disponibles y los reserva: Depósito recibe la tarea de entregarlos.'),
+  t('PRODUCTION_ORDER', 'BORRADOR', 'CANCEL', 'ANULADA', 'production_order.cancel', 'Anular', 'La orden queda sin efecto.', true, 'destructive'),
+  t('PRODUCTION_ORDER', 'LIBERADA', 'ISSUE', 'EN_PROCESO', 'production_order.issue', 'Entregar los materiales', 'Registrá lo que sale de cada material: baja el stock y el consumo pasa a productos en proceso.'),
+  t('PRODUCTION_ORDER', 'LIBERADA', 'CANCEL', 'ANULADA', 'production_order.cancel', 'Anular', 'Queda sin efecto y la reserva de materiales se libera.', true, 'destructive'),
+  t('PRODUCTION_ORDER', 'EN_PROCESO', 'FINISH', 'TERMINADA', 'production_order.create', 'Terminar', 'Registrá las unidades que salieron bien: entran al stock a su costo real.'),
+  t('PRODUCTION_ORDER', 'EN_PROCESO', 'CANCEL', 'ANULADA', 'production_order.cancel', 'Anular con devolución', 'Los materiales vuelven al depósito y un contraasiento revierte el consumo.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -606,6 +637,9 @@ export const ACTION_VERBS: Record<string, string> = {
   CLOSE: 'Cerró el saldo de',
   PAY: 'Pagó',
   AWARD: 'Adjudicó',
+  RELEASE: 'Liberó',
+  ISSUE: 'Entregó los materiales de',
+  FINISH: 'Terminó',
   SYSTEM: 'Actualizó',
   CLOSE_PERIOD: 'Cerró el período',
   REOPEN_PERIOD: 'Reabrió el período',
@@ -661,6 +695,9 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'CUSTOMER_RECEIPT', status: 'BORRADOR', taskType: 'CONFIRMAR_RBO', assignee: 'CREATOR', title: 'Confirmar {number} por {total}', description: 'Revisar las facturas, los importes, el medio de cobro y la caja o el banco, y confirmar el cobro.' },
   { docType: 'SALES_QUOTE', status: 'BORRADOR', taskType: 'ENVIAR_PRE', assignee: 'CREATOR', title: 'Enviar {number} al cliente', description: 'Revisar los ítems, los precios y la validez, y enviar el presupuesto al cliente.' },
   { docType: 'SALES_QUOTE', status: 'ENVIADO', taskType: 'SEGUIR_PRE', assignee: 'ROLE', role: 'VENTAS', title: 'Seguir {number} por {total}', description: 'Registrar la aceptación o el rechazo del cliente antes de que venza la oferta.' },
+  { docType: 'PRODUCTION_ORDER', status: 'BORRADOR', taskType: 'LIBERAR_OPR', assignee: 'CREATOR', title: 'Liberar {number}', description: 'Revisar el producto, la cantidad y los materiales, y liberar la orden para reservarlos.' },
+  { docType: 'PRODUCTION_ORDER', status: 'LIBERADA', taskType: 'ENTREGAR_MATERIALES', assignee: 'ROLE', role: 'DEPOSITO', title: 'Entregar los materiales de {number}', description: 'Preparar los materiales reservados, entregarlos a Producción y registrar lo que sale de cada uno.' },
+  { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },
 ]
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -687,6 +724,9 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CONFIRMAR_RBO: 'Confirmar cobro',
   ENVIAR_PRE: 'Enviar presupuesto',
   SEGUIR_PRE: 'Seguir presupuesto',
+  LIBERAR_OPR: 'Liberar orden de producción',
+  ENTREGAR_MATERIALES: 'Entregar materiales',
+  TERMINAR_OPR: 'Terminar orden de producción',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -702,6 +742,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   MATERIAL_DISPONIBLE: 'Material disponible',
   PEDIDO_AUTORIZADO: 'Pedido autorizado',
   PEDIDO_DESPACHADO: 'Pedido despachado',
+  PRODUCCION_TERMINADA: 'Producción terminada',
 }
 
 // ---------------------------------------------------------------- Etiquetas
@@ -762,10 +803,16 @@ export const MOVEMENT_TYPES: Record<MovementType, string> = {
   AJUSTE_NEGATIVO: 'Ajuste negativo',
   DESPACHO_VENTA: 'Despacho por venta',
   ANULACION_DESPACHO: 'Anulación de despacho',
+  CONSUMO_PRODUCCION: 'Consumo de producción',
+  DEVOLUCION_PRODUCCION: 'Devolución de producción',
+  INGRESO_PRODUCCION: 'Ingreso de producción',
 }
 
 /** Lo que se vende (docs/FASE_4_VENTAS_Y_CLIENTES.md §2, a validar): las materias primas y los insumos, no. */
 export const SELLABLE_PRODUCT_TYPES: ProductType[] = ['PRODUCTO_TERMINADO', 'MERCADERIA_REVENTA', 'SERVICIO']
+
+/** Lo que va en una lista de materiales (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2): materias primas e insumos. */
+export const BOM_COMPONENT_TYPES: ProductType[] = ['MATERIA_PRIMA', 'INSUMO']
 
 export const VAT_RATES = [21, 10.5, 27, 0]
 
@@ -822,6 +869,21 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       COSTO_MERCADERIA_REVENTA: 'Costo de las mercaderías de reventa vendidas',
       PRODUCTO_TERMINADO: 'Productos terminados que salen del inventario',
       MERCADERIA_REVENTA: 'Mercaderías de reventa que salen del inventario',
+    },
+  },
+  CONSUMO_PRODUCCION: {
+    label: 'Consumo de producción (materiales entregados)',
+    keys: {
+      PRODUCCION_EN_PROCESO: 'Productos en proceso que reciben los materiales',
+      MATERIA_PRIMA: 'Materias primas consumidas',
+      INSUMO: 'Insumos consumidos',
+    },
+  },
+  PRODUCCION_TERMINADA: {
+    label: 'Producción terminada (orden de producción terminada)',
+    keys: {
+      PRODUCTO_TERMINADO: 'Productos terminados que ingresan al stock',
+      PRODUCCION_EN_PROCESO: 'Productos en proceso que se terminan',
     },
   },
 }

@@ -130,6 +130,11 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CLOSE: (id) => commands.expireSalesQuote(id),
     CANCEL: (id, t) => commands.cancelSalesQuote(id, t),
   },
+  // Entregar los materiales y terminar tienen su propio diálogo: hay que indicar las cantidades.
+  PRODUCTION_ORDER: {
+    RELEASE: (id) => commands.releaseProductionOrder(id),
+    CANCEL: (id, t) => commands.cancelProductionOrder(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -149,6 +154,7 @@ const AREA: Record<DocType, string> = {
   SALES_INVOICE: 'Ventas',
   CUSTOMER_RECEIPT: 'Pagos y tesorería',
   SALES_QUOTE: 'Ventas',
+  PRODUCTION_ORDER: 'Producción',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {

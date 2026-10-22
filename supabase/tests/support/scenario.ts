@@ -473,6 +473,36 @@ export function buildScenario(): DB {
   E.cmdExpireSalesQuote(as('ventas'), late.id)
   E.cmdCreateSalesQuote(as('ventas'), company, salesQuote('CLI-004', [['PT-002', 2]]), false)
 
+  // Producción (además de la orden de la demo, liberada): dos mesas terminadas (con
+  // dos pies de tabla de más), cuatro sillas en proceso, dos sillas anuladas después
+  // de la entrega y diez placards planificados a los que les faltan placas.
+  const productionOrder = (code: string, quantity: number): E.ProductionOrderInput => ({
+    product_id: product(code).id,
+    quantity,
+    materials_warehouse_id: warehouse('DEP-MP'),
+    output_warehouse_id: warehouse('DEP-PT'),
+    due_date: addDays(todayAR(), 7),
+    notes: '',
+  })
+  const issue = (docId: string, extra: Record<string, number> = {}) =>
+    E.cmdIssueProductionOrder(as('deposito'), docId, {
+      lines: db.prdLines
+        .filter((l) => l.document_id === docId)
+        .map((l) => ({
+          line_id: l.id,
+          quantity: extra[db.products.find((p) => p.id === l.product_id)!.code] ?? l.quantity_planned,
+        })),
+    })
+  const tables = E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-001', 2), true)
+  issue(tables.id, { 'MP-001': 22 })
+  E.cmdFinishProductionOrder(as('produccion'), tables.id, 2)
+  const chairs = E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-002', 4), true)
+  issue(chairs.id)
+  const spoiled = E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-002', 2), true)
+  issue(spoiled.id)
+  E.cmdCancelProductionOrder(as('produccion'), spoiled.id, 'Se cortó mal la madera')
+  E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-003', 10), false)
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

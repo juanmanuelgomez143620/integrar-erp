@@ -18,8 +18,10 @@ import type { DB } from './db'
 import {
   accountBalance,
   accountLabel,
+  activeBomOf,
   accountLinesUpTo,
   bestQuote,
+  bomLinesOf,
   can,
   customerCreditUsed,
   deliveryNoteLines,
@@ -42,6 +44,10 @@ import {
   onHandQuantity,
   orderFromQuote,
   orderFromSalesQuote,
+  plannedUnitCost,
+  productionMaterialCost,
+  productionOrderLines,
+  productionShortages,
   quoteExpired,
   quoteIsValid,
   quotesOf,
@@ -62,6 +68,7 @@ import {
   salesLetter,
   salesOrderLines,
   salesQuoteLines,
+  shortageText,
   type AccountLine,
 } from './engine'
 
@@ -394,6 +401,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.rcLines.filter((l) => l.document_id === doc.id).length
     case 'SALES_QUOTE':
       return db.qtLines.filter((l) => l.document_id === doc.id).length
+    case 'PRODUCTION_ORDER':
+      return db.prdLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -427,6 +436,9 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
       return salesInvoiceLines(db, doc.id)
     case 'SALES_QUOTE':
       return salesQuoteLines(db, doc.id)
+    // La orden se resume por lo que fabrica, no por sus materiales.
+    case 'PRODUCTION_ORDER':
+      return [{ product_id: doc.pd!.product_id }]
   }
 }
 
@@ -463,7 +475,9 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
         ? `${db.accounts.find((a) => a.id === doc.ft!.from_account_id)?.name} → ${db.accounts.find((a) => a.id === doc.ft!.to_account_id)?.name}`
         : doc.br
           ? `${db.accounts.find((a) => a.id === doc.br!.account_id)?.name} al ${date(doc.br.statement_date)}`
-          : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+          : doc.pd
+            ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
+            : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -519,6 +533,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'DELIVERY_NOTE',
     'SALES_INVOICE',
     'CUSTOMER_RECEIPT',
+    'PRODUCTION_ORDER',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -653,6 +668,10 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       if ((tr.action === 'SEND' || tr.action === 'CONFIRM') && expired)
         reason = `La oferta venció el ${date(doc.qt!.valid_until)}: prepará otro presupuesto con los precios del día.`
       if (tr.action === 'CLOSE' && !expired) reason = `Vale hasta el ${date(doc.qt!.valid_until)}: todavía no venció.`
+    }
+    if (doc.doc_type === 'PRODUCTION_ORDER' && tr.action === 'RELEASE') {
+      const shortages = productionShortages(db, doc)
+      if (shortages.length) reason = `Faltan materiales: ${shortages.map(shortageText).join('; ')}.`
     }
     if (doc.doc_type === 'CUSTOMER_RECEIPT' && doc.status === 'CONFIRMADO' && tr.action === 'CANCEL') {
       const account = db.accounts.find((a) => a.id === doc.rc!.treasury_account_id)!
@@ -977,6 +996,34 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: '—',
         text: 'La mercadería salió: bajó el stock (ver kardex), el costo de lo vendido está en el libro diario y Ventas fue notificada.',
       }
+    case 'PRODUCTION_ORDER:BORRADOR': {
+      const shortages = productionShortages(db, doc)
+      return {
+        who: 'Producción',
+        text: shortages.length
+          ? `Faltan materiales: ${shortages.map(shortageText).join('; ')}. Pedíselos a Compras (o fabricá menos unidades) y liberá la orden cuando lleguen.`
+          : 'Revisar el producto, la cantidad y los materiales, y liberar la orden: se controla que haya materiales y quedan reservados para Depósito.',
+      }
+    }
+    case 'PRODUCTION_ORDER:LIBERADA': {
+      const warehouse = db.warehouses.find((w) => w.id === doc.pd?.materials_warehouse_id)
+      return {
+        who: 'Depósito',
+        text: `Los materiales están reservados en ${warehouse?.name ?? 'el depósito'}. Prepararlos, entregárselos a Producción y registrar lo que sale de cada uno.`,
+      }
+    }
+    case 'PRODUCTION_ORDER:EN_PROCESO':
+      return {
+        who: 'Producción',
+        text: 'Fabricar y, al terminar, registrar las unidades que salieron bien: entran al stock a su costo real.',
+      }
+    case 'PRODUCTION_ORDER:TERMINADA': {
+      const product = db.products.find((p) => p.id === doc.pd?.product_id)
+      return {
+        who: '—',
+        text: `Ingresaron ${qty(doc.pd?.quantity_produced ?? 0, product?.uom_code)} de ${product?.code ?? '—'} a ${money(doc.pd?.unit_cost ?? 0)} por unidad (ver kardex): el costo pasó de productos en proceso a productos terminados.`,
+      }
+    }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -1026,6 +1073,9 @@ export interface DetailLine {
   // REM
   so_line_id?: string
   qty_ordered_so?: number
+  // OPR: lo previsto de cada material (y a qué costo) y lo que entregó Depósito (y a qué costo salió)
+  planned_unit_cost?: number
+  qty_issued?: number
 }
 
 export interface ApprovalView extends T.ApprovalRequest {
@@ -1205,6 +1255,25 @@ export interface SalesQuoteView {
   order: DocRef | null
 }
 
+/** Orden de producción: qué se fabrica, de qué depósito a cuál, y su costo previsto y real. */
+export interface ProductionOrderView {
+  product: { id: string; code: string; name: string; uom_code: string }
+  quantity: number
+  quantity_produced: number | null
+  materials_warehouse: { id: string; code: string; name: string }
+  output_warehouse: { id: string; code: string; name: string }
+  due_date: string | null
+  released_at: string | null
+  issued_at: string | null
+  finished_at: string | null
+  /** Costo previsto de los materiales (al planificarla). */
+  planned_cost: number
+  /** Costo de los materiales entregados (0 hasta la entrega). */
+  material_cost: number
+  /** Costo real de cada unidad terminada (al terminarla). */
+  unit_cost: number | null
+}
+
 /** Remito: quién lo lleva, cuándo salió y a qué costo. */
 export interface DeliveryView {
   carrier_name: string
@@ -1225,6 +1294,7 @@ export interface DocumentDetail {
   reconciliation: ReconciliationView | null
   sales_order: SalesOrderView | null
   sales_quote: SalesQuoteView | null
+  production_order: ProductionOrderView | null
   delivery: DeliveryView | null
   supplier: T.Supplier | null
   customer: T.Customer | null
@@ -1438,6 +1508,26 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
       line_total: l.line_total,
     }))
   }
+  if (doc.doc_type === 'PRODUCTION_ORDER') {
+    const warehouseId = doc.pd!.materials_warehouse_id
+    const pending = doc.status === 'BORRADOR' || doc.status === 'LIBERADA'
+    lines = productionOrderLines(db, doc.id).map((l) => ({
+      id: l.id,
+      line_no: l.line_no,
+      product: product(l.product_id),
+      quantity: l.quantity_planned,
+      notes: '',
+      planned_unit_cost: l.planned_unit_cost,
+      qty_issued: l.quantity_issued,
+      unit_cost: l.unit_cost,
+      // Mientras no se entregó: lo disponible en el depósito, sin lo reservado para otros.
+      qty_available: pending
+        ? round3(
+            onHandQuantity(db, l.product_id, warehouseId) - reservedQuantity(db, l.product_id, warehouseId, doc.id),
+          )
+        : null,
+    }))
+  }
   if (doc.doc_type === 'DELIVERY_NOTE') {
     lines = deliveryNoteLines(db, doc.id).map((l) => {
       const sl = db.soLines.find((x) => x.id === l.so_line_id)!
@@ -1482,7 +1572,8 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     doc.rq?.warehouse_id ??
     doc.so?.warehouse_id ??
     doc.dn?.warehouse_id ??
-    doc.qt?.warehouse_id
+    doc.qt?.warehouse_id ??
+    doc.pd?.materials_warehouse_id
   const orderId =
     doc.gr?.purchase_order_id ?? doc.si?.purchase_order_id ?? doc.dn?.sales_order_id ?? doc.fv?.sales_order_id
   const relatedOrder = orderId ? db.documents.find((d) => d.id === orderId) : undefined
@@ -1558,10 +1649,16 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                                   { label: 'Preparó', ...firstBy(['CREATE']) },
                                   { label: 'Conformidad del cliente', name: '', sector: '', at: '' },
                                 ]
-                              : [
-                                  { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                                  { label: 'Controló', name: '', sector: '', at: '' },
-                                ]
+                              : doc.doc_type === 'PRODUCTION_ORDER'
+                                ? [
+                                    { label: 'Planificó', ...firstBy(['CREATE']) },
+                                    { label: 'Entregó los materiales', ...firstBy(['ISSUE']) },
+                                    { label: 'Terminó', ...firstBy(['FINISH']) },
+                                  ]
+                                : [
+                                    { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                                    { label: 'Controló', name: '', sector: '', at: '' },
+                                  ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1574,6 +1671,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     reconciliation: doc.br ? reconciliationView(db, doc) : null,
     sales_order: doc.so ? salesOrderView(db, doc) : null,
     sales_quote: doc.qt ? salesQuoteView(db, doc) : null,
+    production_order: doc.pd ? productionOrderView(db, doc) : null,
     delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     customer: db.customers.find((c) => c.id === doc.customer_id) ?? null,
@@ -1593,6 +1691,29 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     actions: availableActions(db, userId, doc),
     next_step: nextStep(db, doc),
     signatures,
+  }
+}
+
+function productionOrderView(db: DB, doc: T.Document): ProductionOrderView {
+  const pd = doc.pd!
+  const product = db.products.find((p) => p.id === pd.product_id)!
+  const warehouse = (id: string) => {
+    const w = db.warehouses.find((x) => x.id === id)!
+    return { id: w.id, code: w.code, name: w.name }
+  }
+  return {
+    product: { id: product.id, code: product.code, name: product.name, uom_code: product.uom_code },
+    quantity: pd.quantity,
+    quantity_produced: pd.quantity_produced,
+    materials_warehouse: warehouse(pd.materials_warehouse_id),
+    output_warehouse: warehouse(pd.output_warehouse_id),
+    due_date: pd.due_date,
+    released_at: pd.released_at,
+    issued_at: pd.issued_at,
+    finished_at: pd.finished_at,
+    planned_cost: doc.subtotal,
+    material_cost: productionMaterialCost(db, doc.id),
+    unit_cost: pd.unit_cost,
   }
 }
 
@@ -3531,4 +3652,151 @@ export function listTeachers(db: DB, userId: string): PublicProfile[] {
     .filter((p) => p.app_role === 'DOCENTE')
     .map(publicProfile)
     .sort(compareNames)
+}
+
+// ============================================================ Producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md)
+
+/** Costo estimado de los materiales de una unidad: cantidad × costo promedio (o estándar) de cada componente. */
+function bomMaterialCost(db: DB, bomId: string) {
+  return round2(
+    bomLinesOf(db, bomId).reduce((s, l) => {
+      const c = db.products.find((p) => p.id === l.component_id)!
+      return s + round2(l.quantity * plannedUnitCost(db, c, c.default_warehouse_id))
+    }, 0),
+  )
+}
+
+/** Un producto terminado y su lista de materiales (si tiene). */
+export interface BomRow {
+  product: { id: string; code: string; name: string; uom_code: string; is_active: boolean }
+  bom: { id: string; is_active: boolean; updated_at: string } | null
+  components: number
+  /** Costo estimado de los materiales de una unidad (0 si no tiene lista). */
+  material_cost: number
+}
+
+export function listBoms(db: DB, userId: string, companyId: string): BomRow[] {
+  assertPerm(db, userId, companyId, 'bom.read')
+  return db.products
+    .filter((p) => p.company_id === companyId && p.product_type === 'PRODUCTO_TERMINADO')
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((p) => {
+      const bom = db.boms.find((b) => b.product_id === p.id)
+      return {
+        product: { id: p.id, code: p.code, name: p.name, uom_code: p.uom_code, is_active: p.is_active },
+        bom: bom ? { id: bom.id, is_active: bom.is_active, updated_at: bom.updated_at } : null,
+        components: bom ? bomLinesOf(db, bom.id).length : 0,
+        material_cost: bom ? bomMaterialCost(db, bom.id) : 0,
+      }
+    })
+}
+
+/** Un componente de la lista, con su costo estimado. */
+export interface BomComponentLine {
+  line_no: number
+  component: { id: string; code: string; name: string; uom_code: string; product_type: T.ProductType }
+  quantity: number
+  unit_cost: number
+  line_cost: number
+}
+
+export interface BomDetail {
+  product: { id: string; code: string; name: string; uom_code: string; is_active: boolean; standard_cost: number }
+  bom: { id: string; notes: string; is_active: boolean; created_at: string; updated_at: string } | null
+  lines: BomComponentLine[]
+  material_cost: number
+  /** Órdenes del producto planificadas, liberadas o en proceso. */
+  open_orders: number
+}
+
+export function bomDetail(db: DB, userId: string, companyId: string, productCode: string): BomDetail | null {
+  assertPerm(db, userId, companyId, 'bom.read')
+  const p = db.products.find(
+    (x) => x.company_id === companyId && x.code === productCode && x.product_type === 'PRODUCTO_TERMINADO',
+  )
+  if (!p) return null
+  const bom = db.boms.find((b) => b.product_id === p.id)
+  const lines = bom
+    ? bomLinesOf(db, bom.id).map((l) => {
+        const c = db.products.find((x) => x.id === l.component_id)!
+        const unitCost = plannedUnitCost(db, c, c.default_warehouse_id)
+        return {
+          line_no: l.line_no,
+          component: { id: c.id, code: c.code, name: c.name, uom_code: c.uom_code, product_type: c.product_type },
+          quantity: l.quantity,
+          unit_cost: unitCost,
+          line_cost: round2(l.quantity * unitCost),
+        }
+      })
+    : []
+  return {
+    product: {
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      uom_code: p.uom_code,
+      is_active: p.is_active,
+      standard_cost: p.standard_cost,
+    },
+    bom: bom
+      ? {
+          id: bom.id,
+          notes: bom.notes,
+          is_active: bom.is_active,
+          created_at: bom.created_at,
+          updated_at: bom.updated_at,
+        }
+      : null,
+    lines,
+    material_cost: round2(lines.reduce((s, l) => s + l.line_cost, 0)),
+    open_orders: db.documents.filter(
+      (d) =>
+        d.doc_type === 'PRODUCTION_ORDER' &&
+        d.pd!.product_id === p.id &&
+        ['BORRADOR', 'LIBERADA', 'EN_PROCESO'].includes(d.status),
+    ).length,
+  }
+}
+
+/** Un producto que se puede fabricar: su lista activa, con lo disponible de cada material en cada depósito. */
+export interface ProducibleProduct {
+  id: string
+  code: string
+  name: string
+  uom_code: string
+  default_warehouse_id: string | null
+  components: {
+    component: { id: string; code: string; name: string; uom_code: string; default_warehouse_id: string | null }
+    quantity: number
+    stock: WarehouseAvailability[]
+  }[]
+}
+
+/** Lo que Producción puede planificar (para cargar la orden). */
+export function productionCatalog(db: DB, userId: string, companyId: string): ProducibleProduct[] {
+  assertPerm(db, userId, companyId, 'production_order.create')
+  return db.products
+    .filter((p) => p.company_id === companyId && p.is_active && activeBomOf(db, p.id))
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((p) => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      uom_code: p.uom_code,
+      default_warehouse_id: p.default_warehouse_id,
+      components: bomLinesOf(db, activeBomOf(db, p.id)!.id).map((l) => {
+        const c = db.products.find((x) => x.id === l.component_id)!
+        return {
+          component: {
+            id: c.id,
+            code: c.code,
+            name: c.name,
+            uom_code: c.uom_code,
+            default_warehouse_id: c.default_warehouse_id,
+          },
+          quantity: l.quantity,
+          stock: availabilityOf(db, companyId, c.id),
+        }
+      }),
+    }))
 }

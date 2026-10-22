@@ -53,6 +53,7 @@ const DOC_TYPES: DocType[] = [
   'SALES_INVOICE',
   'CUSTOMER_RECEIPT',
   'SALES_QUOTE',
+  'PRODUCTION_ORDER',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -217,6 +218,15 @@ describe('ventas', () => {
       await same(u, () => Q.listPriceLists(mock, userId(u), company), 'price_lists_list', [companyPg])
       for (const code of ['MAY', 'EMP', 'NO-EXISTE'])
         await same(u, () => Q.priceListDetail(mock, userId(u), company, code), 'price_list_detail', [companyPg, code])
+    }
+  })
+
+  it('producción: las listas de materiales, cada una con su costo y lo que se puede planificar', async () => {
+    for (const u of USERS) {
+      await same(u, () => Q.listBoms(mock, userId(u), company), 'boms_list', [companyPg])
+      for (const code of ['PT-001', 'PT-002', 'PT-003', 'PT-004', 'MP-001', 'NO-EXISTE'])
+        await same(u, () => Q.bomDetail(mock, userId(u), company, code), 'bom_detail', [companyPg, code])
+      await same(u, () => Q.productionCatalog(mock, userId(u), company), 'production_catalog', [companyPg])
     }
   })
 

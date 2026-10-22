@@ -18,6 +18,9 @@ export type {
   AccountRow,
   AgingKey,
   AvailableAction,
+  BomComponentLine,
+  BomDetail,
+  BomRow,
   CashFlow,
   CashFlowAccount,
   CashFlowConcept,
@@ -58,6 +61,8 @@ export type {
   PriceListDetail,
   PriceListProduct,
   PriceListRow,
+  ProducibleProduct,
+  ProductionOrderView,
   ProductDetail,
   ProductRow,
   QuoteView,
@@ -87,6 +92,7 @@ export type {
 export type {
   AccountInput,
   BankReconciliationInput,
+  BomInput,
   CustomerReceiptInput,
   ChangePasswordInput,
   CourseInput,
@@ -96,6 +102,8 @@ export type {
   JournalEntryInput,
   PaymentOrderInput,
   PriceListInput,
+  ProductionIssueInput,
+  ProductionOrderInput,
   PurchaseOrderInput,
   RequisitionInput,
   RfqInput,
@@ -222,6 +230,9 @@ const mockApi = {
     query((db, u) => Q.receiptCandidates(db, u, companyId, customerId)),
   priceLists: (companyId: string) => query((db, u) => Q.listPriceLists(db, u, companyId)),
   priceList: (companyId: string, code: string) => query((db, u) => Q.priceListDetail(db, u, companyId, code)),
+  boms: (companyId: string) => query((db, u) => Q.listBoms(db, u, companyId)),
+  bom: (companyId: string, productCode: string) => query((db, u) => Q.bomDetail(db, u, companyId, productCode)),
+  productionCatalog: (companyId: string) => query((db, u) => Q.productionCatalog(db, u, companyId)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -356,6 +367,18 @@ const mockCommands = {
   rejectSalesQuote: (docId: string, reason: string) => command((c) => E.cmdRejectSalesQuote(c, docId, reason)),
   expireSalesQuote: (docId: string) => command((c) => E.cmdExpireSalesQuote(c, docId)),
   cancelSalesQuote: (docId: string, reason: string) => command((c) => E.cmdCancelSalesQuote(c, docId, reason)),
+  saveBom: (companyId: string, input: E.BomInput) => command((c) => E.cmdSaveBom(c, companyId, input)),
+  setBomActive: (companyId: string, bomId: string, active: boolean) =>
+    command((c) => E.cmdSetBomActive(c, companyId, bomId, active)),
+  createProductionOrder: (companyId: string, input: E.ProductionOrderInput, release: boolean) =>
+    command((c) => E.cmdCreateProductionOrder(c, companyId, input, release)),
+  releaseProductionOrder: (docId: string) => command((c) => E.cmdReleaseProductionOrder(c, docId)),
+  issueProductionOrder: (docId: string, input: E.ProductionIssueInput) =>
+    command((c) => E.cmdIssueProductionOrder(c, docId, input)),
+  finishProductionOrder: (docId: string, quantity: number) =>
+    command((c) => E.cmdFinishProductionOrder(c, docId, quantity)),
+  cancelProductionOrder: (docId: string, reason: string) =>
+    command((c) => E.cmdCancelProductionOrder(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

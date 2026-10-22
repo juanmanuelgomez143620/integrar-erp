@@ -5,7 +5,8 @@
 // pestañas con el evento `storage`, simulando el tiempo real.
 
 import type * as T from '../domain/types'
-import { insertBasePostingRules, startAccounting } from './engine'
+import { DEMO_BOMS } from '../domain/boms'
+import { insertBasePostingRules, insertBoms, startAccounting } from './engine'
 import { buildSeed } from './seed'
 
 export interface DocumentSequence {
@@ -51,6 +52,9 @@ export interface DB {
   qtLines: T.SalesQuoteLine[]
   priceLists: T.PriceList[]
   priceListItems: T.PriceListItem[]
+  boms: T.Bom[]
+  bomLines: T.BomLine[]
+  prdLines: T.ProductionOrderLine[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -65,7 +69,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 11
+export const DB_VERSION = 12
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -115,6 +119,9 @@ const COLLECTIONS = [
   'qtLines',
   'priceLists',
   'priceListItems',
+  'boms',
+  'bomLines',
+  'prdLines',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -149,6 +156,9 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   qtLines: 11,
   priceLists: 11,
   priceListItems: 11,
+  boms: 12,
+  bomLines: 12,
+  prdLines: 12,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -247,6 +257,18 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.priceLists ??= []
     db.priceListItems ??= []
     for (const c of db.customers) c.price_list_id ??= null
+  },
+  // v11 → v12: listas de materiales y órdenes de producción (Fase 5a), con las reglas del
+  // consumo y de la producción terminada, y las listas de la demo en cada empresa que tenga esos productos.
+  11: (db) => {
+    db.boms ??= []
+    db.bomLines ??= []
+    db.prdLines ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      insertBasePostingRules(ctx, company.id)
+      insertBoms(ctx, company.id, DEMO_BOMS)
+    }
   },
 }
 

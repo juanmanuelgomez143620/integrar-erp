@@ -130,6 +130,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['sales_invoice_lines', mock.fvLines],
     ['customer_receipt_lines', mock.rcLines],
     ['sales_quote_lines', mock.qtLines],
+    ['production_order_lines', mock.prdLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -2576,6 +2577,242 @@ describe('paridad de comandos', () => {
     await reads('después de los presupuestos')
   })
 
+  it('producción: listas de materiales y órdenes (liberar, entregar, terminar y anular) con sus asientos', async () => {
+    const companyPg = pg(company)
+    const status = (id: string) => mock.documents.find((d) => d.id === id)!.status
+    const bomOf = (code: string) => mock.boms.find((b) => b.product_id === product(code).id)!
+    const bomInput = (code: string, lines: [string, number][], notes = '') => ({
+      product_id: product(code).id,
+      notes,
+      lines: lines.map(([c, quantity]) => ({ component_id: product(c).id, quantity })),
+    })
+    const saveBom = (label: string, username: string, input: ReturnType<typeof bomInput>) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveBom(c, company, input),
+        (b) =>
+          b.commands.saveBom(companyPg, {
+            ...input,
+            product_id: pg(input.product_id),
+            lines: input.lines.map((l) => ({ ...l, component_id: pg(l.component_id) })),
+          }),
+      )
+    const setBomActive = (label: string, code: string, active: boolean) =>
+      step(
+        label,
+        'produccion',
+        (c) => E.cmdSetBomActive(c, company, bomOf(code).id, active),
+        (b) => b.commands.setBomActive(companyPg, pg(bomOf(code).id), active),
+      )
+    const orderInput = (code: string, quantity: number, over: Partial<E.ProductionOrderInput> = {}) => {
+      const input: E.ProductionOrderInput = {
+        product_id: product(code).id,
+        quantity,
+        materials_warehouse_id: warehouse('DEP-MP'),
+        output_warehouse_id: warehouse('DEP-PT'),
+        due_date: addDays(todayAR(), 5),
+        notes: 'Para reponer el showroom',
+        ...over,
+      }
+      const known = (id: string) => (mock.warehouses.some((w) => w.id === id) ? pg(id) : id)
+      return {
+        input,
+        pgInput: {
+          ...input,
+          product_id: pg(input.product_id),
+          materials_warehouse_id: known(input.materials_warehouse_id),
+          output_warehouse_id: known(input.output_warehouse_id),
+        },
+      }
+    }
+    const createOrder = (label: string, username: string, o: ReturnType<typeof orderInput>, release: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateProductionOrder(c, company, o.input, release),
+        (b) => b.commands.createProductionOrder(companyPg, o.pgInput, release),
+      )
+    const createdOrder = (label: string, o: ReturnType<typeof orderInput>, release: boolean) =>
+      created(
+        label,
+        'produccion',
+        (c) => E.cmdCreateProductionOrder(c, company, o.input, release),
+        (b) => b.commands.createProductionOrder(companyPg, o.pgInput, release),
+      )
+    const issue = (
+      label: string,
+      username: string,
+      id: string,
+      quantity: (code: string, planned: number) => number,
+    ) => {
+      const lines = mock.prdLines
+        .filter((l) => l.document_id === id)
+        .sort((a, b) => a.line_no - b.line_no)
+        .map((l) => ({ line_id: l.id, quantity: quantity(codeOf(l.product_id), l.quantity_planned) }))
+      return step(
+        label,
+        username,
+        (c) => E.cmdIssueProductionOrder(c, id, { lines }),
+        (b) => b.commands.issueProductionOrder(pg(id), { lines: lines.map((l) => ({ ...l, line_id: pg(l.line_id) })) }),
+      )
+    }
+    const codeOf = (productId: string) => mock.products.find((p) => p.id === productId)!.code
+    const reads = async (label: string) => {
+      for (const username of ['produccion', 'deposito', 'contabilidad'])
+        await sameRead(
+          `listas de materiales ${label} (${username})`,
+          username,
+          (b) => b.api.boms(companyPg),
+          (u) => Q.listBoms(mock, u, company),
+        )
+      for (const code of ['PT-002', 'PT-004'])
+        await sameRead(
+          `lista de ${code} ${label}`,
+          'compras1',
+          (b) => b.api.bom(companyPg, code),
+          (u) => Q.bomDetail(mock, u, company, code),
+        )
+      await sameRead(
+        `lo que se puede fabricar ${label}`,
+        'produccion',
+        (b) => b.api.productionCatalog(companyPg),
+        (u) => Q.productionCatalog(mock, u, company),
+      )
+      await sameRead(
+        `stock ${label}`,
+        'deposito',
+        (b) => b.api.stock(companyPg),
+        (u) => Q.listStock(mock, u, company),
+      )
+    }
+
+    // Listas de materiales: controles, una modificación, una igual (no cambia nada) y una desactivada.
+    for (const [label, username, input] of [
+      ['Ventas no arma listas', 'ventas', bomInput('PT-004', [['MP-002', 60]])],
+      ['un producto que no es terminado', 'produccion', bomInput('MR-001', [['MP-001', 1]])],
+      ['un componente que no es materia prima ni insumo', 'produccion', bomInput('PT-004', [['PT-001', 1]])],
+      [
+        'un componente repetido',
+        'produccion',
+        bomInput('PT-004', [
+          ['MP-002', 1],
+          ['MP-002', 2],
+        ]),
+      ],
+      ['una cantidad en cero', 'produccion', bomInput('PT-004', [['MP-002', 0]])],
+      ['una cantidad con cuatro decimales', 'produccion', bomInput('PT-004', [['MP-002', 0.0005]])],
+      ['sin componentes', 'produccion', bomInput('PT-004', [])],
+    ] as const)
+      expect(await saveBom(label, username, input), label).toBeNull()
+    expect(
+      await saveBom(
+        'la cama con una placa entera',
+        'produccion',
+        bomInput(
+          'PT-004',
+          [
+            ['MP-002', 60],
+            ['MP-003', 30],
+            ['MP-006', 1],
+            ['IN-002', 1.5],
+          ],
+          'Base de fenólico entera',
+        ),
+      ),
+    ).not.toBeNull()
+    const bed = mock.bomLines
+      .filter((l) => l.bom_id === bomOf('PT-004').id)
+      .sort((a, b) => a.line_no - b.line_no)
+      .map((l) => [codeOf(l.component_id), l.quantity] as [string, number])
+    expect(
+      await saveBom('la misma lista otra vez', 'produccion', bomInput('PT-004', bed, 'Base de fenólico entera')),
+    ).not.toBeNull()
+    expect(await setBomActive('desactivar la lista de la cama', 'PT-004', false)).not.toBeNull()
+    expect(await createOrder('una cama sin lista activa', 'produccion', orderInput('PT-004', 1), false)).toBeNull()
+    expect(await setBomActive('activarla de nuevo', 'PT-004', true)).not.toBeNull()
+    await reads('con la lista de la cama modificada')
+
+    // Órdenes: controles de la planificación.
+    for (const [label, username, o] of [
+      ['Ventas no planifica', 'ventas', orderInput('PT-002', 1)],
+      ['cantidad en cero', 'produccion', orderInput('PT-002', 0)],
+      ['cantidad con cuatro decimales', 'produccion', orderInput('PT-002', 1.0005)],
+      ['fecha prevista pasada', 'produccion', orderInput('PT-002', 1, { due_date: addDays(todayAR(), -1) })],
+      ['fecha que no existe', 'produccion', orderInput('PT-002', 1, { due_date: '2027-02-30' })],
+      [
+        'depósito de otra empresa',
+        'produccion',
+        orderInput('PT-002', 1, { materials_warehouse_id: crypto.randomUUID() }),
+      ],
+      ['una materia prima no se fabrica', 'produccion', orderInput('MP-001', 1)],
+    ] as const)
+      expect(await createOrder(label, username, o, false), label).toBeNull()
+
+    // Faltan placas: se planifica pero no se libera.
+    const placards = await createdOrder('diez placards', orderInput('PT-003', 10), false)
+    expect(
+      await step(
+        'liberarla sin placas',
+        'produccion',
+        (c) => E.cmdReleaseProductionOrder(c, placards),
+        (b) => b.commands.releaseProductionOrder(pg(placards)),
+      ),
+    ).toBeNull()
+    expect(status(placards)).toBe('BORRADOR')
+
+    // Una mesa: liberar, entregar (con dos pies de tabla de más) y terminar.
+    const table = await createdOrder('una mesa, liberada al crearla', orderInput('PT-001', 1), true)
+    expect(status(table)).toBe('LIBERADA')
+    expect(await issue('Producción no entrega materiales', 'produccion', table, (_c, q) => q)).toBeNull()
+    expect(await issue('sin cantidades', 'deposito', table, () => 0)).toBeNull()
+    expect(await issue('una cantidad negativa', 'deposito', table, () => -1)).toBeNull()
+    expect(await issue('más de lo que hay', 'deposito', table, (_c, q) => q * 1000)).toBeNull()
+    expect(
+      await step(
+        'un material que no es de la orden',
+        'deposito',
+        (c) => E.cmdIssueProductionOrder(c, table, { lines: [{ line_id: crypto.randomUUID(), quantity: 1 }] }),
+        (b) => b.commands.issueProductionOrder(pg(table), { lines: [{ line_id: crypto.randomUUID(), quantity: 1 }] }),
+      ),
+    ).toBeNull()
+    expect(
+      await issue('Depósito entrega con dos pies de tabla de más', 'deposito', table, (c, q) =>
+        c === 'MP-001' ? q + 2 : q,
+      ),
+    ).not.toBeNull()
+    expect(status(table)).toBe('EN_PROCESO')
+    const finish = (label: string, username: string, id: string, quantity: number) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdFinishProductionOrder(c, id, quantity),
+        (b) => b.commands.finishProductionOrder(pg(id), quantity),
+      )
+    expect(await finish('Depósito no la termina', 'deposito', table, 1)).toBeNull()
+    expect(await finish('más de lo planificado', 'produccion', table, 2)).toBeNull()
+    expect(await finish('cero unidades', 'produccion', table, 0)).toBeNull()
+    expect(await finish('terminarla', 'produccion', table, 1)).not.toBeNull()
+    expect(status(table)).toBe('TERMINADA')
+    const cancel = (label: string, id: string, reason: string) =>
+      step(
+        label,
+        'produccion',
+        (c) => E.cmdCancelProductionOrder(c, id, reason),
+        (b) => b.commands.cancelProductionOrder(pg(id), reason),
+      )
+    expect(await cancel('una terminada no se anula', table, 'Me equivoqué')).toBeNull()
+
+    // Anular: la planificada sin motivo no; con motivo sí. La de la demo, entregada y anulada.
+    expect(await cancel('sin motivo', placards, '')).toBeNull()
+    expect(await cancel('los placards', placards, 'Se compran hechos')).not.toBeNull()
+    const demo = mock.documents.find((d) => d.company_id === company && d.display_number === 'OPR-00001')!.id
+    expect(await issue('entregar los materiales de la demo', 'deposito', demo, (_c, q) => q)).not.toBeNull()
+    expect(await cancel('anularla con devolución', demo, 'Se rompió la sierra')).not.toBeNull()
+    expect(status(demo)).toBe('ANULADA')
+    await reads('después de las órdenes')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -2595,6 +2832,7 @@ describe('paridad de comandos', () => {
       'SALES_INVOICE',
       'CUSTOMER_RECEIPT',
       'SALES_QUOTE',
+      'PRODUCTION_ORDER',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

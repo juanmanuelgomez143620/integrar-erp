@@ -98,6 +98,10 @@ async function snapshot(company: string) {
     'price_list_items',
     'sales_quotes',
     'sales_quote_lines',
+    'boms',
+    'bom_lines',
+    'production_orders',
+    'production_order_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -143,7 +147,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                                 ? B.customerReceipt
                                 : fn.startsWith('pre_')
                                   ? B.salesQuote
-                                  : B.order
+                                  : fn.startsWith('opr_')
+                                    ? B.productionOrder
+                                    : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -173,6 +179,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         amount: 1,
         rfq_line_id: B.rfqLine,
         so_line_id: B.salesLine,
+        component_id: B.product,
+        line_id: B.productionLine,
       },
       { account_id: B.account, debit: 0, credit: 1 },
     ],
@@ -208,6 +216,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     copy_from: B.priceList,
     percent: 5,
     price_list_id: B.priceList,
+    quantity: 1,
+    materials_warehouse_id: B.warehouse,
+    output_warehouse_id: B.warehouse,
   }
   const values: Record<string, unknown> = {
     p_company_id: company,
@@ -255,6 +266,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_product_id: B.product,
     p_price: 1,
     p_percent: 5,
+    p_bom_id: B.bom,
+    p_quantity: 1,
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {
@@ -571,6 +584,32 @@ beforeAll(async () => {
     })
   ).id
 
+  // Una orden de producción de B, liberada (las listas de materiales vienen de la plantilla).
+  B.bom = (await one(`select id from public.boms where company_id = $1 order by created_at limit 1`, [B.id])).id
+  B.productionOrder = (
+    await rpc<{ id: string }>('docenteB', 'opr_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        product_id: (await one(`select id from public.products where company_id = $1 and code = 'PT-002'`, [B.id])).id,
+        quantity: 1,
+        materials_warehouse_id: (
+          await one(`select id from public.warehouses where company_id = $1 and code = 'DEP-MP'`, [B.id])
+        ).id,
+        output_warehouse_id: (
+          await one(`select id from public.warehouses where company_id = $1 and code = 'DEP-PT'`, [B.id])
+        ).id,
+        due_date: null,
+        notes: '',
+      }),
+      p_release: true,
+    })
+  ).id
+  B.productionLine = (
+    await one(`select id from public.production_order_lines where document_id = $1 order by line_no limit 1`, [
+      B.productionOrder,
+    ])
+  ).id
+
   bIds = new Set(
     (
       await db.admin<{ id: string }>(
@@ -604,6 +643,9 @@ beforeAll(async () => {
          union select id::text from public.price_lists where company_id = $1
          union select id::text from public.price_list_items where company_id = $1
          union select id::text from public.sales_quote_lines where company_id = $1
+         union select id::text from public.boms where company_id = $1
+         union select id::text from public.bom_lines where company_id = $1
+         union select id::text from public.production_order_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

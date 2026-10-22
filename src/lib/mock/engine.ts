@@ -6,6 +6,7 @@
 import {
   ACTION_VERBS,
   ADJUSTMENT_REASONS,
+  BOM_COMPONENT_TYPES,
   DOC_STATUSES,
   DOC_TYPES,
   MODULES,
@@ -3660,8 +3661,26 @@ export function onHandQuantity(db: DB, productId: string, warehouseId: string) {
   return db.stockBalances.find((b) => b.product_id === productId && b.warehouse_id === warehouseId)?.qty_on_hand ?? 0
 }
 
-/** Lo reservado de un producto en un depósito: lo que les falta entregar a los pedidos en curso (salvo uno). */
+/**
+ * Lo reservado de un producto en un depósito (salvo para un documento): lo que
+ * les falta entregar a los pedidos de venta en curso y los materiales de las
+ * órdenes de producción liberadas.
+ */
 export function reservedQuantity(db: DB, productId: string, warehouseId: string, exceptDocId?: string) {
+  const productionOrders = new Set(
+    db.documents
+      .filter(
+        (d) =>
+          d.doc_type === 'PRODUCTION_ORDER' &&
+          d.status === 'LIBERADA' &&
+          d.pd!.materials_warehouse_id === warehouseId &&
+          d.id !== exceptDocId,
+      )
+      .map((d) => d.id),
+  )
+  const forProduction = db.prdLines
+    .filter((l) => l.product_id === productId && productionOrders.has(l.document_id))
+    .reduce((s, l) => s + l.quantity_planned, 0)
   const orders = new Set(
     db.documents
       .filter(
@@ -3676,7 +3695,7 @@ export function reservedQuantity(db: DB, productId: string, warehouseId: string,
   return round3(
     db.soLines
       .filter((l) => l.product_id === productId && orders.has(l.document_id))
-      .reduce((s, l) => s + Math.max(l.quantity - l.qty_delivered, 0), 0),
+      .reduce((s, l) => s + Math.max(l.quantity - l.qty_delivered, 0), 0) + forProduction,
   )
 }
 
@@ -5155,6 +5174,528 @@ export function cmdCancelSalesQuote(ctx: Ctx, docId: string, reason: string) {
   transition(ctx, getDoc(ctx.db, docId, 'SALES_QUOTE'), 'CANCEL', { comment: reason })
 }
 
+// ============================================================ Listas de materiales (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2)
+
+export interface BomInput {
+  product_id: string
+  notes: string
+  /** Cuánto lleva cada unidad del producto terminado. */
+  lines: { component_id: string; quantity: number }[]
+}
+
+export const bomLinesOf = (db: DB, bomId: string) =>
+  db.bomLines.filter((l) => l.bom_id === bomId).sort((a, b) => a.line_no - b.line_no)
+
+/** La lista de materiales activa de un producto (si tiene). */
+export const activeBomOf = (db: DB, productId: string) => db.boms.find((b) => b.product_id === productId && b.is_active)
+
+const componentsLabel = (n: number) => `${n} ${n === 1 ? 'componente' : 'componentes'}`
+
+/**
+ * El costo de un material para planificar: su costo promedio en el depósito
+ * o, si todavía no hay stock con costo, su costo estándar.
+ */
+export function plannedUnitCost(db: DB, product: T.Product, warehouseId: string | null) {
+  const balance = db.stockBalances.find((b) => b.product_id === product.id && b.warehouse_id === warehouseId)
+  return balance?.avg_unit_cost || product.standard_cost
+}
+
+/**
+ * Crea o reemplaza la lista de materiales de un producto terminado. Las
+ * órdenes ya cargadas no cambian: cada una guarda su copia.
+ */
+export function cmdSaveBom(ctx: Ctx, companyId: string, input: BomInput) {
+  const { db } = ctx
+  // El permiso se controla antes de mirar el producto (crear o modificar, según tenga lista).
+  const existing = db.boms.find((b) => b.company_id === companyId && b.product_id === input.product_id)
+  const actor = requirePermission(ctx, companyId, existing ? 'bom.update' : 'bom.create')
+  const product = getProduct(db, companyId, input.product_id)
+  if (product.product_type !== 'PRODUCTO_TERMINADO')
+    fail(
+      'DATO_INVALIDO',
+      `${product.code} es ${PRODUCT_TYPES[product.product_type].toLowerCase()}: sólo los productos terminados tienen lista de materiales.`,
+    )
+  if (!product.is_active) fail('DATO_INVALIDO', `${productLabel(product)} está inactivo.`)
+  const notes = input.notes.trim()
+  if (notes.length > 300) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 300 caracteres.')
+  const seen = new Set<string>()
+  const lines = input.lines
+    .filter((l) => l.component_id)
+    .map((l) => {
+      const c = getProduct(db, companyId, l.component_id)
+      if (!BOM_COMPONENT_TYPES.includes(c.product_type))
+        fail(
+          'DATO_INVALIDO',
+          `${c.code} es ${PRODUCT_TYPES[c.product_type].toLowerCase()}: no va en una lista de materiales.`,
+          'Los componentes son materias primas e insumos.',
+        )
+      if (!c.is_active) fail('DATO_INVALIDO', `${productLabel(c)} está inactivo.`)
+      if (seen.has(c.id)) fail('DATO_INVALIDO', `${c.code} está dos veces: sumá las cantidades en un solo componente.`)
+      seen.add(c.id)
+      if (!Number.isFinite(l.quantity) || !(l.quantity > 0) || round3(l.quantity) !== l.quantity || l.quantity >= 1e6)
+        fail('DATO_INVALIDO', `La cantidad de ${c.code} por unidad debe ser mayor que cero y tener hasta 3 decimales.`)
+      return { component: c, quantity: l.quantity }
+    })
+  if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un componente.')
+  if (existing) {
+    const before = bomLinesOf(db, existing.id)
+    const same =
+      existing.notes === notes &&
+      before.length === lines.length &&
+      before.every((l, i) => l.component_id === lines[i].component.id && l.quantity === lines[i].quantity)
+    if (same) return { id: existing.id }
+    db.bomLines = db.bomLines.filter((l) => l.bom_id !== existing.id)
+    Object.assign(existing, { notes, updated_at: ctx.now, updated_by: ctx.userId })
+  }
+  const bom: T.Bom = existing ?? {
+    id: uid(),
+    company_id: companyId,
+    product_id: product.id,
+    notes,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  if (!existing) db.boms.push(bom)
+  lines.forEach((l, i) =>
+    db.bomLines.push({
+      id: uid(),
+      company_id: companyId,
+      bom_id: bom.id,
+      line_no: i + 1,
+      component_id: l.component.id,
+      quantity: l.quantity,
+    }),
+  )
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: existing ? 'UPDATE' : 'CREATE',
+    entity_type: 'bom',
+    entity_id: bom.id,
+    entity_label: `Lista de materiales de ${product.code}`,
+    summary: `${existing ? 'Modificó' : 'Creó'} la lista de materiales de ${productLabel(product)} (${componentsLabel(lines.length)})`,
+  })
+  return { id: bom.id }
+}
+
+/**
+ * Carga listas de materiales por código de producto (las de la demo): sólo
+ * para los productos terminados que existen y todavía no tienen, y si todos
+ * sus componentes existen y son materias primas o insumos.
+ */
+export function insertBoms(ctx: Ctx, companyId: string, boms: { product: string; components: [string, number][] }[]) {
+  const { db } = ctx
+  const byCode = (code: string) => db.products.find((p) => p.company_id === companyId && p.code === code)
+  for (const row of boms) {
+    const product = byCode(row.product)
+    if (!product || product.product_type !== 'PRODUCTO_TERMINADO' || db.boms.some((b) => b.product_id === product.id))
+      continue
+    const parts = row.components.map(([code, quantity]) => ({ component: byCode(code), quantity }))
+    if (parts.some((p) => !p.component || !BOM_COMPONENT_TYPES.includes(p.component.product_type))) continue
+    const bom: T.Bom = {
+      id: uid(),
+      company_id: companyId,
+      product_id: product.id,
+      notes: '',
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    }
+    db.boms.push(bom)
+    parts.forEach((p, i) =>
+      db.bomLines.push({
+        id: uid(),
+        company_id: companyId,
+        bom_id: bom.id,
+        line_no: i + 1,
+        component_id: p.component!.id,
+        quantity: p.quantity,
+      }),
+    )
+  }
+}
+
+/** Una lista desactivada no se usa para planificar órdenes nuevas. */
+export function cmdSetBomActive(ctx: Ctx, companyId: string, bomId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bom.update')
+  const bom = db.boms.find((b) => b.id === bomId && b.company_id === companyId)
+  if (!bom) fail('DATO_INVALIDO', 'La lista de materiales no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si la lista está activa.')
+  if (bom.is_active === active) return
+  const product = getProduct(db, companyId, bom.product_id)
+  Object.assign(bom, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'bom',
+    entity_id: bom.id,
+    entity_label: `Lista de materiales de ${product.code}`,
+    summary: `${active ? 'Activó' : 'Desactivó'} la lista de materiales de ${productLabel(product)}`,
+  })
+}
+
+// ============================================================ Órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §3)
+
+export interface ProductionOrderInput {
+  product_id: string
+  /** Unidades a fabricar. */
+  quantity: number
+  materials_warehouse_id: string
+  output_warehouse_id: string
+  due_date: string | null
+  notes: string
+}
+
+export const productionOrderLines = (db: DB, docId: string) =>
+  db.prdLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/**
+ * Producción planifica la orden: copia la lista de materiales activa del
+ * producto (consumo previsto = cantidad por unidad × unidades) con el costo de
+ * cada material en ese momento.
+ */
+export function cmdCreateProductionOrder(ctx: Ctx, companyId: string, input: ProductionOrderInput, release: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'production_order.create')
+  const company = getCompany(db, companyId)
+  const product = getProduct(db, companyId, input.product_id)
+  if (!product.is_active) fail('DATO_INVALIDO', `${productLabel(product)} está inactivo.`)
+  const bom = activeBomOf(db, product.id)
+  if (!bom)
+    fail(
+      'DATO_INVALIDO',
+      `${product.code} no tiene una lista de materiales activa.`,
+      'Producción la arma en Producción → Listas de materiales.',
+    )
+  if (
+    !Number.isFinite(input.quantity) ||
+    !(input.quantity > 0) ||
+    round3(input.quantity) !== input.quantity ||
+    input.quantity >= 1e6
+  )
+    fail('DATO_INVALIDO', 'La cantidad a fabricar debe ser mayor que cero y tener hasta 3 decimales.')
+  const ownWarehouse = (id: string) => db.warehouses.some((w) => w.id === id && w.company_id === companyId)
+  if (!ownWarehouse(input.materials_warehouse_id))
+    fail('DATO_INVALIDO', 'Elegí el depósito del que salen los materiales.')
+  if (!ownWarehouse(input.output_warehouse_id))
+    fail('DATO_INVALIDO', 'Elegí el depósito al que entra el producto terminado.')
+  if (input.due_date !== null) {
+    if (!isIsoDate(input.due_date)) fail('DATO_INVALIDO', 'La fecha prevista de terminación no es válida.')
+    if (input.due_date < businessDate(company))
+      fail('DATO_INVALIDO', 'La fecha prevista de terminación no puede ser anterior a hoy.')
+  }
+  const notes = input.notes.trim()
+  if (notes.length > 500) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 500 caracteres.')
+  const lines = bomLinesOf(db, bom.id).map((l) => {
+    const c = getProduct(db, companyId, l.component_id)
+    const planned = round3(l.quantity * input.quantity)
+    if (!(planned > 0)) fail('DATO_INVALIDO', `Con esa cantidad, ${c.code} quedaría en cero: fabricá más unidades.`)
+    return { component: c, planned, cost: plannedUnitCost(db, c, input.materials_warehouse_id) }
+  })
+  const doc = newDocument(ctx, companyId, 'PRODUCTION_ORDER', actor, {
+    notes,
+    pd: {
+      product_id: product.id,
+      quantity: input.quantity,
+      materials_warehouse_id: input.materials_warehouse_id,
+      output_warehouse_id: input.output_warehouse_id,
+      due_date: input.due_date,
+      quantity_produced: null,
+      unit_cost: null,
+      released_at: null,
+      issued_at: null,
+      finished_at: null,
+    },
+  })
+  lines.forEach((l, i) =>
+    db.prdLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      product_id: l.component.id,
+      quantity_planned: l.planned,
+      planned_unit_cost: l.cost,
+      quantity_issued: 0,
+      unit_cost: 0,
+    }),
+  )
+  // El costo previsto de los materiales.
+  doc.subtotal = round2(lines.reduce((s, l) => s + round2(l.planned * l.cost), 0))
+  doc.total = doc.subtotal
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'production_order',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: ${fmtQty(input.quantity, product.uom_code)} de ${productLabel(product)}`,
+  })
+  if (release) releaseProductionOrder(ctx, doc)
+  else openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Un material que no alcanza para liberar la orden. */
+export interface ProductionShortage {
+  product: T.Product
+  needed: number
+  on_hand: number
+  reserved: number
+  available: number
+}
+
+/**
+ * Lo que no alcanza de cada material en el depósito de la orden (vacío si
+ * alcanza todo o si la empresa permite el stock negativo).
+ */
+export function productionShortages(db: DB, doc: T.Document): ProductionShortage[] {
+  if (getCompany(db, doc.company_id).settings.allow_negative_stock) return []
+  const warehouseId = doc.pd!.materials_warehouse_id
+  return productionOrderLines(db, doc.id).flatMap((l) => {
+    const product = db.products.find((p) => p.id === l.product_id)!
+    const onHand = onHandQuantity(db, product.id, warehouseId)
+    const reserved = reservedQuantity(db, product.id, warehouseId, doc.id)
+    const available = round3(onHand - reserved)
+    return l.quantity_planned > available + EPS
+      ? [{ product, needed: l.quantity_planned, on_hand: onHand, reserved, available }]
+      : []
+  })
+}
+
+export const shortageText = (s: ProductionShortage) =>
+  `${s.product.code} necesita ${fmtQty(s.needed, s.product.uom_code)} y hay ${fmtQty(Math.max(s.available, 0), s.product.uom_code)} disponibles` +
+  (s.reserved > 0
+    ? ` (${fmtQty(s.on_hand, s.product.uom_code)} en el depósito y ${fmtQty(s.reserved, s.product.uom_code)} reservados para otras órdenes)`
+    : '')
+
+/** Liberar: si alcanzan los materiales, la orden los reserva y Depósito recibe la tarea de entregarlos. */
+function releaseProductionOrder(ctx: Ctx, doc: T.Document) {
+  const { db } = ctx
+  requireTransition(doc, 'RELEASE')
+  const shortages = productionShortages(db, doc)
+  if (shortages.length)
+    fail(
+      'STOCK_INSUFICIENTE',
+      `No alcanzan los materiales de ${doc.display_number}: ${shortages.map(shortageText).join('; ')}.`,
+      'Pedí lo que falta a Compras (o fabricá menos unidades) y liberala cuando llegue.',
+    )
+  const product = getProduct(db, doc.company_id, doc.pd!.product_id)
+  transition(ctx, doc, 'RELEASE', {
+    summary: `Liberó ${doc.display_number}: reservó los materiales para ${fmtQty(doc.pd!.quantity, product.uom_code)} de ${product.code}`,
+  })
+  doc.pd = { ...doc.pd!, released_at: ctx.now }
+}
+
+export function cmdReleaseProductionOrder(ctx: Ctx, docId: string) {
+  const doc = getDoc(ctx.db, docId, 'PRODUCTION_ORDER')
+  requirePermission(ctx, doc.company_id, 'production_order.create')
+  releaseProductionOrder(ctx, doc)
+}
+
+export interface ProductionIssueInput {
+  /** Lo que sale de cada material de la orden (por defecto, lo previsto). */
+  lines: { line_id: string; quantity: number }[]
+}
+
+/**
+ * Depósito entrega los materiales: lo que realmente sale de cada uno (puede
+ * ser más o menos de lo previsto). El stock baja al costo promedio, la reserva
+ * se libera y el consumo pasa a productos en proceso (asiento CONSUMO_PRODUCCION).
+ */
+export function cmdIssueProductionOrder(ctx: Ctx, docId: string, input: ProductionIssueInput) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PRODUCTION_ORDER')
+  requireTransition(doc, 'ISSUE')
+  requirePermission(ctx, doc.company_id, 'production_order.issue')
+  const lines = productionOrderLines(db, doc.id)
+  const issued = new Map<string, number>()
+  for (const l of input.lines) {
+    const line = lines.find((x) => x.id === l.line_id)
+    if (!line) fail('DATO_INVALIDO', 'Uno de los materiales no es de la orden.')
+    if (issued.has(line.id)) fail('DATO_INVALIDO', 'Un material está dos veces: indicá una sola cantidad.')
+    if (!Number.isFinite(l.quantity) || l.quantity < 0 || round3(l.quantity) !== l.quantity || l.quantity >= 1e6)
+      fail(
+        'DATO_INVALIDO',
+        'Las cantidades que se entregan deben ser números mayores o iguales que cero (hasta 3 decimales).',
+      )
+    issued.set(line.id, l.quantity)
+  }
+  if (![...issued.values()].some((q) => q > 0)) fail('DATO_INVALIDO', 'Indicá lo que sale de al menos un material.')
+  const company = getCompany(db, doc.company_id)
+  const warehouse = db.warehouses.find((w) => w.id === doc.pd!.materials_warehouse_id)!
+  for (const line of company.settings.allow_negative_stock ? [] : lines) {
+    const quantity = issued.get(line.id) ?? 0
+    if (!(quantity > 0)) continue
+    const p = getProduct(db, doc.company_id, line.product_id)
+    const onHand = onHandQuantity(db, p.id, warehouse.id)
+    const reserved = reservedQuantity(db, p.id, warehouse.id, doc.id)
+    if (quantity > round3(onHand - reserved) + EPS)
+      fail(
+        'STOCK_INSUFICIENTE',
+        `${p.code}: hay ${fmtQty(onHand, p.uom_code)} en ${warehouse.name}${reserved > 0 ? ` y ${fmtQty(reserved, p.uom_code)} están reservados para otras órdenes` : ''}: no alcanza para entregar ${fmtQty(quantity, p.uom_code)}.`,
+      )
+  }
+  const product = getProduct(db, doc.company_id, doc.pd!.product_id)
+  const actor = transition(ctx, doc, 'ISSUE', {
+    summary: `Entregó los materiales de ${doc.display_number} para ${fmtQty(doc.pd!.quantity, product.uom_code)} de ${product.code}`,
+  })
+  const costByType = new Map<T.ProductType, number>()
+  for (const line of lines) {
+    const quantity = issued.get(line.id) ?? 0
+    if (!(quantity > 0)) continue
+    const p = getProduct(db, doc.company_id, line.product_id)
+    postMovement(ctx, {
+      company_id: doc.company_id,
+      product_id: p.id,
+      warehouse_id: warehouse.id,
+      type: 'CONSUMO_PRODUCCION',
+      quantity: -quantity,
+      document_id: doc.id,
+      document_line_id: line.id,
+      date: businessDate(company),
+    })
+    const movement = db.stockMovements[db.stockMovements.length - 1]
+    line.quantity_issued = quantity
+    line.unit_cost = movement.unit_cost
+    costByType.set(p.product_type, round2((costByType.get(p.product_type) ?? 0) - movement.total_cost))
+  }
+  doc.pd = { ...doc.pd!, issued_at: ctx.now }
+  const types = BOM_COMPONENT_TYPES.filter((t) => (costByType.get(t) ?? 0) > 0)
+  const total = round2(types.reduce((s, t) => s + costByType.get(t)!, 0))
+  if (total > 0)
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'CONSUMO_PRODUCCION',
+      `Consumo de materiales de ${doc.display_number} (${fmtQty(doc.pd.quantity, product.uom_code)} de ${productLabel(product)}).`,
+      [
+        { key: 'PRODUCCION_EN_PROCESO', debit: total, credit: 0 },
+        ...types.map((t) => ({ key: t, debit: 0, credit: costByType.get(t)! })),
+      ],
+    )
+}
+
+/** El costo de los materiales que se entregaron para una orden. */
+export const productionMaterialCost = (db: DB, docId: string) =>
+  round2(productionOrderLines(db, docId).reduce((s, l) => s + round2(l.quantity_issued * l.unit_cost), 0))
+
+/**
+ * Producción termina la orden: las unidades que salieron bien entran al stock
+ * a su costo real (lo consumido dividido las unidades terminadas) y el costo
+ * pasa de productos en proceso a productos terminados.
+ */
+export function cmdFinishProductionOrder(ctx: Ctx, docId: string, quantity: number) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PRODUCTION_ORDER')
+  requireTransition(doc, 'FINISH')
+  requirePermission(ctx, doc.company_id, 'production_order.create')
+  const product = getProduct(db, doc.company_id, doc.pd!.product_id)
+  if (!Number.isFinite(quantity) || !(quantity > 0) || round3(quantity) !== quantity)
+    fail('DATO_INVALIDO', 'Indicá las unidades que salieron bien: más de cero, con hasta 3 decimales.')
+  if (quantity > doc.pd!.quantity + EPS)
+    fail(
+      'DATO_INVALIDO',
+      `Se planificaron ${fmtQty(doc.pd!.quantity, product.uom_code)}: no pueden salir más.`,
+      'Si se fabricó de más, Producción carga otra orden.',
+    )
+  const company = getCompany(db, doc.company_id)
+  const warehouse = db.warehouses.find((w) => w.id === doc.pd!.output_warehouse_id)!
+  const total = productionMaterialCost(db, doc.id)
+  const unitCost = round4(total / quantity)
+  const actor = transition(ctx, doc, 'FINISH', {
+    summary: `Terminó ${doc.display_number}: ingresaron ${fmtQty(quantity, product.uom_code)} de ${product.code} a ${money(unitCost)} por unidad`,
+  })
+  postMovement(ctx, {
+    company_id: doc.company_id,
+    product_id: product.id,
+    warehouse_id: warehouse.id,
+    type: 'INGRESO_PRODUCCION',
+    quantity,
+    unit_cost: unitCost,
+    document_id: doc.id,
+    document_line_id: null,
+    date: businessDate(company),
+  })
+  doc.pd = { ...doc.pd!, quantity_produced: quantity, unit_cost: unitCost, finished_at: ctx.now }
+  if (total > 0)
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'PRODUCCION_TERMINADA',
+      `Producción terminada de ${doc.display_number}: ${fmtQty(quantity, product.uom_code)} de ${productLabel(product)}.`,
+      [
+        { key: 'PRODUCTO_TERMINADO', debit: total, credit: 0 },
+        { key: 'PRODUCCION_EN_PROCESO', debit: 0, credit: total },
+      ],
+    )
+  notifyRoles(
+    ctx,
+    doc.company_id,
+    ['VENTAS'],
+    {
+      type: 'PRODUCCION_TERMINADA',
+      title: `Ingresaron ${fmtQty(quantity, product.uom_code)} de ${product.code}`,
+      body: `Producción terminó ${doc.display_number}: ${productLabel(product)} en ${warehouse.name}.`,
+      link_path: docPath(db, doc),
+      document_id: doc.id,
+    },
+    actor.user_id,
+  )
+}
+
+/**
+ * La planificada o la liberada se anulan sin más (se libera la reserva). La
+ * que está en proceso devuelve los materiales al depósito al costo con que
+ * salieron, con el contraasiento del consumo. Una terminada no se anula.
+ */
+export function cmdCancelProductionOrder(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PRODUCTION_ORDER')
+  if (doc.status !== 'EN_PROCESO') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'production_order.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const company = getCompany(db, doc.company_id)
+  const warehouse = db.warehouses.find((w) => w.id === doc.pd!.materials_warehouse_id)!
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}: los materiales volvieron a ${warehouse.name}${reversal ? ` y el contraasiento ${reversal.display_number} revirtió el consumo` : ''} — ${comment}`,
+  })
+  for (const line of productionOrderLines(db, doc.id)) {
+    if (!(line.quantity_issued > 0)) continue
+    postMovement(ctx, {
+      company_id: doc.company_id,
+      product_id: line.product_id,
+      warehouse_id: warehouse.id,
+      type: 'DEVOLUCION_PRODUCCION',
+      quantity: line.quantity_issued,
+      unit_cost: line.unit_cost,
+      document_id: doc.id,
+      document_line_id: line.id,
+      date: businessDate(company),
+    })
+  }
+}
+
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
@@ -5626,7 +6167,7 @@ function uniqueSlug(db: DB, base: string) {
  * Crea la empresa de un curso a partir de la plantilla (H-20, DATABASE.md §12).
  * Copia la estructura (islas, sectores, depósitos, reglas de aprobación,
  * módulos y control interno), los maestros (proveedores, clientes,
- * productos) y el plan de cuentas; no copia personas ni operaciones, así que
+ * productos y listas de materiales) y el plan de cuentas; no copia personas ni operaciones, así que
  * la numeración de documentos empieza en 1. Vuelve a cargar el inventario
  * inicial con su documento (y sus alertas de stock mínimo), abre el ejercicio
  * con su asiento de apertura y deja como supervisor al docente que la crea.
@@ -5682,6 +6223,9 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
     default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,
     default_warehouse_id: p.default_warehouse_id ? (warehouseIds.get(p.default_warehouse_id) ?? null) : null,
   }))
+  // Las listas de materiales, con los productos de la empresa nueva.
+  const bomIds = copy(db.boms, (b) => ({ ...audited, product_id: productIds.get(b.product_id)! }))
+  copy(db.bomLines, (l) => ({ bom_id: bomIds.get(l.bom_id)!, component_id: productIds.get(l.component_id)! }))
   const accountIds = copy(db.accounts, () => audited)
   copy(db.postingRules, (r) => ({ account_id: accountIds.get(r.account_id)! }))
 

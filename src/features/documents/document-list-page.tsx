@@ -46,6 +46,11 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
     createPerm: 'customer_receipt.create',
   },
   SALES_QUOTE: { area: 'Ventas', newLabel: 'Nuevo presupuesto', createPerm: 'sales_quote.create' },
+  PRODUCTION_ORDER: {
+    area: 'Producción',
+    newLabel: 'Nueva orden de producción',
+    createPerm: 'production_order.create',
+  },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const

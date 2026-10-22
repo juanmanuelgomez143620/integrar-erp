@@ -18,10 +18,19 @@ export type RoleCode =
   | 'DOCENTE'
 
 export type ModuleCode =
-  'core' | 'masters' | 'purchasing' | 'sales' | 'inventory' | 'payables' | 'accounting' | 'management' | 'audit'
+  | 'core'
+  | 'masters'
+  | 'purchasing'
+  | 'sales'
+  | 'inventory'
+  | 'production'
+  | 'payables'
+  | 'accounting'
+  | 'management'
+  | 'audit'
 
 export type PermissionAction =
-  'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award'
+  'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award' | 'issue'
 
 export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 'CONSUMIDOR_FINAL'
 
@@ -44,6 +53,7 @@ export type DocType =
   | 'SALES_INVOICE'
   | 'CUSTOMER_RECEIPT'
   | 'SALES_QUOTE'
+  | 'PRODUCTION_ORDER'
 
 /** Cómo se pagó una orden de pago o se cobró un recibo. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -60,6 +70,9 @@ export type TransitionAction =
   | 'CLOSE'
   | 'PAY'
   | 'AWARD'
+  | 'RELEASE'
+  | 'ISSUE'
+  | 'FINISH'
   | 'SYSTEM'
 
 export type Badge = 'neutral' | 'info' | 'warning' | 'success' | 'danger'
@@ -72,6 +85,9 @@ export type MovementType =
   | 'AJUSTE_NEGATIVO'
   | 'DESPACHO_VENTA'
   | 'ANULACION_DESPACHO'
+  | 'CONSUMO_PRODUCCION'
+  | 'DEVOLUCION_PRODUCCION'
+  | 'INGRESO_PRODUCCION'
 
 export type AdjustmentReason = 'INVENTARIO_INICIAL' | 'CONTEO_FISICO' | 'ROTURA' | 'CONSUMO_INTERNO' | 'OTRO'
 
@@ -231,6 +247,29 @@ export interface PriceListItem {
   price_list_id: string
   product_id: string
   unit_price: number
+}
+
+/**
+ * Lista de materiales de un producto terminado (tabla boms, una por producto):
+ * su fórmula. Las órdenes de producción guardan su propia copia.
+ */
+export interface Bom extends Audited {
+  id: string
+  company_id: string
+  product_id: string
+  notes: string
+  is_active: boolean
+}
+
+/** Un componente de la lista (tabla bom_lines): una materia prima o un insumo y cuánto lleva cada unidad. */
+export interface BomLine {
+  id: string
+  company_id: string
+  bom_id: string
+  line_no: number
+  component_id: string
+  /** Por unidad del producto terminado. */
+  quantity: number
 }
 
 export interface Supplier extends Partner {
@@ -424,6 +463,27 @@ export interface SalesQuoteHeader {
   customer_reference: string
 }
 
+/**
+ * Orden de producción (tabla production_orders, 1 a 1 con documents): qué se
+ * fabrica, cuánto, de qué depósito salen los materiales y a cuál entra el producto.
+ */
+export interface ProductionOrderHeader {
+  product_id: string
+  /** Unidades planificadas. */
+  quantity: number
+  materials_warehouse_id: string
+  output_warehouse_id: string
+  /** Fecha prevista de terminación (opcional). */
+  due_date: string | null
+  /** Unidades que salieron bien (al terminarla). */
+  quantity_produced: number | null
+  /** Costo real de cada unidad terminada. */
+  unit_cost: number | null
+  released_at: string | null
+  issued_at: string | null
+  finished_at: string | null
+}
+
 /** Recibo de cobro (tabla customer_receipts, 1 a 1 con documents): qué facturas de un cliente se cobran y dónde ingresa el dinero. */
 export interface CustomerReceiptHeader {
   /** Caja o banco donde ingresa el dinero: los cheques de terceros, a Valores a depositar. */
@@ -449,6 +509,23 @@ export interface SalesQuoteLine {
   line_subtotal: number
   line_tax: number
   line_total: number
+}
+
+/** Un material de la orden de producción: lo previsto según la lista y lo que entregó Depósito. */
+export interface ProductionOrderLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  /** El componente (materia prima o insumo). */
+  product_id: string
+  quantity_planned: number
+  /** Costo promedio (o estándar) del material al planificar la orden. */
+  planned_unit_cost: number
+  /** Lo que entregó Depósito (0 hasta la entrega). */
+  quantity_issued: number
+  /** Costo promedio con que salió (0 hasta la entrega). */
+  unit_cost: number
 }
 
 /** Una factura (y cuánto de ella) que cancela un recibo de cobro. */
@@ -503,6 +580,7 @@ export interface Document extends Audited {
   fv?: SalesInvoiceHeader
   rc?: CustomerReceiptHeader
   qt?: SalesQuoteHeader
+  pd?: ProductionOrderHeader
 }
 
 export interface RequisitionLine {

@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 4c).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 5a).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261022120200_demo_template_cobros.sql'
+const target = process.argv[2] ?? '20261022140200_demo_template_produccion.sql'
 
 const server = await createServer({
   root,
@@ -39,6 +39,10 @@ const values = (rows, columns) => rows.map((r) => `      (${columns.map((c) => s
 try {
   const { buildSeed } = await server.ssrLoadModule('/src/lib/mock/seed.ts')
   const chart = await server.ssrLoadModule('/src/lib/domain/chart-of-accounts.ts')
+  const { DEMO_BOMS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
+  const bomRows = DEMO_BOMS.flatMap((b) =>
+    b.components.map(([component, quantity], i) => ({ product: b.product, line_no: i + 1, component, quantity })),
+  )
   const db = buildSeed()
   const accounts = chart.BASE_CHART.map(([code, name, description = '', contra = false]) => {
     const type = chart.accountTypeOf(code)
@@ -180,6 +184,54 @@ immutable
 set search_path = ''
 as $$ select ${sql(chart.TREASURY_RUBRO)}::text $$;
 
+-- ------------------------------------------------------------------ Listas de materiales de la demo (a validar)
+create or replace function private.demo_bom_rows()
+returns table (product text, line_no int, component text, quantity numeric)
+language sql
+immutable
+set search_path = ''
+as $$
+  select b.product::text, b.line_no::int, b.component::text, b.quantity::numeric
+    from (values
+${values(bomRows, ['product', 'line_no', 'component', 'quantity'])}
+    ) as b (product, line_no, component, quantity)
+$$;
+
+-- Carga las listas de la demo por código (insertBoms): sólo para los productos
+-- terminados que existen y todavía no tienen, y si todos sus componentes existen
+-- y son materias primas o insumos.
+create or replace function private.insert_demo_boms(p_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_product public.products;
+  v_bom uuid;
+begin
+  for v_product in
+    select p.* from public.products p
+     where p.company_id = p_company and p.product_type = 'PRODUCTO_TERMINADO'
+       and p.code in (select r.product from private.demo_bom_rows() r)
+       and not exists (select 1 from public.boms b where b.product_id = p.id)
+     order by p.code collate "C"
+  loop
+    continue when exists (
+      select 1 from private.demo_bom_rows() r
+       where r.product = v_product.code
+         and not exists (select 1 from public.products c
+                          where c.company_id = p_company and c.code = r.component
+                            and c.product_type in ('MATERIA_PRIMA', 'INSUMO')));
+    insert into public.boms (company_id, product_id) values (p_company, v_product.id) returning id into v_bom;
+    insert into public.bom_lines (company_id, bom_id, line_no, component_id, quantity)
+    select p_company, v_bom, r.line_no, c.id, r.quantity
+      from private.demo_bom_rows() r join public.products c on c.company_id = p_company and c.code = r.component
+     where r.product = v_product.code;
+  end loop;
+end;
+$$;
+
 -- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()
 returns uuid
@@ -264,6 +316,9 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
     left join public.suppliers s on s.company_id = v_id and s.code = p.supplier_code
     left join public.warehouses w on w.company_id = v_id and w.code = p.warehouse_code;
 
+  -- Las listas de materiales de los muebles.
+  perform private.insert_demo_boms(v_id);
+
   -- Inventario inicial documentado (un ajuste por depósito), contabilidad con su
   -- asiento de apertura y alertas de arranque.
 ${stockBlocks}
@@ -278,7 +333,7 @@ $$;
   console.log(
     `${file}\n${sectors.length} sectores · ${warehouses.length} depósitos · ${suppliers.length} proveedores · ` +
       `${of(db.customers).length} clientes · ${products.length} productos · ${initial.length} ajustes de inventario inicial · ` +
-      `${accounts.length} cuentas`,
+      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales`,
   )
 } finally {
   await server.close()

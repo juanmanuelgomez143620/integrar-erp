@@ -4,6 +4,7 @@
 // Credenciales de prueba (sólo backend simulado local): todos los usuarios
 // demo usan la contraseña DEMO_PASSWORD.
 
+import { DEMO_BOMS } from '../domain/boms'
 import type * as T from '../domain/types'
 import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
@@ -14,6 +15,7 @@ import {
   cmdCreateGoodsReceipt,
   cmdCreateJournalEntry,
   cmdCreatePaymentOrder,
+  cmdCreateProductionOrder,
   cmdCreatePurchaseOrder,
   cmdCreateRequisition,
   cmdCreateRfq,
@@ -23,6 +25,7 @@ import {
   cmdCreateSupplierQuote,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
+  insertBoms,
   scanStockAlerts,
   startAccounting,
   type Ctx,
@@ -93,6 +96,9 @@ export function buildSeed(): DB {
     qtLines: [],
     priceLists: [],
     priceListItems: [],
+    boms: [],
+    bomLines: [],
+    prdLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],
@@ -419,6 +425,9 @@ export function buildSeed(): DB {
   // ------------------------------------------------------------ Contabilidad: plan de cuentas, ejercicio y apertura
   startAccounting(ctx(null, 290), companyId)
 
+  // ------------------------------------------------------------ Listas de materiales de los muebles (a validar)
+  insertBoms(ctx(null, 289), companyId, DEMO_BOMS)
+
   // ------------------------------------------------------------ Un circuito completo previo (historial de ejemplo)
   const sc = cmdCreateRequisition(
     ctx(users.produccion, 240),
@@ -642,6 +651,21 @@ export function buildSeed(): DB {
       customer_reference: '',
       notes: 'Pide que se entreguen juntas.',
       lines: [{ product_id: product['PT-001'].id, quantity: 2, unit_price: 520000 }],
+    },
+    true,
+  )
+
+  // Producción planificó diez sillas y liberó la orden: Depósito tiene que entregar los materiales.
+  cmdCreateProductionOrder(
+    ctx(users.produccion, 25.1),
+    companyId,
+    {
+      product_id: product['PT-002'].id,
+      quantity: 10,
+      materials_warehouse_id: whMP.id,
+      output_warehouse_id: whPT.id,
+      due_date: addDays(todayAR(), 5),
+      notes: '',
     },
     true,
   )

@@ -276,6 +276,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('receipt_candidates', { ...company(companyId), p_customer_id: customerId }),
     priceLists: (companyId) => rpc('price_lists_list', company(companyId)),
     priceList: (companyId, code) => rpc('price_list_detail', { ...company(companyId), p_code: code }),
+    boms: (companyId) => rpc('boms_list', company(companyId)),
+    bom: (companyId, productCode) => rpc('bom_detail', { ...company(companyId), p_code: productCode }),
+    productionCatalog: (companyId) => rpc('production_catalog', company(companyId)),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
     fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
     journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
@@ -395,6 +398,15 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     rejectSalesQuote: (docId, reason) => rpc('pre_reject', { ...doc(docId), p_reason: reason }),
     expireSalesQuote: (docId) => rpc('pre_expire', doc(docId)),
     cancelSalesQuote: (docId, reason) => rpc('pre_cancel', { ...doc(docId), p_reason: reason }),
+    saveBom: (companyId, input) => rpc('bom_save', { ...company(companyId), p_input: input }),
+    setBomActive: (companyId, bomId, active) =>
+      rpc('bom_set_active', { ...company(companyId), p_bom_id: bomId, p_active: active }),
+    createProductionOrder: (companyId, input, release) =>
+      rpc('opr_create', { ...company(companyId), p_input: input, p_release: release }),
+    releaseProductionOrder: (docId) => rpc('opr_release', doc(docId)),
+    issueProductionOrder: (docId, input) => rpc('opr_issue', { ...doc(docId), p_input: input }),
+    finishProductionOrder: (docId, quantity) => rpc('opr_finish', { ...doc(docId), p_quantity: quantity }),
+    cancelProductionOrder: (docId, reason) => rpc('opr_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

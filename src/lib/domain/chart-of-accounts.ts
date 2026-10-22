@@ -186,6 +186,11 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'VENTA', key: 'IVA_DEBITO', code: '2.1.04.01' },
   { event: 'VENTA', key: 'DEUDORES', code: '1.1.03.01' },
   { event: 'COBRO', key: 'DEUDORES', code: '1.1.03.01' },
+  { event: 'CONSUMO_PRODUCCION', key: 'PRODUCCION_EN_PROCESO', code: '1.1.05.03' },
+  { event: 'CONSUMO_PRODUCCION', key: 'MATERIA_PRIMA', code: '1.1.05.01' },
+  { event: 'CONSUMO_PRODUCCION', key: 'INSUMO', code: '1.1.05.02' },
+  { event: 'PRODUCCION_TERMINADA', key: 'PRODUCTO_TERMINADO', code: '1.1.05.04' },
+  { event: 'PRODUCCION_TERMINADA', key: 'PRODUCCION_EN_PROCESO', code: '1.1.05.03' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */
