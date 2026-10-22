@@ -14,6 +14,7 @@ import {
   CalendarRange,
   ClipboardCheck,
   ClipboardList,
+  Factory,
   FilePen,
   FileSearch,
   GraduationCap,
@@ -22,6 +23,7 @@ import {
   History,
   Inbox,
   Landmark,
+  Layers,
   LayoutDashboard,
   ListTree,
   NotebookPen,
@@ -139,6 +141,18 @@ export const NAV: NavGroup[] = [
         icon: SlidersHorizontal,
         permission: 'stock_adjustment.read',
       },
+    ],
+  },
+  {
+    label: 'Producción',
+    items: [
+      {
+        label: 'Órdenes de producción',
+        path: 'produccion/ordenes',
+        icon: Factory,
+        permission: 'production_order.read',
+      },
+      { label: 'Listas de materiales', path: 'produccion/listas-de-materiales', icon: Layers, permission: 'bom.read' },
     ],
   },
   {

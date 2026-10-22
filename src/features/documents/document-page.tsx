@@ -45,6 +45,7 @@ import { useCompany } from '@/app/company'
 import { AwardDialog, ComparisonSection } from '@/features/purchasing/quotations/quotation-views'
 import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
+import { FinishDialog, IssueDialog } from '@/features/production/production-dialogs'
 
 type Runner = (docId: string, text: string) => Promise<unknown>
 
@@ -190,6 +191,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
   const [pending, setPending] = useState<AvailableAction | null>(null)
   const [awarding, setAwarding] = useState(false)
   const [paying, setPaying] = useState(false)
+  const [issuing, setIssuing] = useState(false)
+  const [finishing, setFinishing] = useState(false)
   const run = useCommand(
     (action: AvailableAction, text: string) => RUNNERS[doc.doc_type][action.action]!(doc.id, text),
     {
@@ -256,7 +259,15 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
         variant={a.tone === 'destructive' ? 'destructive' : a.tone === 'outline' ? 'outline' : 'default'}
         disabled={!a.enabled}
         onClick={() =>
-          a.action === 'AWARD' ? setAwarding(true) : a.action === 'PAY' ? setPaying(true) : setPending(a)
+          a.action === 'AWARD'
+            ? setAwarding(true)
+            : a.action === 'PAY'
+              ? setPaying(true)
+              : a.action === 'ISSUE'
+                ? setIssuing(true)
+                : a.action === 'FINISH'
+                  ? setFinishing(true)
+                  : setPending(a)
         }
       >
         {a.label}
@@ -519,6 +530,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
 
       {awarding && <AwardDialog detail={detail} open={awarding} onOpenChange={setAwarding} />}
       {paying && <PayDialog detail={detail} open={paying} onOpenChange={setPaying} />}
+      {issuing && <IssueDialog detail={detail} open={issuing} onOpenChange={setIssuing} />}
+      {finishing && <FinishDialog detail={detail} open={finishing} onOpenChange={setFinishing} />}
       {pending && (
         <ActionDialog
           open={!!pending}
@@ -914,6 +927,35 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
       </dl>
     )
   }
+  if (doc.doc_type === 'PRODUCTION_ORDER' && detail.production_order) {
+    const po = detail.production_order
+    return (
+      <dl className={grid}>
+        <InfoRow label="Producto">
+          <Link to={company.to(`productos/${po.product.code}`)} className="hover:underline">
+            <span className="font-mono">{po.product.code}</span> {po.product.name}
+          </Link>
+        </InfoRow>
+        <InfoRow label="Cantidad">
+          {qty(po.quantity, po.product.uom_code)}
+          {po.quantity_produced != null && ` · salieron bien ${qty(po.quantity_produced, po.product.uom_code)}`}
+        </InfoRow>
+        <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Prevista para">{po.due_date ? date(po.due_date) : 'Sin fecha'}</InfoRow>
+        <InfoRow label="Materiales desde">{po.materials_warehouse.name}</InfoRow>
+        <InfoRow label="El producto entra a">{po.output_warehouse.name}</InfoRow>
+        <InfoRow label="Materiales (previsto)">{money(po.planned_cost)}</InfoRow>
+        <InfoRow label="Materiales (real)">
+          {po.issued_at ? money(po.material_cost) : 'Todavía no se entregaron'}
+        </InfoRow>
+        {po.unit_cost != null && <InfoRow label="Costo de cada unidad">{money(po.unit_cost)}</InfoRow>}
+        <InfoRow label="Planificó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
   if (doc.doc_type === 'SALES_QUOTE' && detail.sales_quote) {
     const quote = detail.sales_quote
     const { customer } = detail
@@ -1249,7 +1291,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
         <TableHeader>
           <TableRow className="bg-muted/50 hover:bg-muted/50">
             <TableHead className={cn(head, 'w-10')}>#</TableHead>
-            <TableHead className={head}>Producto</TableHead>
+            <TableHead className={head}>{doc.doc_type === 'PRODUCTION_ORDER' ? 'Material' : 'Producto'}</TableHead>
             {doc.doc_type === 'PURCHASE_REQUISITION' && (
               <>
                 <TableHead className={cn(head, 'text-right')}>Cantidad</TableHead>
@@ -1332,6 +1374,14 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 <TableHead className={cn(head, 'text-right')}>Precio unit.</TableHead>
                 <TableHead className={cn(head, 'text-right')}>IVA</TableHead>
                 <TableHead className={cn(head, 'text-right')}>Subtotal</TableHead>
+              </>
+            )}
+            {doc.doc_type === 'PRODUCTION_ORDER' && (
+              <>
+                <TableHead className={cn(head, 'text-right')}>Previsto</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Costo previsto</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Entregado</TableHead>
+                <TableHead className={cn(head, 'text-right')}>Costo real</TableHead>
               </>
             )}
             {doc.doc_type === 'DELIVERY_NOTE' && (
@@ -1514,6 +1564,35 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
               )}
+              {doc.doc_type === 'PRODUCTION_ORDER' && (
+                <>
+                  <TableCell className="tabular text-right">
+                    {qty(l.quantity, l.product.uom_code)}
+                    {l.qty_available != null && (
+                      <div
+                        className={cn(
+                          'text-xs',
+                          l.qty_available < l.quantity ? 'font-medium text-red-700' : 'text-muted-foreground',
+                        )}
+                      >
+                        Disponible: {qty(Math.max(l.qty_available, 0))}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="tabular text-right">{money(l.quantity * (l.planned_unit_cost ?? 0))}</TableCell>
+                  <TableCell
+                    className={cn(
+                      'tabular text-right',
+                      doc.pd?.issued_at && (l.qty_issued ?? 0) > l.quantity && 'text-amber-700',
+                    )}
+                  >
+                    {doc.pd?.issued_at ? qty(l.qty_issued, l.product.uom_code) : '—'}
+                  </TableCell>
+                  <TableCell className="tabular text-right">
+                    {doc.pd?.issued_at ? money((l.qty_issued ?? 0) * (l.unit_cost ?? 0)) : '—'}
+                  </TableCell>
+                </>
+              )}
               {doc.doc_type === 'DELIVERY_NOTE' && (
                 <>
                   <TableCell className="tabular text-right">{qty(l.qty_ordered_so, l.product.uom_code)}</TableCell>
@@ -1538,6 +1617,22 @@ function Lines({ detail }: { detail: DocumentDetail }) {
             <TotalRow label="Subtotal neto (costo para la empresa)" value={doc.subtotal} span={5} />
             <TotalRow label="IVA" value={doc.tax_total} span={5} />
             <TotalRow label="Total" value={doc.total} span={5} strong />
+          </TableFooter>
+        )}
+        {doc.doc_type === 'PRODUCTION_ORDER' && detail.production_order && (
+          <TableFooter>
+            <TableRow>
+              <TableCell colSpan={3} className="text-right text-sm font-semibold">
+                Materiales
+              </TableCell>
+              <TableCell className="tabular text-right font-semibold">
+                {money(detail.production_order.planned_cost)}
+              </TableCell>
+              <TableCell />
+              <TableCell className="tabular text-right font-semibold">
+                {detail.production_order.issued_at ? money(detail.production_order.material_cost) : '—'}
+              </TableCell>
+            </TableRow>
           </TableFooter>
         )}
         {(doc.doc_type === 'GOODS_RECEIPT' || doc.doc_type === 'STOCK_ADJUSTMENT') && (

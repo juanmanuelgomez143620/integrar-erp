@@ -17,7 +17,7 @@ import {
   PRIORITIES,
 } from '@/lib/domain/catalog'
 import type { DocType } from '@/lib/domain/types'
-import { date, money, todayAR } from '@/lib/format'
+import { date, money, qty, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
 
@@ -348,6 +348,54 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'PRODUCTION_ORDER') {
+    columns.push(
+      {
+        key: 'product',
+        header: 'Producto',
+        sort: (d) => d.summary,
+        cell: (d) => <span className="text-xs">{d.summary}</span>,
+      },
+      {
+        key: 'quantity',
+        header: 'Cantidad',
+        align: 'right',
+        sort: (d) => d.pd!.quantity,
+        cell: (d) => (
+          <span className="tabular">
+            {qty(d.pd!.quantity)}
+            {d.pd!.quantity_produced != null && d.pd!.quantity_produced !== d.pd!.quantity && (
+              <span className="text-xs text-amber-700"> (salieron {qty(d.pd!.quantity_produced)})</span>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: 'due',
+        header: 'Prevista para',
+        sort: (d) => d.pd!.due_date ?? '',
+        cell: (d) => (
+          <span
+            className={cn(
+              ['BORRADOR', 'LIBERADA', 'EN_PROCESO'].includes(d.status) &&
+                !!d.pd!.due_date &&
+                d.pd!.due_date < todayAR() &&
+                'font-medium text-red-700',
+            )}
+          >
+            {date(d.pd!.due_date)}
+          </span>
+        ),
+      },
+      {
+        key: 'total',
+        header: 'Materiales (previsto)',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   if (docType === 'CUSTOMER_RECEIPT') {
     columns.push(
       { key: 'customer', header: 'Cliente', sort: (d) => d.customer_name, cell: (d) => d.customer_name },
@@ -457,9 +505,11 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
         searchPlaceholder={
           docType === 'JOURNAL_ENTRY'
             ? 'Buscar por número o leyenda…'
-            : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
-              ? 'Buscar por número, cliente, producto…'
-              : 'Buscar por número, proveedor, producto…'
+            : docType === 'PRODUCTION_ORDER'
+              ? 'Buscar por número o producto…'
+              : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
+                ? 'Buscar por número, cliente, producto…'
+                : 'Buscar por número, proveedor, producto…'
         }
         onRowClick={(d) => navigate(d.path)}
         empty={`Todavía no hay ${info.plural.toLowerCase()}.`}

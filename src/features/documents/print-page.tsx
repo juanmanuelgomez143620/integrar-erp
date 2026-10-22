@@ -284,6 +284,30 @@ export function PrintPage() {
                 </div>
               </div>
             )}
+          {doc.doc_type === 'PRODUCTION_ORDER' && data.production_order && (
+            <>
+              <div className="col-span-2">
+                <b>Fabricar:</b> {qty(data.production_order.quantity, data.production_order.product.uom_code)} de{' '}
+                {data.production_order.product.code} {data.production_order.product.name}
+              </div>
+              <div>
+                <b>Materiales desde:</b> {data.production_order.materials_warehouse.name}
+              </div>
+              <div>
+                <b>El producto entra a:</b> {data.production_order.output_warehouse.name}
+              </div>
+              <div>
+                <b>Prevista para:</b>{' '}
+                {data.production_order.due_date ? date(data.production_order.due_date) : 'sin fecha'}
+              </div>
+              <div>
+                <b>Salieron bien:</b>{' '}
+                {data.production_order.quantity_produced != null
+                  ? qty(data.production_order.quantity_produced, data.production_order.product.uom_code)
+                  : '________'}
+              </div>
+            </>
+          )}
           {doc.doc_type === 'SALES_QUOTE' && data.sales_quote && (
             <>
               <div className="col-span-2">
@@ -564,8 +588,11 @@ export function PrintPage() {
                       ? 'Ajuste'
                       : doc.doc_type === 'DELIVERY_NOTE'
                         ? 'Entregado'
-                        : 'Cantidad'}
+                        : doc.doc_type === 'PRODUCTION_ORDER'
+                          ? 'Previsto'
+                          : 'Cantidad'}
                 </th>
+                {doc.doc_type === 'PRODUCTION_ORDER' && <th className={`${th} text-right`}>Entregado</th>}
                 {priced && (
                   <>
                     <th className={`${th} text-right`}>Precio unit.</th>
@@ -589,6 +616,11 @@ export function PrintPage() {
                     <td className={`${td} text-right`}>{qty(l.qty_ordered_so, l.product.uom_code)}</td>
                   )}
                   <td className={`${td} text-right`}>{qty(l.quantity, l.product.uom_code)}</td>
+                  {doc.doc_type === 'PRODUCTION_ORDER' && (
+                    <td className={`${td} text-right`}>
+                      {doc.pd?.issued_at ? qty(l.qty_issued, l.product.uom_code) : '________'}
+                    </td>
+                  )}
                   {priced && (
                     <>
                       <td className={`${td} text-right`}>{money(l.unit_price)}</td>

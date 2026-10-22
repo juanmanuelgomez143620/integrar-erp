@@ -47,6 +47,11 @@ const SalesOrderFormPage = lazyPage(() => import('@/features/sales/order-form').
 const SalesQuoteFormPage = lazyPage(() => import('@/features/sales/order-form').then((m) => m.SalesQuoteFormPage))
 const PriceListsPage = lazyPage(() => import('@/features/sales/price-lists-pages').then((m) => m.PriceListsPage))
 const PriceListPage = lazyPage(() => import('@/features/sales/price-lists-pages').then((m) => m.PriceListPage))
+const ProductionOrderFormPage = lazyPage(() =>
+  import('@/features/production/order-form').then((m) => m.ProductionOrderFormPage),
+)
+const BomsPage = lazyPage(() => import('@/features/production/boms-pages').then((m) => m.BomsPage))
+const BomPage = lazyPage(() => import('@/features/production/boms-pages').then((m) => m.BomPage))
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -197,6 +202,11 @@ export const router = createBrowserRouter(
                 { path: 'ventas/clientes/:code', element: <CustomerAccountPage /> },
                 { path: 'ventas/listas-de-precios', element: <PriceListsPage /> },
                 { path: 'ventas/listas-de-precios/:code', element: <PriceListPage /> },
+                { path: 'produccion/ordenes', element: <DocumentListPage key="pd" docType="PRODUCTION_ORDER" /> },
+                { path: 'produccion/ordenes/nueva', element: <ProductionOrderFormPage /> },
+                { path: 'produccion/ordenes/:number', element: <DocumentPage key="pd" docType="PRODUCTION_ORDER" /> },
+                { path: 'produccion/listas-de-materiales', element: <BomsPage /> },
+                { path: 'produccion/listas-de-materiales/:code', element: <BomPage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },
