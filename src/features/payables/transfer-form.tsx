@@ -8,14 +8,13 @@ import { Field, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { api, commands, type FundsTransferInput, type TreasuryAccountRow } from '@/lib/api'
-import { money } from '@/lib/format'
+import { money, parseAmount } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 
-/** Acepta "1.300,50" (es-AR) y "1300.50". */
+/** Acepta "1.300,50" (es-AR), "1.000.000" y "1300.50". */
 const num = (s: string) => {
-  const t = String(s).trim()
-  const n = t.includes(',') ? Number(t.replace(/\./g, '').replace(',', '.')) : Number(t)
+  const n = parseAmount(s)
   return Number.isFinite(n) ? n : 0
 }
 

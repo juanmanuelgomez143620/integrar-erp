@@ -8,17 +8,15 @@ import { Field, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { api, commands, type ReconciliationCandidates, type TreasuryAccountRow } from '@/lib/api'
-import { date, money, todayAR } from '@/lib/format'
+import { date, money, parseAmount, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { MovementTable } from './reconciliation-views'
 
-/** Acepta "1.300,50" (es-AR) y "1300.50"; vacío o inválido → null. */
+/** Acepta "1.300,50" (es-AR), "1.000.000" y "1300.50"; vacío o inválido → null. */
 const amount = (s: string) => {
-  const t = String(s).trim()
-  if (!t) return null
-  const n = t.includes(',') ? Number(t.replace(/\./g, '').replace(',', '.')) : Number(t)
+  const n = parseAmount(String(s))
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
 }
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100

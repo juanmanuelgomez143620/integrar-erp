@@ -17,6 +17,19 @@ export function moneyShort(value: number): string {
   return money(value)
 }
 
+/**
+ * Importe en pesos escrito por el estudiante: "1300,50" y "1.300,50" (es-AR),
+ * "1.000.000" (puntos de miles, sin decimales), "1300.50" o "$ 1.300"; NaN si
+ * no es un número. Sólo para importes: en una cantidad, "1.500" puede ser 1,5 kg.
+ */
+export function parseAmount(text: string): number {
+  const t = text.replace(/\s/g, '').replace(/^\$/, '')
+  if (!t) return Number.NaN
+  if (t.includes(',')) return Number(t.replace(/\./g, '').replace(',', '.'))
+  if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) return Number(t.replace(/\./g, ''))
+  return Number(t)
+}
+
 export function qty(value: number | null | undefined, uom?: string): string {
   if (value == null || Number.isNaN(value)) return '—'
   const n = numberFmt.format(value)

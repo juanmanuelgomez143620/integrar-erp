@@ -9,15 +9,14 @@ import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { ActionDialog } from '@/components/common/dialogs'
 import { api, commands, type PayableRow, type TreasuryAccountRow } from '@/lib/api'
-import { date, money } from '@/lib/format'
+import { date, money, parseAmount } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 
-/** Importe escrito por el estudiante: "266200", "266.200,50" o "266200,5". */
+/** Importe escrito por el estudiante: "266200", "266.200,50" o "1.000.000"; si no es un número, 0. */
 const amount = (s: string) => {
-  const t = s.trim()
-  const n = t.includes(',') ? Number(t.replace(/\./g, '').replace(',', '.')) : Number(t)
+  const n = parseAmount(s)
   return Number.isFinite(n) ? n : 0
 }
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100

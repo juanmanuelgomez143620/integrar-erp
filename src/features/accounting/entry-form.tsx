@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Field, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { api, commands, type AccountRow, type DocumentDetail } from '@/lib/api'
-import { money, todayAR } from '@/lib/format'
+import { money, parseAmount, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -24,8 +24,11 @@ interface LineState {
 
 const blank = (): LineState => ({ key: crypto.randomUUID(), account_id: '', debit: '', credit: '', notes: '' })
 
-/** Importe escrito por el estudiante: acepta coma o punto decimal. */
-const amount = (s: string) => Number(s.trim().replace(',', '.')) || 0
+/** Importe escrito por el estudiante: "1300,50", "1.300,50", "1.000.000" o "1300.50"; si no es un número, 0. */
+const amount = (s: string) => {
+  const n = parseAmount(s)
+  return Number.isFinite(n) ? n : 0
+}
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
 
 export function EntryFormPage() {
