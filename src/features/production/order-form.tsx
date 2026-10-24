@@ -256,7 +256,7 @@ export function ProductionOrderFormPage() {
                 )}
                 <span>
                   {shortages.length
-                    ? `Faltan materiales (${shortages.map((s) => s.component.code).join(', ')}): se puede guardar planificada y liberarla cuando lleguen.`
+                    ? `Faltan materiales (${shortages.map((s) => s.component.code).join(', ')}): se puede guardar planificada y, desde la orden, pedirle a Compras lo que falta.`
                     : 'Alcanzan los materiales: al liberarla quedan reservados.'}
                 </span>
               </div>

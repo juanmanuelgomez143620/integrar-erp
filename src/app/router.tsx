@@ -56,6 +56,9 @@ const WorkCentersPage = lazyPage(() => import('@/features/production/work-center
 const ProductionCostsPage = lazyPage(() =>
   import('@/features/production/costs-page').then((m) => m.ProductionCostsPage),
 )
+const ProductionNeedsPage = lazyPage(() =>
+  import('@/features/production/needs-page').then((m) => m.ProductionNeedsPage),
+)
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -213,6 +216,7 @@ export const router = createBrowserRouter(
                 { path: 'produccion/listas-de-materiales/:code', element: <BomPage /> },
                 { path: 'produccion/centros-de-trabajo', element: <WorkCentersPage /> },
                 { path: 'produccion/costos', element: <ProductionCostsPage /> },
+                { path: 'produccion/necesidades', element: <ProductionNeedsPage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

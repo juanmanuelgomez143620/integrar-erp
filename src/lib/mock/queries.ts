@@ -51,6 +51,7 @@ import {
   productionMaterialCost,
   productionOrderLines,
   productionOrderOperations,
+  productionNeeds,
   productionShortages,
   quoteExpired,
   quoteIsValid,
@@ -3967,4 +3968,63 @@ export function productionCosts(
         unit_cost: doc.pd!.unit_cost ?? 0,
       }
     })
+}
+
+export interface ProductionNeedRow {
+  product: { id: string; code: string; name: string; uom_code: string; product_type: T.ProductType }
+  /** Lo previsto de las órdenes planificadas. */
+  required: number
+  on_hand: number
+  reserved: number
+  available: number
+  /** En camino: lo que falta recibir de las órdenes de compra. */
+  on_order: number
+  /** Ya pedido: lo que todavía no está en una orden de compra, de las solicitudes en curso. */
+  requested: number
+  /** Lo que queda sin cubrir. */
+  shortage: number
+  orders: { id: string; display_number: string; path: string; quantity: number }[]
+  covered_by: { id: string; doc_type: T.DocType; display_number: string; path: string; quantity: number }[]
+}
+
+/**
+ * Las necesidades de materiales de las órdenes planificadas (todas, o las de
+ * documentIds), con lo que las cubre (docs/FASE_5_PRODUCCION_Y_COSTOS.md §5).
+ */
+export function productionNeedsView(
+  db: DB,
+  userId: string,
+  companyId: string,
+  documentIds: string[] | null = null,
+): ProductionNeedRow[] {
+  assertPerm(db, userId, companyId, 'production_order.read')
+  return productionNeeds(db, companyId, documentIds ?? undefined).map((n) => ({
+    product: {
+      id: n.product.id,
+      code: n.product.code,
+      name: n.product.name,
+      uom_code: n.product.uom_code,
+      product_type: n.product.product_type,
+    },
+    required: n.required,
+    on_hand: n.on_hand,
+    reserved: n.reserved,
+    available: n.available,
+    on_order: n.on_order,
+    requested: n.requested,
+    shortage: n.shortage,
+    orders: n.orders.map((o) => ({
+      id: o.document.id,
+      display_number: o.document.display_number,
+      path: docPath(db, o.document),
+      quantity: o.quantity,
+    })),
+    covered_by: n.covered_by.map((c) => ({
+      id: c.document.id,
+      doc_type: c.document.doc_type,
+      display_number: c.document.display_number,
+      path: docPath(db, c.document),
+      quantity: c.quantity,
+    })),
+  }))
 }

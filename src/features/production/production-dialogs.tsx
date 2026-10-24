@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { Link, useNavigate } from 'react-router'
+import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle, ShoppingCart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -11,10 +14,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Field, Section } from '@/components/common/blocks'
-import { commands, type DocumentDetail, type ProductionOrderView } from '@/lib/api'
+import { api, commands, type DocumentDetail, type ProductionOrderView } from '@/lib/api'
 import { money, percent, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
+import { useCompany } from '@/app/company'
 
 const head = 'h-9 text-xs font-semibold text-slate-600'
 
@@ -352,5 +356,77 @@ export function VariancesSection({ detail }: { detail: DocumentDetail }) {
         </p>
       )}
     </Section>
+  )
+}
+
+/**
+ * Una orden planificada a la que le faltan materiales: qué falta, qué ya está en
+ * camino o pedido, y el pedido a Compras de lo demás (docs/FASE_5_PRODUCCION_Y_COSTOS.md §5).
+ */
+export function ShortagesNotice({ detail }: { detail: DocumentDetail }) {
+  const company = useCompany()
+  const navigate = useNavigate()
+  const { doc } = detail
+  const { data: needs = [] } = useQuery({
+    queryKey: ['production-needs', company.companyId, doc.id],
+    queryFn: () => api.productionNeeds(company.companyId, [doc.id]),
+  })
+  const request = useCommand(() => commands.requestProductionMaterials(company.companyId, [doc.id]), {
+    success: (r) => `Se generó ${r.display_number} en borrador: revisala y enviala a Compras.`,
+    onSuccess: (r) => navigate(company.docPath('PURCHASE_REQUISITION', r.display_number)),
+  })
+  const missing = needs.filter((n) => n.required > Math.max(n.available, 0))
+  if (!missing.length) return null
+  const short = missing.some((n) => n.shortage > 0)
+  const covering = [...new Map(missing.flatMap((n) => n.covered_by).map((c) => [c.id, c])).values()]
+  return (
+    <div className="mb-4 flex flex-wrap items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">
+          {short
+            ? 'Faltan materiales para liberarla: hay que pedírselos a Compras.'
+            : 'Faltan materiales para liberarla, pero ya están pedidos o en camino.'}
+        </div>
+        <ul className="mt-1 text-xs">
+          {missing.map((n) => {
+            const uom = n.product.uom_code
+            return (
+              <li key={n.product.id}>
+                <span className="font-mono font-semibold">{n.product.code}</span> {n.product.name}: necesita{' '}
+                {qty(n.required, uom)} y hay {qty(Math.max(n.available, 0), uom)} disponibles
+                {n.on_order > 0 && `; ${qty(n.on_order, uom)} en camino`}
+                {n.requested > 0 && `; ${qty(n.requested, uom)} ya pedidos`}
+                {n.shortage > 0 && (
+                  <>
+                    {' '}
+                    — <strong>falta {qty(n.shortage, uom)}</strong>
+                  </>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+        {covering.length > 0 && (
+          <div className="mt-1 text-xs">
+            Lo cubren{' '}
+            {covering.map((c, i) => (
+              <span key={c.id}>
+                {i > 0 && ', '}
+                <Link to={c.path} className="font-mono underline">
+                  {c.display_number}
+                </Link>
+              </span>
+            ))}
+            : cuando llegue lo pedido, se puede liberar.
+          </div>
+        )}
+      </div>
+      {short && company.can('purchase_requisition.create') && (
+        <Button size="sm" variant="outline" disabled={request.isPending} onClick={() => request.mutate([])}>
+          <ShoppingCart /> Pedir a Compras lo que falta
+        </Button>
+      )}
+    </div>
   )
 }

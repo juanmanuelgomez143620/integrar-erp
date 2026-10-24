@@ -64,6 +64,7 @@ export type {
   PriceListRow,
   ProducibleProduct,
   ProductionCostRow,
+  ProductionNeedRow,
   ProductionOrderView,
   ProductDetail,
   ProductRow,
@@ -240,6 +241,9 @@ const mockApi = {
   workCenters: (companyId: string) => query((db, u) => Q.listWorkCenters(db, u, companyId)),
   productionCosts: (companyId: string, from: string, to: string) =>
     query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
+  /** Las necesidades de materiales de las órdenes planificadas (todas, o las indicadas). */
+  productionNeeds: (companyId: string, documentIds: string[] | null = null) =>
+    query((db, u) => Q.productionNeedsView(db, u, companyId, documentIds)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -390,6 +394,8 @@ const mockCommands = {
     command((c) => E.cmdSetWorkCenterActive(c, companyId, centerId, active)),
   cancelProductionOrder: (docId: string, reason: string) =>
     command((c) => E.cmdCancelProductionOrder(c, docId, reason)),
+  requestProductionMaterials: (companyId: string, documentIds: string[]) =>
+    command((c) => E.cmdRequestProductionMaterials(c, companyId, documentIds)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

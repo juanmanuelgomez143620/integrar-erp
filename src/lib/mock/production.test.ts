@@ -1,4 +1,5 @@
-// Pruebas de las listas de materiales, los centros de trabajo y las órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2 a §4)
+// Pruebas de las listas de materiales, los centros de trabajo, las órdenes de producción y las necesidades de materiales
+// (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2 a §5)
 // sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,25 +9,39 @@ import {
   bomLinesOf,
   bomOperationsOf,
   cmdCancelProductionOrder,
+  cmdCancelRequisition,
   cmdCreateCompanyFromTemplate,
   cmdCreateCourse,
   cmdCreateProductionOrder,
+  cmdCreatePurchaseOrder,
   cmdFinishProductionOrder,
   cmdIssueProductionOrder,
   cmdReleaseProductionOrder,
+  cmdRequestProductionMaterials,
   cmdSaveBom,
   cmdSaveWorkCenter,
   cmdSetBomActive,
   cmdSetWorkCenterActive,
+  cmdSubmitPurchaseOrder,
+  cmdSubmitRequisition,
   cmdUpdateCompanySettings,
   onHandQuantity,
+  productionNeeds,
   productionOrderLines,
   productionOrderOperations,
   reservedQuantity,
   type Ctx,
   type ProductionOrderInput,
 } from './engine'
-import { bomDetail, documentDetail, listBoms, listWorkCenters, productionCatalog, productionCosts } from './queries'
+import {
+  bomDetail,
+  documentDetail,
+  listBoms,
+  listWorkCenters,
+  productionCatalog,
+  productionCosts,
+  productionNeedsView,
+} from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -265,7 +280,7 @@ describe('orden de producción', () => {
   it('planificar, liberar (reserva), entregar (consume al promedio) y terminar (ingresa al costo real)', () => {
     const created = cmdCreateProductionOrder(ctx('produccion'), companyId(), order('PT-001', 5), false)
     const doc = byNumber(created.display_number)
-    expect(created.display_number).toBe('OPR-00002')
+    expect(created.display_number).toBe('OPR-00003')
     expect(doc.status).toBe('BORRADOR')
     const lines = productionOrderLines(db, doc.id)
     expect(lines.map((l) => `${codeOf(l.product_id)} ${l.quantity_planned} ${l.planned_unit_cost}`)).toEqual([
@@ -291,7 +306,7 @@ describe('orden de producción', () => {
     expect(doc.status).toBe('LIBERADA')
     expect(reservedQuantity(db, product('MP-007').id, warehouse('DEP-MP').id)).toBe(5)
     expect(db.tasks.filter((t) => t.document_id === doc.id && t.status === 'PENDIENTE').map((t) => t.title)).toEqual([
-      'Entregar los materiales de OPR-00002',
+      'Entregar los materiales de OPR-00003',
     ])
 
     // Depósito entrega: cinco pies más de tirante (desperdicio) y dos lijas menos.
@@ -326,7 +341,7 @@ describe('orden de producción', () => {
     expect(
       db.notifications.filter((n) => n.document_id === doc.id && n.type === 'PRODUCCION_TERMINADA').map((n) => n.title),
     ).toContain('Ingresaron 4 UN de PT-001')
-    const view = documentDetail(db, userId('contabilidad'), companyId(), 'PRODUCTION_ORDER', 'OPR-00002')!
+    const view = documentDetail(db, userId('contabilidad'), companyId(), 'PRODUCTION_ORDER', 'OPR-00003')!
     expect(view.production_order).toMatchObject({
       planned_cost: 1294750,
       planned_material_cost: 944750,
@@ -350,7 +365,7 @@ describe('orden de producción', () => {
     const { id } = cmdCreateProductionOrder(ctx('produccion'), companyId(), order('PT-003', 10), false)
     const message = expectBusinessError(() => cmdReleaseProductionOrder(ctx('produccion'), id), 'STOCK_INSUFICIENTE')
     expect(message).toContain('MP-004 necesita 20 UN y hay 8 UN disponibles')
-    const detail = documentDetail(db, userId('produccion'), companyId(), 'PRODUCTION_ORDER', 'OPR-00002')!
+    const detail = documentDetail(db, userId('produccion'), companyId(), 'PRODUCTION_ORDER', 'OPR-00003')!
     expect(detail.actions.find((a) => a.action === 'RELEASE')).toMatchObject({ enabled: false })
     expect(detail.next_step.text).toMatch(/^Faltan materiales: MP-004 necesita 20 UN/)
     // Lo reservado por otra orden también cuenta: la demo reservó 180 pies de eucalipto para las sillas.
@@ -362,7 +377,7 @@ describe('orden de producción', () => {
     )
     cmdUpdateCompanySettings(ctx('docente'), companyId(), { allow_negative_stock: true })
     cmdReleaseProductionOrder(ctx('produccion'), id)
-    expect(byNumber('OPR-00002').status).toBe('LIBERADA')
+    expect(byNumber('OPR-00003').status).toBe('LIBERADA')
   })
 
   it('anular: la planificada sin más; la que está en proceso devuelve los materiales con contraasiento', () => {
@@ -577,5 +592,136 @@ describe('centros de trabajo y costos de conversión', () => {
     ])
     expect(productionCosts(db, userId('contabilidad'), companyId(), '2027-05-15', '2027-05-31')).toEqual([])
     expect(() => productionCosts(db, userId('rrhh'), companyId(), '2027-05-01', '2027-05-31')).toThrow()
+  })
+})
+
+describe('necesidades de materiales (5c)', () => {
+  /** Las diez mesas que la demo planificó y no puede liberar. */
+  const planned = () => byNumber('OPR-00002')
+  const needOf = (code: string, ids?: string[]) =>
+    productionNeeds(db, companyId(), ids).find((n) => n.product.code === code)!
+  const supplier = (code: string) => db.suppliers.find((s) => s.company_id === companyId() && s.code === code)!.id
+  /** La solicitud de Depósito que pide placas y tableros. */
+  const boards = () =>
+    db.documents.find(
+      (d) =>
+        d.doc_type === 'PURCHASE_REQUISITION' &&
+        db.prLines.some((l) => l.document_id === d.id && codeOf(l.product_id) === 'MP-007'),
+    )!
+  const linesOf = (docId: string) =>
+    db.prLines.filter((l) => l.document_id === docId).map((l) => [codeOf(l.product_id), l.quantity, l.notes])
+
+  it('lo necesario de las planificadas contra lo disponible, lo que está en camino y lo ya pedido', () => {
+    expect(planned()).toMatchObject({ status: 'BORRADOR', pd: { quantity: 10 } })
+    const rows = productionNeedsView(db, userId('produccion'), companyId())
+    // Sólo cuentan las planificadas: las sillas liberadas ya reservaron lo suyo (por eso hay 14 L de barniz y no 18).
+    expect(rows.map((r) => [r.product.code, r.required, r.available, r.on_order, r.requested, r.shortage])).toEqual([
+      ['IN-001', 3, 54, 0, 0, 0],
+      ['IN-002', 15, 14, 0, 0, 1],
+      ['IN-003', 1, 13.6, 0, 0, 0],
+      ['IN-006', 60, 230, 0, 0, 0],
+      ['IN-007', 1, 8.7, 0, 0, 0],
+      ['MP-001', 100, 1200, 0, 0, 0],
+      ['MP-003', 240, 520, 0, 0, 0],
+      ['MP-007', 10, 6, 0, 20, 0],
+    ])
+    // Los tableros que faltan ya los pidió Depósito; cada fila dice qué órdenes lo necesitan.
+    const tableros = rows.find((r) => r.product.code === 'MP-007')!
+    expect(tableros.covered_by).toEqual([
+      expect.objectContaining({
+        doc_type: 'PURCHASE_REQUISITION',
+        display_number: boards().display_number,
+        quantity: 20,
+      }),
+    ])
+    expect(tableros.orders).toEqual([expect.objectContaining({ display_number: 'OPR-00002', quantity: 10 })])
+    // Las de un alcance: una orden liberada no necesita nada.
+    expect(productionNeedsView(db, userId('produccion'), companyId(), [byNumber('OPR-00001').id])).toEqual([])
+    expect(productionNeedsView(db, userId('produccion'), companyId(), [planned().id])).toEqual(rows)
+    expect(() => productionNeedsView(db, userId('rrhh'), companyId())).toThrow()
+  })
+
+  it('pedir a Compras: una solicitud en borrador con los faltantes, vinculada a la orden', () => {
+    const sc = cmdRequestProductionMaterials(ctx('produccion'), companyId(), [planned().id])
+    const doc = byNumber(sc.display_number)
+    expect(doc).toMatchObject({
+      doc_type: 'PURCHASE_REQUISITION',
+      status: 'BORRADOR',
+      pr: {
+        priority: 'ALTA',
+        needed_by: '2027-05-24',
+        reason: 'Materiales que faltan para las órdenes de producción OPR-00002.',
+      },
+    })
+    expect(linesOf(doc.id)).toEqual([['IN-002', 1, 'Para OPR-00002']])
+    expect(db.docLinks.some((l) => l.from_document_id === planned().id && l.to_document_id === doc.id)).toBe(true)
+    expect(db.audit.at(-1)!.summary).toBe(`Creó ${sc.display_number} con los faltantes de OPR-00002 (1 ítem)`)
+    // Ya pedido: no falta nada más y no se genera otra solicitud.
+    expect(needOf('IN-002')).toMatchObject({ requested: 1, shortage: 0 })
+    expect(
+      expectBusinessError(
+        () => cmdRequestProductionMaterials(ctx('produccion'), companyId(), [planned().id]),
+        'DATO_INVALIDO',
+      ),
+    ).toMatch(/^No falta nada que no esté pedido para OPR-00002: /)
+    // Anulada, deja de contar.
+    cmdCancelRequisition(ctx('produccion'), doc.id, 'Se pidió de más')
+    expect(needOf('IN-002')).toMatchObject({ requested: 0, shortage: 1 })
+    // Otra vez, y la envía: la orden de compra en borrador todavía no cubre la solicitud;
+    // enviada a aprobación, lo pedido pasa a estar en camino.
+    const again = cmdRequestProductionMaterials(ctx('produccion'), companyId(), [planned().id])
+    cmdSubmitRequisition(ctx('produccion'), again.id)
+    const po = cmdCreatePurchaseOrder(ctx('compras1'), companyId(), {
+      supplier_id: supplier('PRV-004'),
+      expected_date: null,
+      warehouse_id: warehouse('DEP-MP').id,
+      payment_terms_days: 30,
+      delivery_terms: '',
+      notes: '',
+      lines: [
+        {
+          product_id: product('IN-002').id,
+          requisition_line_id: db.prLines.find((l) => l.document_id === again.id)!.id,
+          quantity: 1,
+          unit_price: 18000,
+          vat_rate: 21,
+        },
+      ],
+    })
+    expect(needOf('IN-002')).toMatchObject({ on_order: 0, requested: 1, shortage: 0 })
+    cmdSubmitPurchaseOrder(ctx('compras1'), po.id)
+    expect(needOf('IN-002')).toMatchObject({ on_order: 1, requested: 0, shortage: 0 })
+    expect(needOf('IN-002').covered_by.map((c) => c.document.display_number)).toEqual([po.display_number])
+  })
+
+  it('validaciones: quién pide, qué órdenes y que falte algo', () => {
+    const demo = planned().id
+    expectBusinessError(() => cmdRequestProductionMaterials(ctx('ventas'), companyId(), [demo]), 'SIN_PERMISO')
+    expectBusinessError(() => cmdRequestProductionMaterials(ctx('compras1'), companyId(), [demo]), 'SIN_PERMISO')
+    expectBusinessError(() => cmdRequestProductionMaterials(ctx('produccion'), companyId(), []), 'DATO_INVALIDO')
+    expect(
+      expectBusinessError(
+        () => cmdRequestProductionMaterials(ctx('produccion'), companyId(), [byNumber('OPR-00001').id]),
+        'TRANSICION_INVALIDA',
+      ),
+    ).toContain('OPR-00001 no está planificada')
+    expectBusinessError(
+      () => cmdRequestProductionMaterials(ctx('produccion'), companyId(), [boards().id]),
+      'DOCUMENTO_INEXISTENTE',
+    )
+    // A una silla le alcanza todo: no hay nada que pedir.
+    const chair = cmdCreateProductionOrder(ctx('produccion'), companyId(), order('PT-002', 1), false)
+    expect(
+      expectBusinessError(
+        () => cmdRequestProductionMaterials(ctx('produccion'), companyId(), [chair.id]),
+        'DATO_INVALIDO',
+      ),
+    ).toContain(`para ${chair.display_number}: alcanza`)
+    // Las dos juntas (lo pide Depósito): un ítem por material, con las órdenes que lo necesitan.
+    const sc = cmdRequestProductionMaterials(ctx('deposito'), companyId(), [chair.id, demo])
+    expect(linesOf(sc.id)).toEqual([['IN-002', 1.4, `Para OPR-00002, ${chair.display_number}`]])
+    expect(byNumber(sc.display_number).pr!.reason).toBe(
+      `Materiales que faltan para las órdenes de producción OPR-00002, ${chair.display_number}.`,
+    )
   })
 })

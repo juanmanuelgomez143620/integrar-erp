@@ -145,9 +145,8 @@ export function can(eff: EffectivePermissions, permission: string) {
 }
 
 export function rolesWithPermission(permission: string): string {
-  const names = (Object.keys(ROLE_PERMISSIONS) as T.RoleCode[])
-    .filter((r) => ROLE_PERMISSIONS[r].includes(permission))
-    .map((r) => ROLES[r].name)
+  // En el orden de los roles (ROLE_ORDER), como la base.
+  const names = ROLE_ORDER.filter((r) => ROLE_PERMISSIONS[r].includes(permission)).map((r) => ROLES[r].name)
   return names.length ? names.join(', ') : 'Docente'
 }
 
@@ -5963,6 +5962,175 @@ export function cmdCancelProductionOrder(ctx: Ctx, docId: string, reason: string
       date: businessDate(company),
     })
   }
+}
+
+// ============================================================ Necesidades de materiales (docs/FASE_5_PRODUCCION_Y_COSTOS.md §5)
+
+/** Órdenes de compra cuyo saldo sin recibir está "en camino": las que cubren solicitudes y no terminaron. */
+const INCOMING_PO_STATUSES = ['PENDIENTE_APROBACION', 'RECHAZADO', 'APROBADO', 'ENVIADO', 'RECIBIDO_PARCIAL']
+/** Solicitudes de compra en curso: lo que todavía no está en una orden de compra cuenta como "ya pedido". */
+const PENDING_REQUISITION_STATUSES = ['BORRADOR', 'SOLICITADO', 'ORDENADO_PARCIAL']
+
+/** Lo que necesitan de un material las órdenes planificadas, y lo que lo cubre. */
+export interface ProductionNeed {
+  product: T.Product
+  /** Lo previsto de las órdenes planificadas. */
+  required: number
+  on_hand: number
+  reserved: number
+  available: number
+  /** Lo que falta recibir de las órdenes de compra. */
+  on_order: number
+  /** Lo que todavía no está en una orden de compra, de las solicitudes en curso. */
+  requested: number
+  /** Lo necesario menos lo disponible, lo que está en camino y lo ya pedido (si da positivo). */
+  shortage: number
+  /** Las órdenes planificadas que lo necesitan. */
+  orders: { document: T.Document; quantity: number }[]
+  /** Las órdenes de compra y las solicitudes que lo cubren, con su saldo. */
+  covered_by: { document: T.Document; quantity: number }[]
+}
+
+const byNumber = (a: T.Document, b: T.Document) => a.number - b.number
+
+/**
+ * Las necesidades de materiales de las órdenes planificadas (todas, o las de
+ * documentIds): por material, lo necesario contra lo disponible en sus depósitos
+ * de materiales, lo que está en camino y lo ya pedido a Compras; el faltante es
+ * lo que queda sin cubrir. Las liberadas no cuentan: ya tienen su reserva.
+ */
+export function productionNeeds(db: DB, companyId: string, documentIds?: string[]): ProductionNeed[] {
+  const planned = db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PRODUCTION_ORDER' &&
+        d.status === 'BORRADOR' &&
+        (!documentIds || documentIds.includes(d.id)),
+    )
+    .sort(byNumber)
+  const needs = new Map<string, { orders: ProductionNeed['orders']; warehouses: Set<string> }>()
+  for (const d of planned)
+    for (const l of productionOrderLines(db, d.id)) {
+      const need = needs.get(l.product_id) ?? { orders: [], warehouses: new Set<string>() }
+      need.orders.push({ document: d, quantity: l.quantity_planned })
+      need.warehouses.add(d.pd!.materials_warehouse_id)
+      needs.set(l.product_id, need)
+    }
+  // El saldo de cada documento que cubre el material (sólo los que tienen saldo).
+  const balances = <L extends { document_id: string }>(
+    lines: L[],
+    counts: (d: T.Document) => boolean,
+    quantity: (l: L) => number,
+  ) => {
+    const byDocument = new Map<string, number>()
+    for (const l of lines) {
+      const d = db.documents.find((x) => x.id === l.document_id)
+      if (d && d.company_id === companyId && counts(d)) byDocument.set(d.id, (byDocument.get(d.id) ?? 0) + quantity(l))
+    }
+    return [...byDocument.entries()]
+      .map(([id, q]) => ({ document: db.documents.find((x) => x.id === id)!, quantity: round3(q) }))
+      .filter((x) => x.quantity > 0)
+      .sort((a, b) => byNumber(a.document, b.document))
+  }
+  return [...needs.entries()]
+    .map(([productId, need]) => {
+      const product = db.products.find((p) => p.id === productId)!
+      const warehouses = [...need.warehouses]
+      const onHand = round3(warehouses.reduce((s, w) => s + onHandQuantity(db, productId, w), 0))
+      const reserved = round3(warehouses.reduce((s, w) => s + reservedQuantity(db, productId, w), 0))
+      const available = round3(onHand - reserved)
+      const purchases = balances(
+        db.poLines.filter((l) => l.product_id === productId),
+        (d) => INCOMING_PO_STATUSES.includes(d.status) && warehouses.includes(d.po!.warehouse_id),
+        (l) => l.quantity - l.qty_received,
+      )
+      const requisitions = balances(
+        db.prLines.filter((l) => l.product_id === productId),
+        (d) => PENDING_REQUISITION_STATUSES.includes(d.status),
+        (l) => Math.max(l.quantity - l.qty_ordered, 0),
+      )
+      const required = round3(need.orders.reduce((s, o) => s + o.quantity, 0))
+      const onOrder = round3(purchases.reduce((s, x) => s + x.quantity, 0))
+      const requested = round3(requisitions.reduce((s, x) => s + x.quantity, 0))
+      return {
+        product,
+        required,
+        on_hand: onHand,
+        reserved,
+        available,
+        on_order: onOrder,
+        requested,
+        shortage: Math.max(round3(required - Math.max(available, 0) - onOrder - requested), 0),
+        orders: need.orders,
+        covered_by: [...purchases, ...requisitions],
+      }
+    })
+    .sort((a, b) => (a.product.code < b.product.code ? -1 : a.product.code > b.product.code ? 1 : 0))
+}
+
+/**
+ * Pedir a Compras los faltantes: una solicitud de compra en borrador con lo que no
+ * alcanza de los materiales de las órdenes planificadas elegidas, vinculada a cada
+ * orden que los necesita. Producción la revisa y la envía.
+ */
+export function cmdRequestProductionMaterials(ctx: Ctx, companyId: string, documentIds: string[]) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'purchase_requisition.create')
+  requirePermission(ctx, companyId, 'production_order.read')
+  if (!documentIds.length) fail('DATO_INVALIDO', 'Elegí al menos una orden de producción.')
+  for (const id of documentIds) {
+    const doc = getDoc(db, id, 'PRODUCTION_ORDER')
+    if (doc.company_id !== companyId) fail('DOCUMENTO_INEXISTENTE', 'El documento no existe.')
+    if (doc.status !== 'BORRADOR')
+      fail(
+        'TRANSICION_INVALIDA',
+        `${doc.display_number} no está planificada: sólo se piden los materiales de las órdenes que todavía no se liberaron.`,
+      )
+  }
+  const shortages = productionNeeds(db, companyId, documentIds).filter((n) => n.shortage > 0)
+  if (!shortages.length) {
+    const selected = db.documents.filter((d) => documentIds.includes(d.id)).sort(byNumber)
+    fail(
+      'DATO_INVALIDO',
+      `No falta nada que no esté pedido para ${selected.map((d) => d.display_number).join(', ')}: alcanza con lo disponible, lo que está en camino y lo ya pedido a Compras.`,
+      'Cuando llegue lo pedido, la orden se puede liberar.',
+    )
+  }
+  const orders = [...new Set(shortages.flatMap((n) => n.orders.map((o) => o.document)))].sort(byNumber)
+  const numbers = orders.map((d) => d.display_number).join(', ')
+  const today = businessDate(getCompany(db, companyId))
+  const dueDates = orders.map((d) => d.pd!.due_date).filter((d): d is string => !!d && d >= today)
+  const doc = newDocument(ctx, companyId, 'PURCHASE_REQUISITION', actor, {
+    notes: '',
+    pr: {
+      needed_by: dueDates.length ? dueDates.reduce((a, b) => (b < a ? b : a)) : null,
+      priority: 'ALTA',
+      reason: `Materiales que faltan para las órdenes de producción ${numbers}.`,
+    },
+  })
+  writeRequisitionLines(
+    ctx,
+    doc,
+    shortages.map((n) => ({
+      product_id: n.product.id,
+      quantity: n.shortage,
+      notes: `Para ${n.orders.map((o) => o.document.display_number).join(', ')}`,
+    })),
+  )
+  for (const o of orders) link(ctx, companyId, o.id, doc.id)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'purchase_requisition',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number} con los faltantes de ${numbers} (${shortages.length} ítem${shortages.length > 1 ? 's' : ''})`,
+  })
+  return { id: doc.id, display_number: doc.display_number }
 }
 
 // ============================================================ Tareas y notificaciones

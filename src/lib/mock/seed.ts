@@ -676,6 +676,21 @@ export function buildSeed(): DB {
     },
     true,
   )
+  // Y planificó diez mesas que todavía no puede liberar: faltan tableros (ya los pidió
+  // Depósito) y barniz, que hay que pedirle a Compras (Producción → Necesidades de materiales).
+  cmdCreateProductionOrder(
+    ctx(users.produccion, 25),
+    companyId,
+    {
+      product_id: product['PT-001'].id,
+      quantity: 10,
+      materials_warehouse_id: whMP.id,
+      output_warehouse_id: whPT.id,
+      due_date: addDays(todayAR(), 10),
+      notes: 'Para reponer el stock de mesas.',
+    },
+    false,
+  )
 
   // El historial previo no debe aparecer como "no leído".
   for (const n of db.notifications) n.read_at = now

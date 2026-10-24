@@ -21,7 +21,8 @@ import { createFakeSupabase, PUBLIC_KEY, SUPABASE_URL, type FakeSupabase } from 
 import { loadMockDb, normalize, type LoadedMock } from './support/mock-loader'
 import { buildScenario } from './support/scenario'
 
-vi.setConfig({ testTimeout: 300_000 })
+// En una PC con poca memoria, la última comparación (todas las lecturas de cada usuario) pasa los 5 minutos.
+vi.setConfig({ testTimeout: 600_000 })
 
 const DOMAIN = 'simulador.test'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -2936,6 +2937,110 @@ describe('paridad de comandos', () => {
     expect(await cancel('anularla con devolución', demo, 'Se rompió la sierra')).not.toBeNull()
     expect(status(demo)).toBe('ANULADA')
     await reads('después de las órdenes')
+  })
+
+  it('necesidades de materiales: lo que falta de las planificadas y la solicitud de compra vinculada', async () => {
+    const companyPg = pg(company)
+    const ordersIn = (...statuses: string[]) =>
+      mock.documents
+        .filter((d) => d.company_id === company && d.doc_type === 'PRODUCTION_ORDER' && statuses.includes(d.status))
+        .map((d) => d.id)
+    // Quinientos placards: seguro faltan placas, más allá de lo que ya pidieron las pruebas anteriores.
+    const input: E.ProductionOrderInput = {
+      product_id: product('PT-003').id,
+      quantity: 500,
+      materials_warehouse_id: warehouse('DEP-MP'),
+      output_warehouse_id: warehouse('DEP-PT'),
+      due_date: addDays(todayAR(), 9),
+      notes: 'Para una licitación',
+    }
+    await created(
+      'planificar quinientos placards',
+      'produccion',
+      (c) => E.cmdCreateProductionOrder(c, company, input, false),
+      (b) =>
+        b.commands.createProductionOrder(
+          companyPg,
+          {
+            ...input,
+            product_id: pg(input.product_id),
+            materials_warehouse_id: pg(input.materials_warehouse_id),
+            output_warehouse_id: pg(input.output_warehouse_id),
+          },
+          false,
+        ),
+    )
+    const planned = ordersIn('BORRADOR')
+    expect(planned.length).toBeGreaterThan(1)
+    const numberOf = (id: string) => mock.documents.find((d) => d.id === id)!.display_number
+    const needs = async (label: string) => {
+      await sameRead(
+        `necesidades ${label}`,
+        'produccion',
+        (b) => b.api.productionNeeds(companyPg),
+        (u) => Q.productionNeedsView(mock, u, company),
+      )
+      for (const id of planned)
+        await sameRead(
+          `necesidades de ${numberOf(id)} ${label}`,
+          'deposito',
+          (b) => b.api.productionNeeds(companyPg, [pg(id)]),
+          (u) => Q.productionNeedsView(mock, u, company, [id]),
+        )
+    }
+    const request = (label: string, username: string, ids: string[]) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdRequestProductionMaterials(c, company, ids),
+        (b) => b.commands.requestProductionMaterials(companyPg, ids.map(pg)),
+      )
+    const requestCreated = (label: string, username: string, ids: string[]) =>
+      created(
+        label,
+        username,
+        (c) => E.cmdRequestProductionMaterials(c, company, ids),
+        (b) => b.commands.requestProductionMaterials(companyPg, ids.map(pg)),
+      )
+    const details = async (label: string, ids: string[]) => {
+      for (const id of ids) {
+        const d = mock.documents.find((x) => x.id === id)!
+        await sameRead(
+          `${d.display_number} ${label}`,
+          'produccion',
+          (b) => b.api.document(companyPg, d.doc_type, d.display_number),
+          (u) => Q.documentDetail(mock, u, company, d.doc_type, d.display_number),
+        )
+      }
+    }
+    await needs('al empezar')
+
+    // Quién pide y qué órdenes.
+    expect(await request('ventas no pide materiales', 'ventas', planned)).toBeNull()
+    expect(await request('compras tampoco', 'compras1', planned)).toBeNull()
+    expect(await request('sin órdenes', 'produccion', [])).toBeNull()
+    for (const id of ordersIn('LIBERADA', 'EN_PROCESO', 'TERMINADA', 'ANULADA').slice(0, 3))
+      expect(await request(`${numberOf(id)} no está planificada`, 'produccion', [id])).toBeNull()
+
+    // Pedir los faltantes: una solicitud en borrador, vinculada a las órdenes que los necesitan.
+    const sc = await requestCreated('pedir los faltantes', 'produccion', planned)
+    await details('con lo pedido', [sc, ...planned])
+    await needs('con lo pedido')
+    expect(await request('ya está todo pedido', 'produccion', planned)).toBeNull()
+
+    // Anulada, el faltante vuelve; lo pide Depósito.
+    expect(
+      await step(
+        'anular la solicitud',
+        'produccion',
+        (c) => E.cmdCancelRequisition(c, sc, 'Se pidió de más'),
+        (b) => b.commands.cancelRequisition(pg(sc), 'Se pidió de más'),
+      ),
+    ).not.toBeNull()
+    await needs('con la solicitud anulada')
+    const again = await requestCreated('Depósito los pide', 'deposito', planned)
+    await details('pedidos por Depósito', [again])
+    await needs('pedidos otra vez')
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {

@@ -277,6 +277,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_quantity: 1,
     p_work_center_id: B.workCenter,
     p_hours: JSON.stringify([{ operation_id: B.productionOperation, hours: 1 }]),
+    p_document_ids: `{${B.productionOrder}}`,
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {

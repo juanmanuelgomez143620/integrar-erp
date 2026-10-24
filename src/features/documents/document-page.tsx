@@ -49,6 +49,7 @@ import {
   FinishDialog,
   IssueDialog,
   OperationsSection,
+  ShortagesNotice,
   VariancesSection,
 } from '@/features/production/production-dialogs'
 
@@ -289,7 +290,10 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
     )
   }
 
-  const blocked = detail.actions.filter((a) => !a.enabled)
+  // A la orden planificada que no se puede liberar la explica el aviso de faltantes.
+  const blocked = detail.actions.filter(
+    (a) => !a.enabled && !(doc.doc_type === 'PRODUCTION_ORDER' && a.action === 'RELEASE'),
+  )
 
   return (
     <>
@@ -402,6 +406,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
           </div>
         </div>
       )}
+      {doc.doc_type === 'PRODUCTION_ORDER' && doc.status === 'BORRADOR' && <ShortagesNotice detail={detail} />}
       {doc.status_reason && ['RECHAZADO', 'RECHAZADA', 'ANULADO', 'ANULADA', 'CERRADO'].includes(doc.status) && (
         <div className="mb-4 flex gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />

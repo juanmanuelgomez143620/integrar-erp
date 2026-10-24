@@ -221,7 +221,14 @@ describe('ventas', () => {
     }
   })
 
-  it('producción: las listas de materiales, cada una con su costo y lo que se puede planificar', async () => {
+  it('producción: las listas de materiales, cada una con su costo, lo que se puede planificar y lo que falta', async () => {
+    const ordersIn = (status: string) =>
+      mock.documents
+        .filter((d) => d.company_id === company && d.doc_type === 'PRODUCTION_ORDER' && d.status === status)
+        .map((d) => d.id)
+    const planned = ordersIn('BORRADOR')
+    const released = ordersIn('LIBERADA')
+    expect(planned.length).toBeGreaterThan(1)
     for (const u of USERS) {
       await same(u, () => Q.listBoms(mock, userId(u), company), 'boms_list', [companyPg])
       for (const code of ['PT-001', 'PT-002', 'PT-003', 'PT-004', 'MP-001', 'NO-EXISTE'])
@@ -236,6 +243,12 @@ describe('ventas', () => {
           companyPg,
           from,
           to,
+        ])
+      // Las necesidades de todas las planificadas, de cada una, de una liberada y de ninguna.
+      for (const ids of [null, ...planned.map((id) => [id]), released.slice(0, 1), []])
+        await same(u, () => Q.productionNeedsView(mock, userId(u), company, ids), 'production_needs', [
+          companyPg,
+          ids && `{${ids.map((id) => loaded.pg(id)).join(',')}}`,
         ])
     }
   })
