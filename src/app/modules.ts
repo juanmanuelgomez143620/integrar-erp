@@ -9,6 +9,7 @@ import {
   Bell,
   BookMarked,
   BookOpen,
+  Calculator,
   Boxes,
   Building2,
   CalendarRange,
@@ -41,6 +42,7 @@ import {
   Users,
   Wallet,
   Workflow,
+  Wrench,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -153,6 +155,18 @@ export const NAV: NavGroup[] = [
         permission: 'production_order.read',
       },
       { label: 'Listas de materiales', path: 'produccion/listas-de-materiales', icon: Layers, permission: 'bom.read' },
+      {
+        label: 'Centros de trabajo',
+        path: 'produccion/centros-de-trabajo',
+        icon: Wrench,
+        permission: 'work_center.read',
+      },
+      {
+        label: 'Costos de producción',
+        path: 'produccion/costos',
+        icon: Calculator,
+        permission: 'production_order.read',
+      },
     ],
   },
   {

@@ -10,9 +10,9 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Field } from '@/components/common/blocks'
-import { commands, type DocumentDetail } from '@/lib/api'
-import { money, qty } from '@/lib/format'
+import { Field, Section } from '@/components/common/blocks'
+import { commands, type DocumentDetail, type ProductionOrderView } from '@/lib/api'
+import { money, percent, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 
@@ -113,20 +113,36 @@ export function FinishDialog({ detail, open, onOpenChange }: DialogProps) {
   const { doc } = detail
   const view = detail.production_order!
   const [value, setValue] = useState(asInput(view.quantity))
+  const [hours, setHours] = useState<Record<string, string>>(() =>
+    Object.fromEntries(view.operations.map((o) => [o.id, asInput(o.hours_planned)])),
+  )
   const units = quantityOf(value)
-  const finish = useCommand(() => commands.finishProductionOrder(doc.id, units), {
-    success: 'Orden terminada: el producto entró al stock a su costo real.',
-    onSuccess: () => onOpenChange(false),
-  })
-  const valid = units > 0 && units <= view.quantity + 1e-9
+  const actual = view.operations.map((o) => ({ ...o, hours: quantityOf(hours[o.id] ?? '') }))
+  const hoursValid = actual.every((o) => o.hours >= 0)
+  const labor = actual.reduce((s, o) => s + round2((o.hours || 0) * o.labor_rate), 0)
+  const overhead = actual.reduce((s, o) => s + round2((o.hours || 0) * o.overhead_rate), 0)
+  const finish = useCommand(
+    () =>
+      commands.finishProductionOrder(
+        doc.id,
+        units,
+        actual.map((o) => ({ operation_id: o.id, hours: o.hours })),
+      ),
+    {
+      success: 'Orden terminada: el producto entró al stock a su costo real.',
+      onSuccess: () => onOpenChange(false),
+    },
+  )
+  const valid = units > 0 && units <= view.quantity + 1e-9 && hoursValid
+  const unitCost = valid ? (view.material_cost + labor + overhead) / units : null
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Terminar {doc.display_number}</DialogTitle>
           <DialogDescription>
-            Las unidades que salieron bien entran a {view.output_warehouse.name} a su costo real: lo que se consumió
-            dividido las unidades terminadas.
+            Las unidades que salieron bien entran a {view.output_warehouse.name} a su costo real: lo que se consumió más
+            la mano de obra y la carga fabril de las horas trabajadas, dividido las unidades terminadas.
           </DialogDescription>
         </DialogHeader>
         <Field
@@ -141,14 +157,68 @@ export function FinishDialog({ detail, open, onOpenChange }: DialogProps) {
             className="tabular text-right"
           />
         </Field>
+        {view.operations.length > 0 && (
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/50 hover:bg-muted/50">
+                  <TableHead className={head}>Centro de trabajo</TableHead>
+                  <TableHead className={cn(head, 'text-right')}>Previstas</TableHead>
+                  <TableHead className={cn(head, 'w-32 text-right')}>Trabajadas</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {view.operations.map((o) => (
+                  <TableRow key={o.id}>
+                    <TableCell className="text-sm">
+                      <span className="font-mono text-xs font-semibold text-navy">{o.work_center.code}</span>{' '}
+                      {o.work_center.name}
+                    </TableCell>
+                    <TableCell className="tabular text-right">{qty(o.hours_planned)} h</TableCell>
+                    <TableCell>
+                      <Input
+                        inputMode="decimal"
+                        aria-label={`Horas trabajadas en ${o.work_center.code}`}
+                        value={hours[o.id] ?? ''}
+                        onChange={(e) => setHours((h) => ({ ...h, [o.id]: e.target.value }))}
+                        className={cn('tabular text-right', !(quantityOf(hours[o.id] ?? '') >= 0) && 'border-red-500')}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
         <dl className="flex flex-col gap-1 rounded-lg bg-muted/40 px-3 py-2 text-sm">
           <div className="flex justify-between">
             <dt className="text-muted-foreground">Materiales consumidos</dt>
             <dd className="tabular">{money(view.material_cost)}</dd>
           </div>
+          {view.operations.length > 0 && (
+            <>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Mano de obra directa</dt>
+                <dd className="tabular">{hoursValid ? money(labor) : '—'}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Carga fabril</dt>
+                <dd className="tabular">{hoursValid ? money(overhead) : '—'}</dd>
+              </div>
+            </>
+          )}
           <div className="flex justify-between font-semibold text-navy">
             <dt>Costo de cada unidad</dt>
-            <dd className="tabular">{valid ? money(view.material_cost / units) : '—'}</dd>
+            <dd className="tabular">{money(unitCost)}</dd>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <dt>Costo estándar del producto</dt>
+            <dd className="tabular">
+              {money(view.standard_cost)}
+              {unitCost != null &&
+                view.standard_cost > 0 &&
+                ` (${percent((unitCost / view.standard_cost - 1) * 100, true)})`}
+            </dd>
           </div>
         </dl>
         <DialogFooter>
@@ -161,5 +231,126 @@ export function FinishDialog({ detail, open, onOpenChange }: DialogProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+
+/** Las horas de la orden en cada centro: previstas y reales, con su costo. */
+export function OperationsSection({ view }: { view: ProductionOrderView }) {
+  const finished = view.operations.some((o) => o.hours_actual != null)
+  const cost = (hours: number | null, o: ProductionOrderView['operations'][number]) =>
+    hours == null ? null : round2(round2(hours * o.labor_rate) + round2(hours * o.overhead_rate))
+  return (
+    <div className="overflow-x-auto rounded-xl border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableHead className={head}>Centro de trabajo</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Horas previstas</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Mano de obra / h</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Carga fabril / h</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Costo previsto</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Horas reales</TableHead>
+            <TableHead className={cn(head, 'text-right')}>Costo real</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {view.operations.map((o) => (
+            <TableRow key={o.id}>
+              <TableCell className="text-sm">
+                <span className="font-mono text-xs font-semibold text-navy">{o.work_center.code}</span>{' '}
+                {o.work_center.name}
+              </TableCell>
+              <TableCell className="tabular text-right">{qty(o.hours_planned)}</TableCell>
+              <TableCell className="tabular text-right">{money(o.labor_rate)}</TableCell>
+              <TableCell className="tabular text-right">{money(o.overhead_rate)}</TableCell>
+              <TableCell className="tabular text-right">{money(cost(o.hours_planned, o))}</TableCell>
+              <TableCell
+                className={cn(
+                  'tabular text-right',
+                  o.hours_actual != null && o.hours_actual > o.hours_planned && 'text-amber-700',
+                )}
+              >
+                {o.hours_actual != null ? qty(o.hours_actual) : '—'}
+              </TableCell>
+              <TableCell className="tabular text-right">
+                {o.hours_actual != null ? money(cost(o.hours_actual, o)) : '—'}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+        Conversión prevista {money(view.planned_conversion_cost)}
+        {finished && view.labor_cost != null && view.overhead_cost != null
+          ? ` · aplicada ${money(view.labor_cost + view.overhead_cost)} (mano de obra ${money(view.labor_cost)} y carga fabril ${money(view.overhead_cost)})`
+          : ''}
+        . Las tarifas son las de los centros al planificar la orden.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Los desvíos de la orden contra lo previsto al planificarla (docs/FASE_5_PRODUCCION_Y_COSTOS.md §4):
+ * en los materiales, de cantidad (se entregó más o menos, al costo previsto) y de precio (el resto: el
+ * costo promedio cambió); en la conversión, de horas (a las tarifas de la orden, que no cambian).
+ */
+export function VariancesSection({ detail }: { detail: DocumentDetail }) {
+  const view = detail.production_order!
+  const quantity = round2(
+    detail.lines.reduce((s, l) => s + ((l.qty_issued ?? 0) - l.quantity) * (l.planned_unit_cost ?? 0), 0),
+  )
+  const price = round2(view.material_cost - view.planned_material_cost - quantity)
+  const applied = view.labor_cost != null && view.overhead_cost != null ? view.labor_cost + view.overhead_cost : null
+  const rows = [
+    { label: 'Materiales, de cantidad', hint: 'Lo entregado de más o de menos, al costo previsto.', value: quantity },
+    { label: 'Materiales, de precio', hint: 'Lo entregado, a su costo promedio contra el previsto.', value: price },
+    ...(applied != null
+      ? [
+          {
+            label: 'Conversión, de horas',
+            hint: 'Las horas trabajadas contra las previstas, a las tarifas de la orden.',
+            value: round2(applied - view.planned_conversion_cost),
+          },
+        ]
+      : []),
+  ]
+  const total = round2(rows.reduce((s, r) => s + r.value, 0))
+  const tone = (v: number) => (v > 0 ? 'text-red-700' : v < 0 ? 'text-green-700' : 'text-muted-foreground')
+  const word = (v: number) => (v > 0 ? 'desfavorable' : v < 0 ? 'favorable' : 'sin desvío')
+  return (
+    <Section
+      title="Desvíos contra lo previsto"
+      description="Desfavorable: costó más de lo previsto; favorable: menos. Con los sueldos reales (Fase 6) se ve además cuánto se aplicó de más o de menos."
+    >
+      <dl className="flex max-w-xl flex-col gap-2 text-sm">
+        {rows.map((r) => (
+          <div key={r.label} className="flex justify-between gap-4">
+            <dt>
+              {r.label}
+              <div className="text-xs text-muted-foreground">{r.hint}</div>
+            </dt>
+            <dd className={cn('tabular text-right', tone(r.value))}>
+              {money(Math.abs(r.value))}
+              <div className="text-xs">{word(r.value)}</div>
+            </dd>
+          </div>
+        ))}
+        <div className="flex justify-between gap-4 border-t pt-2 font-semibold text-navy">
+          <dt>Desvío de la orden</dt>
+          <dd className={cn('tabular text-right', tone(total))}>
+            {money(Math.abs(total))} {word(total)}
+          </dd>
+        </div>
+      </dl>
+      {view.quantity_produced != null && view.quantity_produced < view.quantity && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Salieron bien {qty(view.quantity_produced)} de {qty(view.quantity, view.product.uom_code)}: el costo de cada
+          unidad sube aunque no haya desvíos.
+        </p>
+      )}
+    </Section>
   )
 }

@@ -36,6 +36,15 @@ export function qty(value: number | null | undefined, uom?: string): string {
   return uom ? `${n} ${uom}` : n
 }
 
+const percentFmt = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1 })
+const signedPercentFmt = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1, signDisplay: 'exceptZero' })
+
+/** Un por ciento con un decimal: 12.5 → '12,5 %'; con signo, para una diferencia: '+0,5 %'. */
+export function percent(value: number | null | undefined, signed = false): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${(signed ? signedPercentFmt : percentFmt).format(value)} %`
+}
+
 /** 'aaaa-mm-dd' → 'dd/mm/aaaa' */
 export function date(value: string | null | undefined): string {
   if (!value) return '—'

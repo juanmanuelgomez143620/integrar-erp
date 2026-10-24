@@ -71,6 +71,19 @@ const mockBoms = ofTemplate(seed.boms)
   )
   .sort()
 
+/** Centros de trabajo y horas de la demo: "centro tarifas" y "producto línea centro horas". */
+const mockCenterCode = Object.fromEntries(ofTemplate(seed.workCenters).map((w) => [w.id, w.code]))
+const mockCenters = ofTemplate(seed.workCenters)
+  .map((w) => `${w.code} ${w.labor_rate} ${w.overhead_rate}`)
+  .sort()
+const mockOperations = ofTemplate(seed.boms)
+  .flatMap((b) =>
+    seed.bomOperations
+      .filter((o) => o.bom_id === b.id)
+      .map((o) => `${mockProduct[b.product_id]} ${o.line_no} ${mockCenterCode[o.work_center_id]} ${o.hours}`),
+  )
+  .sort()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -138,6 +151,32 @@ const boms = async (company: string) =>
          join public.bom_lines l on l.bom_id = b.id
          join public.products c on c.id = l.component_id
         where b.company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const centers = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select code || ' ' || (labor_rate::float8)::text || ' ' || (overhead_rate::float8)::text as line
+         from public.work_centers where company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const operations = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select p.code || ' ' || o.line_no || ' ' || w.code || ' ' || (o.hours::float8)::text as line
+         from public.bom_operations o
+         join public.boms b on b.id = o.bom_id
+         join public.products p on p.id = b.product_id
+         join public.work_centers w on w.id = o.work_center_id
+        where o.company_id = $1`,
       [company],
     )
   )
@@ -322,6 +361,13 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await boms(template)).toEqual(mockBoms)
   })
 
+  it('tiene los mismos centros de trabajo y las mismas horas por lista que la demo', async () => {
+    expect(mockCenters).toHaveLength(3)
+    expect(await centers(template)).toEqual(mockCenters)
+    expect(mockOperations).toHaveLength(12)
+    expect(await operations(template)).toEqual(mockOperations)
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -385,6 +431,8 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await opening(created.id)).toEqual(mockOpening)
     expect(await rules(created.id)).toEqual(mockRules)
     expect(await boms(created.id)).toEqual(mockBoms)
+    expect(await centers(created.id)).toEqual(mockCenters)
+    expect(await operations(created.id)).toEqual(mockOperations)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

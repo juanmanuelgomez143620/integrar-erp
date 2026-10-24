@@ -473,6 +473,16 @@ export function buildScenario(): DB {
   E.cmdExpireSalesQuote(as('ventas'), late.id)
   E.cmdCreateSalesQuote(as('ventas'), company, salesQuote('CLI-004', [['PT-002', 2]]), false)
 
+  // Un centro de trabajo nuevo, que después se desactivó.
+  const painting = E.cmdSaveWorkCenter(as('produccion'), company, {
+    id: '',
+    code: 'PINTURA',
+    name: 'Pintura',
+    labor_rate: 7000,
+    overhead_rate: 3000,
+  })
+  E.cmdSetWorkCenterActive(as('produccion'), company, painting.id, false)
+
   // Producción (además de la orden de la demo, liberada): dos mesas terminadas (con
   // dos pies de tabla de más), cuatro sillas en proceso, dos sillas anuladas después
   // de la entrega y diez placards planificados a los que les faltan placas.
@@ -495,7 +505,9 @@ export function buildScenario(): DB {
     })
   const tables = E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-001', 2), true)
   issue(tables.id, { 'MP-001': 22 })
-  E.cmdFinishProductionOrder(as('produccion'), tables.id, 2)
+  // En corte se trabajó una hora más que lo previsto; en los demás centros, lo previsto.
+  const tableOperations = E.productionOrderOperations(db, tables.id)
+  E.cmdFinishProductionOrder(as('produccion'), tables.id, 2, [{ operation_id: tableOperations[0].id, hours: 6 }])
   const chairs = E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-002', 4), true)
   issue(chairs.id)
   const spoiled = E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-002', 2), true)

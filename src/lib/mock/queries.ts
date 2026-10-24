@@ -22,7 +22,9 @@ import {
   accountLinesUpTo,
   bestQuote,
   bomLinesOf,
+  bomOperationsOf,
   can,
+  conversionCost,
   customerCreditUsed,
   deliveryNoteLines,
   docPath,
@@ -45,8 +47,10 @@ import {
   orderFromQuote,
   orderFromSalesQuote,
   plannedUnitCost,
+  productionConversion,
   productionMaterialCost,
   productionOrderLines,
+  productionOrderOperations,
   productionShortages,
   quoteExpired,
   quoteIsValid,
@@ -1266,12 +1270,29 @@ export interface ProductionOrderView {
   released_at: string | null
   issued_at: string | null
   finished_at: string | null
-  /** Costo previsto de los materiales (al planificarla). */
+  /** Costo previsto total (materiales y conversión, al planificarla) y por elemento. */
   planned_cost: number
+  planned_material_cost: number
+  planned_conversion_cost: number
   /** Costo de los materiales entregados (0 hasta la entrega). */
   material_cost: number
+  /** Mano de obra directa y carga fabril aplicadas (al terminarla; null antes). */
+  labor_cost: number | null
+  overhead_cost: number | null
   /** Costo real de cada unidad terminada (al terminarla). */
   unit_cost: number | null
+  /** Costo estándar del producto, para comparar. */
+  standard_cost: number
+  /** Las horas de cada centro de trabajo: previstas (con sus tarifas) y reales. */
+  operations: {
+    id: string
+    line_no: number
+    work_center: { id: string; code: string; name: string }
+    hours_planned: number
+    hours_actual: number | null
+    labor_rate: number
+    overhead_rate: number
+  }[]
 }
 
 /** Remito: quién lo lleva, cuándo salió y a qué costo. */
@@ -1712,8 +1733,32 @@ function productionOrderView(db: DB, doc: T.Document): ProductionOrderView {
     issued_at: pd.issued_at,
     finished_at: pd.finished_at,
     planned_cost: doc.subtotal,
+    planned_material_cost: round2(
+      productionOrderLines(db, doc.id).reduce((s, l) => s + round2(l.quantity_planned * l.planned_unit_cost), 0),
+    ),
+    planned_conversion_cost: round2(
+      productionOrderOperations(db, doc.id).reduce(
+        (s, o) => s + conversionCost(o.hours_planned, o.labor_rate, o.overhead_rate),
+        0,
+      ),
+    ),
     material_cost: productionMaterialCost(db, doc.id),
+    labor_cost: pd.finished_at ? productionConversion(db, doc.id).labor : null,
+    overhead_cost: pd.finished_at ? productionConversion(db, doc.id).overhead : null,
     unit_cost: pd.unit_cost,
+    standard_cost: product.standard_cost,
+    operations: productionOrderOperations(db, doc.id).map((o) => {
+      const center = db.workCenters.find((w) => w.id === o.work_center_id)!
+      return {
+        id: o.id,
+        line_no: o.line_no,
+        work_center: { id: center.id, code: center.code, name: center.name },
+        hours_planned: o.hours_planned,
+        hours_actual: o.hours_actual,
+        labor_rate: o.labor_rate,
+        overhead_rate: o.overhead_rate,
+      }
+    }),
   }
 }
 
@@ -3666,6 +3711,16 @@ function bomMaterialCost(db: DB, bomId: string) {
   )
 }
 
+/** Costo estimado de la conversión de una unidad: horas × tarifas actuales de cada centro. */
+function bomConversionCost(db: DB, bomId: string) {
+  return round2(
+    bomOperationsOf(db, bomId).reduce((s, o) => {
+      const w = db.workCenters.find((x) => x.id === o.work_center_id)!
+      return s + conversionCost(o.hours, w.labor_rate, w.overhead_rate)
+    }, 0),
+  )
+}
+
 /** Un producto terminado y su lista de materiales (si tiene). */
 export interface BomRow {
   product: { id: string; code: string; name: string; uom_code: string; is_active: boolean }
@@ -3673,6 +3728,8 @@ export interface BomRow {
   components: number
   /** Costo estimado de los materiales de una unidad (0 si no tiene lista). */
   material_cost: number
+  /** Costo estimado de la conversión de una unidad (0 si no tiene horas). */
+  conversion_cost: number
 }
 
 export function listBoms(db: DB, userId: string, companyId: string): BomRow[] {
@@ -3687,6 +3744,7 @@ export function listBoms(db: DB, userId: string, companyId: string): BomRow[] {
         bom: bom ? { id: bom.id, is_active: bom.is_active, updated_at: bom.updated_at } : null,
         components: bom ? bomLinesOf(db, bom.id).length : 0,
         material_cost: bom ? bomMaterialCost(db, bom.id) : 0,
+        conversion_cost: bom ? bomConversionCost(db, bom.id) : 0,
       }
     })
 }
@@ -3700,11 +3758,23 @@ export interface BomComponentLine {
   line_cost: number
 }
 
+/** Las horas de una unidad en un centro de trabajo, con su costo a las tarifas actuales. */
+export interface BomOperationLine {
+  line_no: number
+  work_center: { id: string; code: string; name: string; is_active: boolean }
+  hours: number
+  labor_rate: number
+  overhead_rate: number
+  cost: number
+}
+
 export interface BomDetail {
   product: { id: string; code: string; name: string; uom_code: string; is_active: boolean; standard_cost: number }
   bom: { id: string; notes: string; is_active: boolean; created_at: string; updated_at: string } | null
   lines: BomComponentLine[]
   material_cost: number
+  operations: BomOperationLine[]
+  conversion_cost: number
   /** Órdenes del producto planificadas, liberadas o en proceso. */
   open_orders: number
 }
@@ -3749,6 +3819,20 @@ export function bomDetail(db: DB, userId: string, companyId: string, productCode
       : null,
     lines,
     material_cost: round2(lines.reduce((s, l) => s + l.line_cost, 0)),
+    operations: bom
+      ? bomOperationsOf(db, bom.id).map((o) => {
+          const w = db.workCenters.find((x) => x.id === o.work_center_id)!
+          return {
+            line_no: o.line_no,
+            work_center: { id: w.id, code: w.code, name: w.name, is_active: w.is_active },
+            hours: o.hours,
+            labor_rate: w.labor_rate,
+            overhead_rate: w.overhead_rate,
+            cost: conversionCost(o.hours, w.labor_rate, w.overhead_rate),
+          }
+        })
+      : [],
+    conversion_cost: bom ? bomConversionCost(db, bom.id) : 0,
     open_orders: db.documents.filter(
       (d) =>
         d.doc_type === 'PRODUCTION_ORDER' &&
@@ -3769,6 +3853,13 @@ export interface ProducibleProduct {
     component: { id: string; code: string; name: string; uom_code: string; default_warehouse_id: string | null }
     quantity: number
     stock: WarehouseAvailability[]
+  }[]
+  /** Horas por unidad en cada centro, con las tarifas actuales. */
+  operations: {
+    work_center: { id: string; code: string; name: string }
+    hours: number
+    labor_rate: number
+    overhead_rate: number
   }[]
 }
 
@@ -3798,5 +3889,82 @@ export function productionCatalog(db: DB, userId: string, companyId: string): Pr
           stock: availabilityOf(db, companyId, c.id),
         }
       }),
+      operations: bomOperationsOf(db, activeBomOf(db, p.id)!.id).map((o) => {
+        const w = db.workCenters.find((x) => x.id === o.work_center_id)!
+        return {
+          work_center: { id: w.id, code: w.code, name: w.name },
+          hours: o.hours,
+          labor_rate: w.labor_rate,
+          overhead_rate: w.overhead_rate,
+        }
+      }),
     }))
+}
+
+/** Un centro de trabajo y cuántas listas lo usan. */
+export interface WorkCenterRow extends T.WorkCenter {
+  boms: number
+}
+
+export function listWorkCenters(db: DB, userId: string, companyId: string): WorkCenterRow[] {
+  assertPerm(db, userId, companyId, 'work_center.read')
+  return db.workCenters
+    .filter((w) => w.company_id === companyId)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((w) => ({
+      ...w,
+      boms: new Set(db.bomOperations.filter((o) => o.work_center_id === w.id).map((o) => o.bom_id)).size,
+    }))
+}
+
+/** Una orden terminada: su costo previsto contra el real, por elemento. */
+export interface ProductionCostRow {
+  order: { id: string; display_number: string; path: string }
+  product: { id: string; code: string; name: string; uom_code: string; standard_cost: number }
+  /** El día en que se terminó (el del ingreso al stock). */
+  finished_on: string
+  quantity: number
+  quantity_produced: number
+  planned_cost: number
+  material_cost: number
+  labor_cost: number
+  overhead_cost: number
+  unit_cost: number
+}
+
+/** Los costos de producción: las órdenes terminadas en un período (docs/FASE_5_PRODUCCION_Y_COSTOS.md §4). */
+export function productionCosts(
+  db: DB,
+  userId: string,
+  companyId: string,
+  from: string,
+  to: string,
+): ProductionCostRow[] {
+  assertPerm(db, userId, companyId, 'production_order.read')
+  return db.documents
+    .filter((d) => d.company_id === companyId && d.doc_type === 'PRODUCTION_ORDER' && d.status === 'TERMINADA')
+    .map((d) => ({
+      doc: d,
+      finished_on:
+        db.stockMovements.find((m) => m.document_id === d.id && m.movement_type === 'INGRESO_PRODUCCION')
+          ?.movement_date ?? '',
+    }))
+    .filter((x) => x.finished_on >= from && x.finished_on <= to)
+    .sort((a, b) => compareCodes(a.finished_on, b.finished_on) || a.doc.number - b.doc.number)
+    .map(({ doc, finished_on }) => {
+      const p = db.products.find((x) => x.id === doc.pd!.product_id)!
+      const { labor, overhead } = productionConversion(db, doc.id)
+      return {
+        order: { id: doc.id, display_number: doc.display_number, path: docPath(db, doc) },
+        product: { id: p.id, code: p.code, name: p.name, uom_code: p.uom_code, standard_cost: p.standard_cost },
+        finished_on,
+        quantity: doc.pd!.quantity,
+        quantity_produced: doc.pd!.quantity_produced ?? 0,
+        planned_cost: doc.subtotal,
+        material_cost: productionMaterialCost(db, doc.id),
+        labor_cost: labor,
+        overhead_cost: overhead,
+        unit_cost: doc.pd!.unit_cost ?? 0,
+      }
+    })
 }

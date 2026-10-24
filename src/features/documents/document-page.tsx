@@ -38,14 +38,19 @@ import {
   VAT_CONDITIONS,
 } from '@/lib/domain/catalog'
 import type { DocType, TransitionAction } from '@/lib/domain/types'
-import { date, dateTime, money, qty } from '@/lib/format'
+import { date, dateTime, money, percent, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { AwardDialog, ComparisonSection } from '@/features/purchasing/quotations/quotation-views'
 import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
-import { FinishDialog, IssueDialog } from '@/features/production/production-dialogs'
+import {
+  FinishDialog,
+  IssueDialog,
+  OperationsSection,
+  VariancesSection,
+} from '@/features/production/production-dialogs'
 
 type Runner = (docId: string, text: string) => Promise<unknown>
 
@@ -424,8 +429,12 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               <TabsTrigger value="flow">Flujo documental</TabsTrigger>
               <TabsTrigger value="history">Historial ({detail.history.length})</TabsTrigger>
             </TabsList>
-            <TabsContent value="detail" className="mt-3">
+            <TabsContent value="detail" className="mt-3 flex flex-col gap-4">
               <Lines detail={detail} />
+              {detail.production_order && detail.production_order.operations.length > 0 && (
+                <OperationsSection view={detail.production_order} />
+              )}
+              {detail.production_order?.issued_at && doc.status !== 'ANULADA' && <VariancesSection detail={detail} />}
             </TabsContent>
             <TabsContent value="flow" className="mt-3">
               <Section
@@ -944,11 +953,39 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Prevista para">{po.due_date ? date(po.due_date) : 'Sin fecha'}</InfoRow>
         <InfoRow label="Materiales desde">{po.materials_warehouse.name}</InfoRow>
         <InfoRow label="El producto entra a">{po.output_warehouse.name}</InfoRow>
-        <InfoRow label="Materiales (previsto)">{money(po.planned_cost)}</InfoRow>
-        <InfoRow label="Materiales (real)">
-          {po.issued_at ? money(po.material_cost) : 'Todavía no se entregaron'}
+        <InfoRow label="Costo previsto">
+          {money(po.planned_cost)}
+          <span className="text-xs text-muted-foreground">
+            {' '}
+            (materiales {money(po.planned_material_cost)} y conversión {money(po.planned_conversion_cost)})
+          </span>
         </InfoRow>
-        {po.unit_cost != null && <InfoRow label="Costo de cada unidad">{money(po.unit_cost)}</InfoRow>}
+        <InfoRow label="Costo real">
+          {po.labor_cost != null && po.overhead_cost != null ? (
+            <>
+              {money(po.material_cost + po.labor_cost + po.overhead_cost)}
+              <span className="text-xs text-muted-foreground">
+                {' '}
+                (materiales {money(po.material_cost)}, mano de obra {money(po.labor_cost)} y carga fabril{' '}
+                {money(po.overhead_cost)})
+              </span>
+            </>
+          ) : po.issued_at ? (
+            `Materiales entregados: ${money(po.material_cost)}`
+          ) : (
+            'Todavía no se entregaron los materiales'
+          )}
+        </InfoRow>
+        {po.unit_cost != null && (
+          <InfoRow label="Costo de cada unidad">
+            {money(po.unit_cost)}
+            <span className="text-xs text-muted-foreground">
+              {' '}
+              (estándar {money(po.standard_cost)}
+              {po.standard_cost > 0 && `, ${percent((po.unit_cost / po.standard_cost - 1) * 100, true)}`})
+            </span>
+          </InfoRow>
+        )}
         <InfoRow label="Planificó">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
@@ -1413,7 +1450,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                   <TableCell className="font-mono text-xs">{l.requisition_label ?? '—'}</TableCell>
                   <TableCell className="tabular text-right">{qty(l.quantity, l.product.uom_code)}</TableCell>
                   <TableCell className="tabular text-right">{money(l.unit_price)}</TableCell>
-                  <TableCell className="tabular text-right">{l.vat_rate}%</TableCell>
+                  <TableCell className="tabular text-right">{percent(l.vat_rate)}</TableCell>
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                   <TableCell
                     className={cn(
@@ -1465,7 +1502,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 <>
                   <TableCell className="tabular text-right">{qty(l.quantity, l.product.uom_code)}</TableCell>
                   <TableCell className="tabular text-right">{money(l.unit_price)}</TableCell>
-                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? percent(l.vat_rate) : '—'}</TableCell>
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
               )}
@@ -1482,7 +1519,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                     )}
                   </TableCell>
                   <TableCell className="tabular text-right">
-                    {doc.si?.letter === 'A' ? `${l.vat_rate}%` : '—'}
+                    {doc.si?.letter === 'A' ? percent(l.vat_rate) : '—'}
                   </TableCell>
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
@@ -1506,11 +1543,11 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                     {money(l.unit_price)}
                     {!!l.list_price && (l.unit_price ?? 0) < l.list_price && (
                       <div className="text-xs text-amber-700">
-                        Bonif. {Math.round((1 - (l.unit_price ?? 0) / l.list_price) * 1000) / 10}%
+                        Bonif. {percent((1 - (l.unit_price ?? 0) / l.list_price) * 100)}
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? percent(l.vat_rate) : '—'}</TableCell>
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                   <TableCell
                     className={cn(
@@ -1545,11 +1582,11 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                     {money(l.unit_price)}
                     {!!l.list_price && (l.unit_price ?? 0) < l.list_price && (
                       <div className="text-xs text-amber-700">
-                        Bonif. {Math.round((1 - (l.unit_price ?? 0) / l.list_price) * 1000) / 10}%
+                        Bonif. {percent((1 - (l.unit_price ?? 0) / l.list_price) * 100)}
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? percent(l.vat_rate) : '—'}</TableCell>
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
               )}
@@ -1560,7 +1597,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                     {qty(l.quantity, l.product.uom_code)}
                   </TableCell>
                   <TableCell className="tabular text-right">{money(l.unit_price)}</TableCell>
-                  <TableCell className="tabular text-right">{l.vat_rate ? `${l.vat_rate}%` : '—'}</TableCell>
+                  <TableCell className="tabular text-right">{l.vat_rate ? percent(l.vat_rate) : '—'}</TableCell>
                   <TableCell className="tabular text-right">{money(l.line_subtotal)}</TableCell>
                 </>
               )}
@@ -1626,7 +1663,7 @@ function Lines({ detail }: { detail: DocumentDetail }) {
                 Materiales
               </TableCell>
               <TableCell className="tabular text-right font-semibold">
-                {money(detail.production_order.planned_cost)}
+                {money(detail.production_order.planned_material_cost)}
               </TableCell>
               <TableCell />
               <TableCell className="tabular text-right font-semibold">

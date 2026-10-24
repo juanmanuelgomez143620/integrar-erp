@@ -227,13 +227,20 @@ export function ProductionOrderFormPage() {
                 <dt className="text-muted-foreground">Materiales por unidad</dt>
                 <dd className="tabular">{bom ? money(bom.material_cost) : '—'}</dd>
               </div>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Conversión por unidad</dt>
+                <dd className="tabular">{bom ? money(bom.conversion_cost) : '—'}</dd>
+              </div>
               <div className="flex justify-between border-t pt-1.5 text-base font-semibold text-navy">
-                <dt>Materiales de la orden</dt>
-                <dd className="tabular">{bom && q > 0 ? money(Math.round(bom.material_cost * q * 100) / 100) : '—'}</dd>
+                <dt>Costo de la orden</dt>
+                <dd className="tabular">
+                  {bom && q > 0 ? money(Math.round((bom.material_cost + bom.conversion_cost) * q * 100) / 100) : '—'}
+                </dd>
               </div>
             </dl>
             <p className="mt-2 text-xs text-muted-foreground">
-              Es una estimación: el costo real sale de lo que Depósito entregue, al costo promedio de ese momento.
+              Es una estimación: el costo real sale de lo que Depósito entregue (al costo promedio de ese momento) y de
+              las horas que se trabajen en cada centro.
             </p>
             {product && (
               <div

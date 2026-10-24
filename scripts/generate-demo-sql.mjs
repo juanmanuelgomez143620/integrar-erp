@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 5a).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 5b).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261022140200_demo_template_produccion.sql'
+const target = process.argv[2] ?? '20261022150200_demo_template_conversion.sql'
 
 const server = await createServer({
   root,
@@ -39,7 +39,10 @@ const values = (rows, columns) => rows.map((r) => `      (${columns.map((c) => s
 try {
   const { buildSeed } = await server.ssrLoadModule('/src/lib/mock/seed.ts')
   const chart = await server.ssrLoadModule('/src/lib/domain/chart-of-accounts.ts')
-  const { DEMO_BOMS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
+  const { DEMO_BOMS, DEMO_BOM_OPERATIONS, DEMO_WORK_CENTERS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
+  const bomOperationRows = DEMO_BOM_OPERATIONS.flatMap((b) =>
+    b.operations.map(([center, hours], i) => ({ product: b.product, line_no: i + 1, center, hours })),
+  )
   const bomRows = DEMO_BOMS.flatMap((b) =>
     b.components.map(([component, quantity], i) => ({ product: b.product, line_no: i + 1, component, quantity })),
   )
@@ -123,7 +126,8 @@ begin
   select p_company, a.code, a.name, a.account_type, a.normal_side, a.level, a.is_imputable, a.description
     from (values
 ${values(accounts, ['code', 'name', 'account_type', 'normal_side', 'level', 'is_imputable', 'description'])}
-    ) as a (code, name, account_type, normal_side, level, is_imputable, description);
+    ) as a (code, name, account_type, normal_side, level, is_imputable, description)
+   where not exists (select 1 from public.accounts x where x.company_id = p_company and x.code = a.code);
 end;
 $$;
 
@@ -232,6 +236,74 @@ begin
 end;
 $$;
 
+-- ------------------------------------------------------------------ Centros de trabajo y horas de la demo (a validar)
+create or replace function private.demo_work_center_rows()
+returns table (code text, name text, labor_rate numeric, overhead_rate numeric)
+language sql
+immutable
+set search_path = ''
+as $$
+  select w.code::text, w.name::text, w.labor_rate::numeric, w.overhead_rate::numeric
+    from (values
+${values(DEMO_WORK_CENTERS, ['code', 'name', 'labor_rate', 'overhead_rate'])}
+    ) as w (code, name, labor_rate, overhead_rate)
+$$;
+
+-- Los centros de la demo que la empresa todavía no tiene, por código (insertWorkCenters).
+create or replace function private.insert_demo_work_centers(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.work_centers (company_id, code, name, labor_rate, overhead_rate)
+  select p_company, r.code, r.name, r.labor_rate, r.overhead_rate
+    from private.demo_work_center_rows() r
+   where not exists (select 1 from public.work_centers w where w.company_id = p_company and w.code = r.code)
+$$;
+
+create or replace function private.demo_bom_operation_rows()
+returns table (product text, line_no int, center text, hours numeric)
+language sql
+immutable
+set search_path = ''
+as $$
+  select o.product::text, o.line_no::int, o.center::text, o.hours::numeric
+    from (values
+${values(bomOperationRows, ['product', 'line_no', 'center', 'hours'])}
+    ) as o (product, line_no, center, hours)
+$$;
+
+-- Las horas de la demo en las listas de esos productos que todavía no tienen,
+-- si existen todos sus centros de trabajo (insertBomOperations).
+create or replace function private.insert_demo_bom_operations(p_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_bom record;
+begin
+  for v_bom in
+    select b.id, p.code from public.boms b join public.products p on p.id = b.product_id
+     where b.company_id = p_company
+       and p.code in (select r.product from private.demo_bom_operation_rows() r)
+       and not exists (select 1 from public.bom_operations o where o.bom_id = b.id)
+     order by p.code collate "C"
+  loop
+    continue when exists (
+      select 1 from private.demo_bom_operation_rows() r
+       where r.product = v_bom.code
+         and not exists (select 1 from public.work_centers w where w.company_id = p_company and w.code = r.center));
+    insert into public.bom_operations (company_id, bom_id, line_no, work_center_id, hours)
+    select p_company, v_bom.id, r.line_no, w.id, r.hours
+      from private.demo_bom_operation_rows() r join public.work_centers w on w.company_id = p_company and w.code = r.center
+     where r.product = v_bom.code;
+  end loop;
+end;
+$$;
+
 -- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()
 returns uuid
@@ -316,8 +388,10 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
     left join public.suppliers s on s.company_id = v_id and s.code = p.supplier_code
     left join public.warehouses w on w.company_id = v_id and w.code = p.warehouse_code;
 
-  -- Las listas de materiales de los muebles.
+  -- Los centros de trabajo y las listas de materiales de los muebles, con sus horas.
+  perform private.insert_demo_work_centers(v_id);
   perform private.insert_demo_boms(v_id);
+  perform private.insert_demo_bom_operations(v_id);
 
   -- Inventario inicial documentado (un ajuste por depósito), contabilidad con su
   -- asiento de apertura y alertas de arranque.
@@ -333,7 +407,7 @@ $$;
   console.log(
     `${file}\n${sectors.length} sectores · ${warehouses.length} depósitos · ${suppliers.length} proveedores · ` +
       `${of(db.customers).length} clientes · ${products.length} productos · ${initial.length} ajustes de inventario inicial · ` +
-      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales`,
+      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales · ${DEMO_WORK_CENTERS.length} centros de trabajo`,
   )
 } finally {
   await server.close()

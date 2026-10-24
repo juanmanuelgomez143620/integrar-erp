@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseAmount } from './format'
+import { parseAmount, percent } from './format'
 
 describe('importes escritos por el estudiante', () => {
   it('acepta la coma decimal y los puntos de miles de es-AR', () => {
@@ -22,5 +22,16 @@ describe('importes escritos por el estudiante', () => {
     expect(parseAmount('   ')).toBeNaN()
     expect(parseAmount('mil')).toBeNaN()
     expect(parseAmount('1.2.3')).toBeNaN()
+  })
+})
+
+describe('por cientos', () => {
+  it('con la coma decimal y, en una diferencia, el signo', () => {
+    expect(percent(12.5)).toBe('12,5 %')
+    expect(percent(21)).toBe('21 %')
+    expect(percent(0.46)).toBe('0,5 %')
+    expect(percent(0.5, true)).toBe('+0,5 %')
+    expect(percent(-3, true)).toBe('-3 %')
+    expect(percent(0, true)).toBe('0 %')
   })
 })

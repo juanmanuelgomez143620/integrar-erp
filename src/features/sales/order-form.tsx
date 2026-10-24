@@ -9,7 +9,7 @@ import { PageHeader } from '@/components/common/page-header'
 import { ProductSelect, SimpleSelect } from '@/components/common/pickers'
 import { api, commands, type SalesCustomer, type SellableProduct } from '@/lib/api'
 import { VAT_CONDITIONS } from '@/lib/domain/catalog'
-import { addDays, money, parseAmount, qty, todayAR } from '@/lib/format'
+import { addDays, money, parseAmount, percent, qty, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -316,7 +316,7 @@ function SalesDocumentForm({
                           list > 0 &&
                           ` · ${customer?.price_list && list !== p.sale_price ? `precio de la lista ${customer.price_list.code}` : 'precio de venta'} ${money(list)}`}
                         {discount > 0 && (
-                          <span className="text-amber-700"> · bonificación {Math.round(discount * 1000) / 10} %</span>
+                          <span className="text-amber-700"> · bonificación {percent(discount * 100)}</span>
                         )}
                       </span>
                       <span className="flex items-center gap-3">

@@ -8,11 +8,11 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { DataTable } from '@/components/common/data-table'
 import { EmptyState, Field, Loading, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
-import { ProductSelect } from '@/components/common/pickers'
+import { ProductSelect, SimpleSelect } from '@/components/common/pickers'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api, commands, type BomDetail, type BomRow } from '@/lib/api'
 import { BOM_COMPONENT_TYPES, PRODUCT_TYPES } from '@/lib/domain/catalog'
-import { money, qty } from '@/lib/format'
+import { money, percent, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -49,7 +49,7 @@ export function BomsPage() {
       <PageHeader
         crumbs={crumbs(company)}
         title="Listas de materiales"
-        description="La fórmula de cada producto terminado: qué materias primas e insumos lleva y cuánto de cada uno por unidad. Cada orden de producción copia la lista al planificarse."
+        description="La fórmula de cada producto terminado: qué materias primas e insumos lleva y cuánto de cada uno por unidad, y cuántas horas en cada centro de trabajo. Cada orden de producción copia la lista al planificarse."
       />
       <DataTable<BomRow>
         rows={data}
@@ -83,6 +83,13 @@ export function BomsPage() {
             cell: (r) => <span className="tabular">{r.bom ? money(r.material_cost) : '—'}</span>,
           },
           {
+            key: 'conversion',
+            header: 'Conversión por unidad',
+            align: 'right',
+            sort: (r) => r.conversion_cost,
+            cell: (r) => <span className="tabular">{r.bom ? money(r.conversion_cost) : '—'}</span>,
+          },
+          {
             key: 'status',
             header: 'Estado',
             cell: (r) =>
@@ -104,6 +111,12 @@ interface DraftLine {
   key: number
   component_id: string
   quantity: string
+}
+
+interface DraftOperation {
+  key: number
+  work_center_id: string
+  hours: string
 }
 
 let nextKey = 1
@@ -142,7 +155,11 @@ function BomView({ detail, onEdit }: { detail: BomDetail; onEdit: () => void }) 
   const setActive = useCommand((active: boolean) => commands.setBomActive(company.companyId, bom!.id, active), {
     success: 'Listo. El cambio quedó registrado en la auditoría.',
   })
-  const share = product.standard_cost > 0 ? Math.round((detail.material_cost / product.standard_cost) * 100) : null
+  const unitCost = Math.round((detail.material_cost + detail.conversion_cost) * 100) / 100
+  const gap =
+    product.standard_cost > 0
+      ? Math.round(((unitCost - product.standard_cost) / product.standard_cost) * 1000) / 10
+      : null
   return (
     <>
       <PageHeader
@@ -253,11 +270,83 @@ function BomView({ detail, onEdit }: { detail: BomDetail; onEdit: () => void }) 
                 </TableFooter>
               </Table>
             </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Costo estándar del producto: {money(product.standard_cost)}
-              {share !== null && ` (los materiales son el ${share} %; el resto es la mano de obra y la carga fabril)`}.
-              {bom.notes && ` Observaciones: ${bom.notes}`}
-            </p>
+            {bom.notes && <p className="mt-3 text-xs text-muted-foreground">Observaciones: {bom.notes}</p>}
+          </Section>
+          <Section
+            title="Horas por unidad en cada centro de trabajo"
+            description="La conversión: horas × la tarifa de mano de obra directa y la tasa de carga fabril de cada centro (Producción → Centros de trabajo)."
+          >
+            {detail.operations.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Sin horas cargadas: el costo de cada unidad es sólo el de sus materiales.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                      <TableHead className={head}>Centro de trabajo</TableHead>
+                      <TableHead className={cn(head, 'text-right')}>Horas</TableHead>
+                      <TableHead className={cn(head, 'text-right')}>Mano de obra / h</TableHead>
+                      <TableHead className={cn(head, 'text-right')}>Carga fabril / h</TableHead>
+                      <TableHead className={cn(head, 'text-right')}>Costo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {detail.operations.map((o) => (
+                      <TableRow key={o.line_no}>
+                        <TableCell className="text-sm">
+                          <span className="font-mono text-xs font-semibold text-navy">{o.work_center.code}</span>{' '}
+                          {o.work_center.name}
+                          {!o.work_center.is_active && <span className="text-xs text-amber-700"> (inactivo)</span>}
+                        </TableCell>
+                        <TableCell className="tabular text-right">{qty(o.hours)}</TableCell>
+                        <TableCell className="tabular text-right">{money(o.labor_rate)}</TableCell>
+                        <TableCell className="tabular text-right">{money(o.overhead_rate)}</TableCell>
+                        <TableCell className="tabular text-right">{money(o.cost)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-right text-sm font-semibold">
+                        Conversión de una unidad
+                      </TableCell>
+                      <TableCell className="tabular text-right font-semibold">
+                        {money(detail.conversion_cost)}
+                      </TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </div>
+            )}
+          </Section>
+          <Section title="Costo estimado de una unidad">
+            <dl className="grid max-w-md gap-1.5 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Materiales</dt>
+                <dd className="tabular">{money(detail.material_cost)}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Conversión (mano de obra y carga fabril)</dt>
+                <dd className="tabular">{money(detail.conversion_cost)}</dd>
+              </div>
+              <div className="flex justify-between border-t pt-1.5 font-semibold text-navy">
+                <dt>Costo de una unidad</dt>
+                <dd className="tabular">{money(unitCost)}</dd>
+              </div>
+              <div className="flex justify-between text-muted-foreground">
+                <dt>Costo estándar del producto</dt>
+                <dd className="tabular">
+                  {money(product.standard_cost)}
+                  {gap !== null && (
+                    <span className={cn('ml-1 text-xs', Math.abs(gap) > 5 ? 'text-amber-700' : '')}>
+                      ({percent(gap, true)})
+                    </span>
+                  )}
+                </dd>
+              </div>
+            </dl>
           </Section>
         </div>
       )}
@@ -273,6 +362,20 @@ function BomEditor({ detail, onDone }: { detail: BomDetail; onDone: () => void }
     queryFn: () => api.products(company.companyId),
   })
   const components = products.filter((p) => p.is_active && BOM_COMPONENT_TYPES.includes(p.product_type))
+  const { data: centers = [] } = useQuery({
+    queryKey: ['work-centers', company.companyId],
+    queryFn: () => api.workCenters(company.companyId),
+    enabled: company.can('work_center.read'),
+  })
+  const [operations, setOperations] = useState<DraftOperation[]>(() =>
+    detail.operations.map((o) => ({
+      key: nextKey++,
+      work_center_id: o.work_center.id,
+      hours: String(o.hours).replace('.', ','),
+    })),
+  )
+  const updateOperation = (key: number, patch: Partial<DraftOperation>) =>
+    setOperations((os) => os.map((o) => (o.key === key ? { ...o, ...patch } : o)))
   const [lines, setLines] = useState<DraftLine[]>(() =>
     detail.lines.length
       ? detail.lines.map((l) => ({
@@ -293,11 +396,19 @@ function BomEditor({ detail, onDone }: { detail: BomDetail; onDone: () => void }
         lines: lines
           .filter((l) => l.component_id)
           .map((l) => ({ component_id: l.component_id, quantity: quantityOf(l.quantity) })),
+        operations: operations
+          .filter((o) => o.work_center_id)
+          .map((o) => ({ work_center_id: o.work_center_id, hours: quantityOf(o.hours) })),
       }),
     { success: 'Lista guardada.', onSuccess: onDone },
   )
   const filled = lines.filter((l) => l.component_id)
-  const ready = filled.length > 0 && filled.every((l) => quantityOf(l.quantity) > 0)
+  // Los centros activos que todavía no están en la lista.
+  const freeCenters = centers.filter((c) => c.is_active && !operations.some((o) => o.work_center_id === c.id)).length
+  const ready =
+    filled.length > 0 &&
+    filled.every((l) => quantityOf(l.quantity) > 0) &&
+    operations.filter((o) => o.work_center_id).every((o) => quantityOf(o.hours) > 0)
   return (
     <>
       <PageHeader
@@ -310,7 +421,7 @@ function BomEditor({ detail, onDone }: { detail: BomDetail; onDone: () => void }
             Lista de materiales de <span className="font-mono">{product.code}</span> {product.name}
           </span>
         }
-        description="Cuánto lleva cada unidad de cada materia prima e insumo. Las órdenes ya cargadas no cambian."
+        description="Cuánto lleva cada unidad de cada materia prima e insumo y cuántas horas en cada centro. Las órdenes ya cargadas no cambian."
       />
       <div className="flex max-w-3xl flex-col gap-4">
         <Section
@@ -363,6 +474,69 @@ function BomEditor({ detail, onDone }: { detail: BomDetail; onDone: () => void }
               )
             })}
           </div>
+        </Section>
+        <Section
+          title="Horas por unidad en cada centro de trabajo"
+          description="La conversión de cada unidad: cuántas horas lleva en cada sector del taller."
+          actions={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={freeCenters <= operations.filter((o) => !o.work_center_id).length}
+              title={centers.length ? undefined : 'Primero se cargan los centros (Producción → Centros de trabajo).'}
+              onClick={() => setOperations((os) => [...os, { key: nextKey++, work_center_id: '', hours: '' }])}
+            >
+              <Plus /> Agregar centro
+            </Button>
+          }
+        >
+          {operations.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Sin horas: el costo de cada unidad es sólo el de sus materiales.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {operations.map((o) => {
+                const h = quantityOf(o.hours)
+                return (
+                  <div
+                    key={o.key}
+                    className="grid items-start gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_140px_auto]"
+                  >
+                    <SimpleSelect
+                      value={o.work_center_id}
+                      onChange={(id) => updateOperation(o.key, { work_center_id: id })}
+                      options={centers
+                        .filter(
+                          (c) =>
+                            c.id === o.work_center_id ||
+                            (c.is_active && !operations.some((other) => other.work_center_id === c.id)),
+                        )
+                        .map((c) => ({ value: c.id, label: `${c.code} · ${c.name}` }))}
+                      placeholder="Elegí el centro de trabajo"
+                    />
+                    <Field label="Horas por unidad" error={o.hours && !(h > 0) ? 'Mayor que cero' : undefined}>
+                      <Input
+                        inputMode="decimal"
+                        value={o.hours}
+                        onChange={(e) => updateOperation(o.key, { hours: e.target.value })}
+                        className="tabular text-right"
+                      />
+                    </Field>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Quitar centro"
+                      className="mt-6"
+                      onClick={() => setOperations((os) => os.filter((x) => x.key !== o.key))}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </Section>
         <Section title="Observaciones">
           <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={300} placeholder="Opcional" />

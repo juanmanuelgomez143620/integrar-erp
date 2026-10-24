@@ -55,6 +55,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   stock: 'inventory',
   stock_adjustment: 'inventory',
   bom: 'production',
+  work_center: 'production',
   production_order: 'production',
   supplier_invoice: 'purchasing',
   payable: 'payables',
@@ -141,7 +142,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read',
+    'bom.read', 'production_order.read', 'work_center.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -182,6 +183,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'purchase_order.read', 'goods_receipt.read',
     'bom.read', 'bom.create', 'bom.update',
     'production_order.read', 'production_order.create', 'production_order.cancel',
+    'work_center.read', 'work_center.update',
   ],
   CONTABILIDAD: [
     ...CORE_READ,
@@ -195,7 +197,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read',
+    'bom.read', 'production_order.read', 'work_center.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -226,7 +228,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
-    'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read',
+    'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read',
   ],
   DOCENTE: [],
 }
@@ -877,6 +879,14 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       PRODUCCION_EN_PROCESO: 'Productos en proceso que reciben los materiales',
       MATERIA_PRIMA: 'Materias primas consumidas',
       INSUMO: 'Insumos consumidos',
+    },
+  },
+  CONVERSION_PRODUCCION: {
+    label: 'Costos de conversión aplicados (orden de producción terminada)',
+    keys: {
+      PRODUCCION_EN_PROCESO: 'Productos en proceso que reciben la conversión',
+      MANO_DE_OBRA_APLICADA: 'Mano de obra directa aplicada a la orden',
+      CARGA_FABRIL_APLICADA: 'Carga fabril aplicada a la orden',
     },
   },
   PRODUCCION_TERMINADA: {

@@ -102,6 +102,9 @@ async function snapshot(company: string) {
     'bom_lines',
     'production_orders',
     'production_order_lines',
+    'work_centers',
+    'bom_operations',
+    'production_order_operations',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -181,6 +184,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
         so_line_id: B.salesLine,
         component_id: B.product,
         line_id: B.productionLine,
+        work_center_id: B.workCenter,
+        hours: 1,
       },
       { account_id: B.account, debit: 0, credit: 1 },
     ],
@@ -219,6 +224,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     quantity: 1,
     materials_warehouse_id: B.warehouse,
     output_warehouse_id: B.warehouse,
+    labor_rate: 1,
+    overhead_rate: 1,
   }
   const values: Record<string, unknown> = {
     p_company_id: company,
@@ -268,6 +275,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_percent: 5,
     p_bom_id: B.bom,
     p_quantity: 1,
+    p_work_center_id: B.workCenter,
+    p_hours: JSON.stringify([{ operation_id: B.productionOperation, hours: 1 }]),
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {
@@ -604,6 +613,14 @@ beforeAll(async () => {
       p_release: true,
     })
   ).id
+  B.workCenter = (
+    await one(`select id from public.work_centers where company_id = $1 order by code limit 1`, [B.id])
+  ).id
+  B.productionOperation = (
+    await one(`select id from public.production_order_operations where document_id = $1 order by line_no limit 1`, [
+      B.productionOrder,
+    ])
+  ).id
   B.productionLine = (
     await one(`select id from public.production_order_lines where document_id = $1 order by line_no limit 1`, [
       B.productionOrder,
@@ -646,6 +663,9 @@ beforeAll(async () => {
          union select id::text from public.boms where company_id = $1
          union select id::text from public.bom_lines where company_id = $1
          union select id::text from public.production_order_lines where company_id = $1
+         union select id::text from public.work_centers where company_id = $1
+         union select id::text from public.bom_operations where company_id = $1
+         union select id::text from public.production_order_operations where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

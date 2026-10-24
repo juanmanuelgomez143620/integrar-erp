@@ -635,6 +635,34 @@ export function PrintPage() {
           </table>
         )}
 
+        {data.production_order && data.production_order.operations.length > 0 && (
+          <>
+            <h2 className="mt-5 text-[11px] font-semibold text-slate-600 uppercase">Horas por centro de trabajo</h2>
+            <table className="mt-1 w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className={th}>Centro</th>
+                  <th className={`${th} text-right`}>Previstas</th>
+                  <th className={`${th} text-right`}>Trabajadas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.production_order.operations.map((o) => (
+                  <tr key={o.id}>
+                    <td className={td}>
+                      {o.work_center.code} · {o.work_center.name}
+                    </td>
+                    <td className={`${td} text-right`}>{qty(o.hours_planned)} h</td>
+                    <td className={`${td} text-right`}>
+                      {o.hours_actual != null ? `${qty(o.hours_actual)} h` : '________'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+
         {rfq && rfq.quotes.length > 0 && (
           <>
             <h2 className="mt-5 text-[11px] font-semibold text-slate-600 uppercase">

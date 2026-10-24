@@ -52,6 +52,10 @@ const ProductionOrderFormPage = lazyPage(() =>
 )
 const BomsPage = lazyPage(() => import('@/features/production/boms-pages').then((m) => m.BomsPage))
 const BomPage = lazyPage(() => import('@/features/production/boms-pages').then((m) => m.BomPage))
+const WorkCentersPage = lazyPage(() => import('@/features/production/work-centers-page').then((m) => m.WorkCentersPage))
+const ProductionCostsPage = lazyPage(() =>
+  import('@/features/production/costs-page').then((m) => m.ProductionCostsPage),
+)
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -207,6 +211,8 @@ export const router = createBrowserRouter(
                 { path: 'produccion/ordenes/:number', element: <DocumentPage key="pd" docType="PRODUCTION_ORDER" /> },
                 { path: 'produccion/listas-de-materiales', element: <BomsPage /> },
                 { path: 'produccion/listas-de-materiales/:code', element: <BomPage /> },
+                { path: 'produccion/centros-de-trabajo', element: <WorkCentersPage /> },
+                { path: 'produccion/costos', element: <ProductionCostsPage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

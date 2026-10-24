@@ -279,6 +279,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     boms: (companyId) => rpc('boms_list', company(companyId)),
     bom: (companyId, productCode) => rpc('bom_detail', { ...company(companyId), p_code: productCode }),
     productionCatalog: (companyId) => rpc('production_catalog', company(companyId)),
+    workCenters: (companyId) => rpc('work_centers_list', company(companyId)),
+    productionCosts: (companyId, from, to) =>
+      rpc('production_costs', { ...company(companyId), p_from: from, p_to: to }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
     fiscalYears: (companyId) => rpc('fiscal_years_list', company(companyId)),
     journalBook: (companyId, from, to) => rpc('journal_book', { ...company(companyId), p_from: from, p_to: to }),
@@ -405,7 +408,11 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('opr_create', { ...company(companyId), p_input: input, p_release: release }),
     releaseProductionOrder: (docId) => rpc('opr_release', doc(docId)),
     issueProductionOrder: (docId, input) => rpc('opr_issue', { ...doc(docId), p_input: input }),
-    finishProductionOrder: (docId, quantity) => rpc('opr_finish', { ...doc(docId), p_quantity: quantity }),
+    finishProductionOrder: (docId, quantity, hours = []) =>
+      rpc('opr_finish', { ...doc(docId), p_quantity: quantity, p_hours: hours }),
+    saveWorkCenter: (companyId, input) => rpc('work_center_save', { ...company(companyId), p_input: input }),
+    setWorkCenterActive: (companyId, centerId, active) =>
+      rpc('work_center_set_active', { ...company(companyId), p_work_center_id: centerId, p_active: active }),
     cancelProductionOrder: (docId, reason) => rpc('opr_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>

@@ -131,6 +131,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['customer_receipt_lines', mock.rcLines],
     ['sales_quote_lines', mock.qtLines],
     ['production_order_lines', mock.prdLines],
+    ['production_order_operations', mock.prdOperations],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -2577,14 +2578,16 @@ describe('paridad de comandos', () => {
     await reads('después de los presupuestos')
   })
 
-  it('producción: listas de materiales y órdenes (liberar, entregar, terminar y anular) con sus asientos', async () => {
+  it('producción: centros de trabajo, listas de materiales y órdenes (liberar, entregar, terminar y anular) con sus asientos', async () => {
     const companyPg = pg(company)
     const status = (id: string) => mock.documents.find((d) => d.id === id)!.status
     const bomOf = (code: string) => mock.boms.find((b) => b.product_id === product(code).id)!
-    const bomInput = (code: string, lines: [string, number][], notes = '') => ({
+    const center = (code: string) => mock.workCenters.find((w) => w.company_id === company && w.code === code)!
+    const bomInput = (code: string, lines: [string, number][], notes = '', operations: [string, number][] = []) => ({
       product_id: product(code).id,
       notes,
       lines: lines.map(([c, quantity]) => ({ component_id: product(c).id, quantity })),
+      operations: operations.map(([c, hours]) => ({ work_center_id: center(c).id, hours })),
     })
     const saveBom = (label: string, username: string, input: ReturnType<typeof bomInput>) =>
       step(
@@ -2596,8 +2599,24 @@ describe('paridad de comandos', () => {
             ...input,
             product_id: pg(input.product_id),
             lines: input.lines.map((l) => ({ ...l, component_id: pg(l.component_id) })),
+            operations: input.operations.map((o) => ({ ...o, work_center_id: pg(o.work_center_id) })),
           }),
       )
+    const saveCenter = (label: string, username: string, input: E.WorkCenterInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveWorkCenter(c, company, input),
+        (b) => b.commands.saveWorkCenter(companyPg, { ...input, id: input.id ? pg(input.id) : '' }),
+      )
+    const centerInput = (over: Partial<E.WorkCenterInput> = {}): E.WorkCenterInput => ({
+      id: '',
+      code: 'LUSTRE',
+      name: 'Lustre a muñeca',
+      labor_rate: 9500,
+      overhead_rate: 1500,
+      ...over,
+    })
     const setBomActive = (label: string, code: string, active: boolean) =>
       step(
         label,
@@ -2659,6 +2678,12 @@ describe('paridad de comandos', () => {
     }
     const codeOf = (productId: string) => mock.products.find((p) => p.id === productId)!.code
     const reads = async (label: string) => {
+      await sameRead(
+        `centros de trabajo ${label}`,
+        'contabilidad',
+        (b) => b.api.workCenters(companyPg),
+        (u) => Q.listWorkCenters(mock, u, company),
+      )
       for (const username of ['produccion', 'deposito', 'contabilidad'])
         await sameRead(
           `listas de materiales ${label} (${username})`,
@@ -2687,6 +2712,41 @@ describe('paridad de comandos', () => {
       )
     }
 
+    // Centros de trabajo: controles, uno nuevo, su modificación (y una sin cambios) y uno desactivado.
+    for (const [label, username, input] of [
+      ['Contabilidad no los arma', 'contabilidad', centerInput()],
+      ['código con espacios', 'produccion', centerInput({ code: 'CON ESPACIOS' })],
+      ['código repetido', 'produccion', centerInput({ code: 'CORTE' })],
+      ['nombre de una letra', 'produccion', centerInput({ name: 'X' })],
+      ['tarifa negativa', 'produccion', centerInput({ labor_rate: -1 })],
+      ['tasa con tres decimales', 'produccion', centerInput({ overhead_rate: 10.005 })],
+    ] as const)
+      expect(await saveCenter(label, username, input), label).toBeNull()
+    const lustre = await saveCenter('el centro de lustre', 'produccion', centerInput())
+    expect(lustre).not.toBeNull()
+    loaded.link(lustre!.mock.id, (lustre!.pg as { id: string }).id)
+    const lustreId = lustre!.mock.id
+    expect(await saveCenter('sin cambios', 'produccion', centerInput({ id: lustreId }))).not.toBeNull()
+    expect(
+      await saveCenter('subirle la tarifa', 'produccion', centerInput({ id: lustreId, labor_rate: 10000 })),
+    ).not.toBeNull()
+    const setCenterActive = (label: string, active: boolean) =>
+      step(
+        label,
+        'produccion',
+        (c) => E.cmdSetWorkCenterActive(c, company, lustreId, active),
+        (b) => b.commands.setWorkCenterActive(companyPg, pg(lustreId), active),
+      )
+    expect(await setCenterActive('desactivarlo', false)).not.toBeNull()
+    expect(
+      await saveBom(
+        'una lista con un centro inactivo',
+        'produccion',
+        bomInput('PT-002', [['MP-002', 18]], '', [['LUSTRE', 1]]),
+      ),
+    ).toBeNull()
+    expect(await setCenterActive('activarlo de nuevo', true)).not.toBeNull()
+
     // Listas de materiales: controles, una modificación, una igual (no cambia nada) y una desactivada.
     for (const [label, username, input] of [
       ['Ventas no arma listas', 'ventas', bomInput('PT-004', [['MP-002', 60]])],
@@ -2703,6 +2763,16 @@ describe('paridad de comandos', () => {
       ['una cantidad en cero', 'produccion', bomInput('PT-004', [['MP-002', 0]])],
       ['una cantidad con cuatro decimales', 'produccion', bomInput('PT-004', [['MP-002', 0.0005]])],
       ['sin componentes', 'produccion', bomInput('PT-004', [])],
+      [
+        'un centro repetido',
+        'produccion',
+        bomInput('PT-004', [['MP-002', 60]], '', [
+          ['CORTE', 1],
+          ['CORTE', 2],
+        ]),
+      ],
+      ['horas en cero', 'produccion', bomInput('PT-004', [['MP-002', 60]], '', [['CORTE', 0]])],
+      ['horas con cuatro decimales', 'produccion', bomInput('PT-004', [['MP-002', 60]], '', [['CORTE', 0.0005]])],
     ] as const)
       expect(await saveBom(label, username, input), label).toBeNull()
     expect(
@@ -2718,6 +2788,11 @@ describe('paridad de comandos', () => {
             ['IN-002', 1.5],
           ],
           'Base de fenólico entera',
+          [
+            ['CORTE', 1.5],
+            ['ARMADO', 2],
+            ['LUSTRE', 0.75],
+          ],
         ),
       ),
     ).not.toBeNull()
@@ -2726,7 +2801,15 @@ describe('paridad de comandos', () => {
       .sort((a, b) => a.line_no - b.line_no)
       .map((l) => [codeOf(l.component_id), l.quantity] as [string, number])
     expect(
-      await saveBom('la misma lista otra vez', 'produccion', bomInput('PT-004', bed, 'Base de fenólico entera')),
+      await saveBom(
+        'la misma lista otra vez',
+        'produccion',
+        bomInput('PT-004', bed, 'Base de fenólico entera', [
+          ['CORTE', 1.5],
+          ['ARMADO', 2],
+          ['LUSTRE', 0.75],
+        ]),
+      ),
     ).not.toBeNull()
     expect(await setBomActive('desactivar la lista de la cama', 'PT-004', false)).not.toBeNull()
     expect(await createOrder('una cama sin lista activa', 'produccion', orderInput('PT-004', 1), false)).toBeNull()
@@ -2782,18 +2865,60 @@ describe('paridad de comandos', () => {
       ),
     ).not.toBeNull()
     expect(status(table)).toBe('EN_PROCESO')
-    const finish = (label: string, username: string, id: string, quantity: number) =>
+    const finish = (
+      label: string,
+      username: string,
+      id: string,
+      quantity: number,
+      hours: { operation_id: string; hours: number }[] = [],
+    ) =>
       step(
         label,
         username,
-        (c) => E.cmdFinishProductionOrder(c, id, quantity),
-        (b) => b.commands.finishProductionOrder(pg(id), quantity),
+        (c) => E.cmdFinishProductionOrder(c, id, quantity, hours),
+        (b) =>
+          b.commands.finishProductionOrder(
+            pg(id),
+            quantity,
+            hours.map((h) => ({
+              ...h,
+              operation_id: mock.prdOperations.some((o) => o.id === h.operation_id)
+                ? pg(h.operation_id)
+                : h.operation_id,
+            })),
+          ),
       )
+    const tableOperations = mock.prdOperations
+      .filter((o) => o.document_id === table)
+      .sort((a, b) => a.line_no - b.line_no)
     expect(await finish('Depósito no la termina', 'deposito', table, 1)).toBeNull()
     expect(await finish('más de lo planificado', 'produccion', table, 2)).toBeNull()
     expect(await finish('cero unidades', 'produccion', table, 0)).toBeNull()
-    expect(await finish('terminarla', 'produccion', table, 1)).not.toBeNull()
+    expect(
+      await finish('horas de otra orden', 'produccion', table, 1, [{ operation_id: crypto.randomUUID(), hours: 1 }]),
+    ).toBeNull()
+    expect(
+      await finish('horas negativas', 'produccion', table, 1, [{ operation_id: tableOperations[0].id, hours: -1 }]),
+    ).toBeNull()
+    expect(
+      await finish('un centro dos veces', 'produccion', table, 1, [
+        { operation_id: tableOperations[0].id, hours: 2 },
+        { operation_id: tableOperations[0].id, hours: 3 },
+      ]),
+    ).toBeNull()
+    // En corte se trabajaron 3 horas (estaban previstas 2,5); en los demás, lo previsto.
+    expect(
+      await finish('terminarla con las horas reales', 'produccion', table, 1, [
+        { operation_id: tableOperations[0].id, hours: 3 },
+      ]),
+    ).not.toBeNull()
     expect(status(table)).toBe('TERMINADA')
+    await sameRead(
+      'costos de producción del día',
+      'contabilidad',
+      (b) => b.api.productionCosts(companyPg, todayAR(), todayAR()),
+      (u) => Q.productionCosts(mock, u, company, todayAR(), todayAR()),
+    )
     const cancel = (label: string, id: string, reason: string) =>
       step(
         label,

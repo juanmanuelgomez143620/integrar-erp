@@ -1,4 +1,4 @@
-// Pruebas de las listas de materiales y las órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2 y §3)
+// Pruebas de las listas de materiales, los centros de trabajo y las órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2 a §4)
 // sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6,6 +6,7 @@ import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
   bomLinesOf,
+  bomOperationsOf,
   cmdCancelProductionOrder,
   cmdCreateCompanyFromTemplate,
   cmdCreateCourse,
@@ -14,15 +15,18 @@ import {
   cmdIssueProductionOrder,
   cmdReleaseProductionOrder,
   cmdSaveBom,
+  cmdSaveWorkCenter,
   cmdSetBomActive,
+  cmdSetWorkCenterActive,
   cmdUpdateCompanySettings,
   onHandQuantity,
   productionOrderLines,
+  productionOrderOperations,
   reservedQuantity,
   type Ctx,
   type ProductionOrderInput,
 } from './engine'
-import { bomDetail, documentDetail, listBoms, productionCatalog } from './queries'
+import { bomDetail, documentDetail, listBoms, listWorkCenters, productionCatalog, productionCosts } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -66,11 +70,20 @@ const order = (code: string, quantity: number, over: Partial<ProductionOrderInpu
   ...over,
 })
 
-const bom = (code: string, lines: [string, number][], notes = '') => ({
+const center = (code: string) => db.workCenters.find((w) => w.company_id === companyId() && w.code === code)!
+
+const bom = (code: string, lines: [string, number][], notes = '', operations: [string, number][] = []) => ({
   product_id: product(code).id,
   notes,
   lines: lines.map(([c, quantity]) => ({ component_id: product(c).id, quantity })),
+  operations: operations.map(([c, hours]) => ({ work_center_id: center(c).id, hours })),
 })
+
+/** Las horas que tiene hoy la lista de un producto, como [centro, horas]. */
+const operationsOf = (code: string) =>
+  bomOperationsOf(db, db.boms.find((b) => b.product_id === product(code).id)!.id).map(
+    (o) => [db.workCenters.find((w) => w.id === o.work_center_id)!.code, o.hours] as [string, number],
+  )
 
 /** Los asientos automáticos de un documento, con sus importes por cuenta. */
 const entriesOf = (docId: string) =>
@@ -87,11 +100,11 @@ const entriesOf = (docId: string) =>
 describe('listas de materiales', () => {
   it('la demo trae las de los cuatro muebles, con el costo estimado de sus materiales', () => {
     const rows = listBoms(db, userId('produccion'), companyId())
-    expect(rows.map((r) => [r.product.code, r.components, r.material_cost])).toEqual([
-      ['PT-001', 8, 188950],
-      ['PT-002', 6, 39490],
-      ['PT-003', 6, 255800],
-      ['PT-004', 8, 234350],
+    expect(rows.map((r) => [r.product.code, r.components, r.material_cost, r.conversion_cost])).toEqual([
+      ['PT-001', 8, 188950, 70000],
+      ['PT-002', 6, 39490, 22800],
+      ['PT-003', 6, 255800, 54000],
+      ['PT-004', 8, 234350, 55200],
     ])
     const detail = bomDetail(db, userId('deposito'), companyId(), 'PT-002')!
     expect(detail.lines.map((l) => `${l.component.code} ${l.quantity} ${l.line_cost}`)).toEqual([
@@ -102,6 +115,13 @@ describe('listas de materiales', () => {
       'IN-006 2 1800',
       'IN-007 0.03 480',
     ])
+    // Las horas por centro, a las tarifas de cada uno: 39.490 de materiales y 22.800 de conversión.
+    expect(detail.operations.map((o) => `${o.work_center.code} ${o.hours} ${o.cost}`)).toEqual([
+      'CORTE 0.6 9600',
+      'ARMADO 0.6 7200',
+      'TERMINACION 0.5 6000',
+    ])
+    expect(detail.conversion_cost).toBe(22800)
     // La orden de la demo (diez sillas, liberada).
     expect(detail.open_orders).toBe(1)
     expect(bomDetail(db, userId('produccion'), companyId(), 'MP-001')).toBeNull()
@@ -118,6 +138,8 @@ describe('listas de materiales', () => {
       bom(
         'PT-002',
         bomLinesOf(db, silla.id).map((l) => [codeOf(l.component_id), l.quantity]),
+        '',
+        operationsOf('PT-002'),
       ),
     )
     expect(db.audit).toHaveLength(audits)
@@ -131,14 +153,16 @@ describe('listas de materiales', () => {
           ['IN-002', 0.5],
         ],
         'Con más barniz',
+        [['ARMADO', 1]],
       ),
     )
     expect(bomLinesOf(db, silla.id).map((l) => `${codeOf(l.component_id)} ${l.quantity}`)).toEqual([
       'MP-002 18',
       'IN-002 0.5',
     ])
+    expect(operationsOf('PT-002')).toEqual([['ARMADO', 1]])
     expect(db.audit.at(-1)!.summary).toBe(
-      'Modificó la lista de materiales de PT-002 Silla de eucalipto (2 componentes)',
+      'Modificó la lista de materiales de PT-002 Silla de eucalipto (2 componentes y 1 centro de trabajo)',
     )
     expect(productionOrderLines(db, byNumber('OPR-00001').id)).toHaveLength(6)
     // Desactivada, no se planifican órdenes de ese producto.
@@ -175,6 +199,16 @@ describe('listas de materiales', () => {
     save('produccion', bom('PT-002', [['MP-002', 0.0005]]))
     save('produccion', bom('PT-002', []))
     save('ventas', bom('PT-002', [['MP-002', 1]]))
+    // Las horas: centros repetidos, en cero o con cuatro decimales.
+    save(
+      'produccion',
+      bom('PT-002', [['MP-002', 1]], '', [
+        ['CORTE', 1],
+        ['CORTE', 2],
+      ]),
+    )
+    save('produccion', bom('PT-002', [['MP-002', 1]], '', [['CORTE', 0]]))
+    save('produccion', bom('PT-002', [['MP-002', 1]], '', [['CORTE', 0.0005]]))
   })
 
   it('una empresa creada desde la plantilla copia sus listas, con sus propios productos', () => {
@@ -185,23 +219,45 @@ describe('listas de materiales', () => {
     const lines = db.bomLines.filter((l) => boms.some((b) => b.id === l.bom_id))
     expect(lines).toHaveLength(28)
     for (const l of lines) expect(db.products.find((p) => p.id === l.component_id)!.company_id).toBe(id)
+    // Y sus centros de trabajo, con las horas de cada lista.
+    expect(db.workCenters.filter((w) => w.company_id === id).map((w) => w.code)).toEqual([
+      'CORTE',
+      'ARMADO',
+      'TERMINACION',
+    ])
+    const operations = db.bomOperations.filter((o) => boms.some((b) => b.id === o.bom_id))
+    expect(operations).toHaveLength(12)
+    for (const o of operations) expect(db.workCenters.find((w) => w.id === o.work_center_id)!.company_id).toBe(id)
   })
 
   it('al actualizar una base guardada (v11), cada empresa recibe las listas y las reglas de producción', () => {
-    // Una base guardada antes de la Fase 5a: sin las colecciones de producción.
-    const { boms: _boms, bomLines: _bomLines, prdLines: _prdLines, ...v11 } = structuredClone(db)
+    // Una base guardada antes de la Fase 5: sin las colecciones de producción ni las cuentas de la conversión.
+    const {
+      boms: _boms,
+      bomLines: _bomLines,
+      prdLines: _prdLines,
+      workCenters: _workCenters,
+      bomOperations: _bomOperations,
+      prdOperations: _prdOperations,
+      ...v11
+    } = structuredClone(db)
     const stored = { ...v11, version: 11 } as DB
+    const events = ['CONSUMO_PRODUCCION', 'CONVERSION_PRODUCCION', 'PRODUCCION_TERMINADA']
     stored.documents = stored.documents.filter((d) => d.doc_type !== 'PRODUCTION_ORDER')
-    stored.postingRules = stored.postingRules.filter(
-      (r) => r.event !== 'CONSUMO_PRODUCCION' && r.event !== 'PRODUCCION_TERMINADA',
-    )
+    stored.postingRules = stored.postingRules.filter((r) => !events.includes(r.event))
+    stored.accounts = stored.accounts.filter((a) => !a.code.startsWith('5.1.02'))
     const upgraded = upgradeDatabase(stored)!
     expect(upgraded.version).toBe(DB_VERSION)
     expect(upgraded.boms).toHaveLength(4)
     expect(upgraded.prdLines).toEqual([])
-    expect(
-      upgraded.postingRules.filter((r) => r.event === 'CONSUMO_PRODUCCION' || r.event === 'PRODUCCION_TERMINADA'),
-    ).toHaveLength(5)
+    expect(upgraded.postingRules.filter((r) => events.includes(r.event))).toHaveLength(8)
+    expect(upgraded.accounts.filter((a) => a.code.startsWith('5.1.02')).map((a) => a.code)).toEqual([
+      '5.1.02',
+      '5.1.02.01',
+      '5.1.02.02',
+    ])
+    expect(upgraded.workCenters).toHaveLength(3)
+    expect(upgraded.bomOperations).toHaveLength(12)
   })
 })
 
@@ -222,7 +278,13 @@ describe('orden de producción', () => {
       'IN-006 30 900',
       'IN-007 0.5 16000',
     ])
-    expect(doc.total).toBe(944750)
+    // Lo previsto: 944.750 de materiales y 350.000 de conversión (70.000 por mesa).
+    expect(doc.total).toBe(1294750)
+    expect(
+      productionOrderOperations(db, doc.id).map(
+        (o) => `${db.workCenters.find((w) => w.id === o.work_center_id)!.code} ${o.hours_planned}`,
+      ),
+    ).toEqual(['CORTE 12.5', 'ARMADO 7.5', 'TERMINACION 5'])
 
     // Liberar: alcanza y reserva los materiales; Depósito recibe la tarea.
     cmdReleaseProductionOrder(ctx('produccion'), doc.id)
@@ -246,22 +308,36 @@ describe('orden de producción', () => {
     // Productos en proceso al debe; materias primas e insumos al haber, al costo promedio.
     expect(entriesOf(doc.id)).toEqual([['1.1.05.03 949950 0', '1.1.05.01 0 765000', '1.1.05.02 0 184950']])
 
-    // Terminar: salieron bien 4 de 5; cada una cuesta lo consumido dividido 4.
+    // Terminar: salieron bien 4 de 5, con las horas previstas; cada una cuesta lo
+    // consumido más la conversión (216.250 de mano de obra y 133.750 de carga fabril), dividido 4.
     cmdFinishProductionOrder(ctx('produccion'), doc.id, 4)
     expect(doc.status).toBe('TERMINADA')
-    expect(doc.pd).toMatchObject({ quantity_produced: 4, unit_cost: 237487.5 })
+    expect(doc.pd).toMatchObject({ quantity_produced: 4, unit_cost: 324987.5 })
     expect(onHandQuantity(db, product('PT-001').id, warehouse('DEP-PT').id)).toBe(10)
     const balance = db.stockBalances.find(
       (b) => b.product_id === product('PT-001').id && b.warehouse_id === warehouse('DEP-PT').id,
     )!
-    expect(balance.avg_unit_cost).toBe(250995)
-    expect(entriesOf(doc.id)[1]).toEqual(['1.1.05.04 949950 0', '1.1.05.03 0 949950'])
+    expect(balance.avg_unit_cost).toBe(285995)
+    // La conversión aplicada a productos en proceso; después, el pase a productos terminados.
+    expect(entriesOf(doc.id).slice(1)).toEqual([
+      ['1.1.05.03 350000 0', '5.1.02.01 0 216250', '5.1.02.02 0 133750'],
+      ['1.1.05.04 1299950 0', '1.1.05.03 0 1299950'],
+    ])
     expect(
       db.notifications.filter((n) => n.document_id === doc.id && n.type === 'PRODUCCION_TERMINADA').map((n) => n.title),
     ).toContain('Ingresaron 4 UN de PT-001')
     const view = documentDetail(db, userId('contabilidad'), companyId(), 'PRODUCTION_ORDER', 'OPR-00002')!
-    expect(view.production_order).toMatchObject({ planned_cost: 944750, material_cost: 949950, unit_cost: 237487.5 })
-    expect(view.next_step.text).toMatch(/a \$\s237\.487,50 por unidad/)
+    expect(view.production_order).toMatchObject({
+      planned_cost: 1294750,
+      planned_material_cost: 944750,
+      planned_conversion_cost: 350000,
+      material_cost: 949950,
+      labor_cost: 216250,
+      overhead_cost: 133750,
+      unit_cost: 324987.5,
+      standard_cost: 260000,
+    })
+    expect(view.next_step.text).toMatch(/a \$\s324\.987,50 por unidad/)
     // Una orden terminada no se anula.
     expectBusinessError(
       () => cmdCancelProductionOrder(ctx('produccion'), doc.id, 'Me equivoqué'),
@@ -382,5 +458,124 @@ describe('orden de producción', () => {
       order('MP-001', 1),
     ])
       expectBusinessError(() => cmdCreateProductionOrder(ctx('produccion'), companyId(), input, false), 'DATO_INVALIDO')
+  })
+})
+
+describe('centros de trabajo y costos de conversión', () => {
+  it('la demo trae tres centros; Producción los crea, modifica y desactiva', () => {
+    expect(listWorkCenters(db, userId('contabilidad'), companyId()).map((w) => `${w.code} ${w.boms}`)).toEqual([
+      'ARMADO 4',
+      'CORTE 4',
+      'TERMINACION 4',
+    ])
+    const { id } = cmdSaveWorkCenter(ctx('produccion'), companyId(), {
+      id: '',
+      code: 'pintura',
+      name: 'Pintura',
+      labor_rate: 7500,
+      overhead_rate: 2500.5,
+    })
+    expect(db.audit.at(-1)!.summary).toMatch(
+      /^Creó el centro de trabajo PINTURA Pintura: \$\s7\.500,00 de mano de obra/,
+    )
+    const audits = db.audit.length
+    // Sin cambios no queda en la auditoría.
+    cmdSaveWorkCenter(ctx('produccion'), companyId(), {
+      id,
+      code: 'PINTURA',
+      name: 'Pintura',
+      labor_rate: 7500,
+      overhead_rate: 2500.5,
+    })
+    expect(db.audit).toHaveLength(audits)
+    cmdSaveWorkCenter(ctx('produccion'), companyId(), {
+      id,
+      code: 'PINTURA',
+      name: 'Pintura y laqueado',
+      labor_rate: 8000,
+      overhead_rate: 2500.5,
+    })
+    expect(db.audit.at(-1)!.changes).toEqual({
+      name: { from: 'Pintura', to: 'Pintura y laqueado' },
+      labor_rate: { from: 7500, to: 8000 },
+    })
+    // Desactivado, no va en las listas nuevas.
+    cmdSetWorkCenterActive(ctx('produccion'), companyId(), id, false)
+    expectBusinessError(
+      () => cmdSaveBom(ctx('produccion'), companyId(), bom('PT-002', [['MP-002', 18]], '', [['PINTURA', 0.2]])),
+      'DATO_INVALIDO',
+    )
+    // Controles: quién, código, nombre y tarifas.
+    const save = (username: string, over: Record<string, unknown>) =>
+      expectBusinessError(
+        () =>
+          cmdSaveWorkCenter(ctx(username), companyId(), {
+            id: '',
+            code: 'NUEVO',
+            name: 'Nuevo centro',
+            labor_rate: 1000,
+            overhead_rate: 500,
+            ...over,
+          }),
+        username === 'produccion' ? 'DATO_INVALIDO' : 'SIN_PERMISO',
+      )
+    save('contabilidad', {})
+    save('produccion', { code: 'CON ESPACIOS' })
+    save('produccion', { code: 'CORTE' })
+    save('produccion', { name: 'X' })
+    save('produccion', { labor_rate: -1 })
+    save('produccion', { overhead_rate: 10.005 })
+  })
+
+  it('terminar con las horas reales: la conversión se aplica con las tarifas de la orden', () => {
+    const demo = byNumber('OPR-00001')
+    cmdIssueProductionOrder(ctx('deposito'), demo.id, {
+      lines: productionOrderLines(db, demo.id).map((l) => ({ line_id: l.id, quantity: l.quantity_planned })),
+    })
+    // Las tarifas cambian después de planificarla: la orden usa las suyas.
+    const corte = center('CORTE')
+    cmdSaveWorkCenter(ctx('produccion'), companyId(), { ...corte, labor_rate: 20000 })
+    const operations = productionOrderOperations(db, demo.id)
+    expect(operations.map((o) => `${o.hours_planned} ${o.labor_rate} ${o.overhead_rate}`)).toEqual([
+      '6 9000 7000',
+      '6 8500 3500',
+      '5 8000 4000',
+    ])
+    const finish = (hours: { operation_id: string; hours: number }[]) =>
+      cmdFinishProductionOrder(ctx('produccion'), demo.id, 10, hours)
+    expectBusinessError(() => finish([{ operation_id: 'otra', hours: 1 }]), 'DATO_INVALIDO')
+    expectBusinessError(() => finish([{ operation_id: operations[0].id, hours: -1 }]), 'DATO_INVALIDO')
+    expectBusinessError(
+      () =>
+        finish([
+          { operation_id: operations[0].id, hours: 7 },
+          { operation_id: operations[0].id, hours: 8 },
+        ]),
+      'DATO_INVALIDO',
+    )
+    // En corte se trabajaron 7 horas; en los demás, las previstas.
+    finish([{ operation_id: operations[0].id, hours: 7 }])
+    const view = documentDetail(
+      db,
+      userId('produccion'),
+      companyId(),
+      'PRODUCTION_ORDER',
+      'OPR-00001',
+    )!.production_order!
+    expect(view.operations.map((o) => `${o.work_center.code} ${o.hours_planned} ${o.hours_actual}`)).toEqual([
+      'CORTE 6 7',
+      'ARMADO 6 6',
+      'TERMINACION 5 5',
+    ])
+    // Mano de obra: 7 × 9.000 + 6 × 8.500 + 5 × 8.000; carga fabril: 7 × 7.000 + 6 × 3.500 + 5 × 4.000.
+    expect(view).toMatchObject({ labor_cost: 154000, overhead_cost: 90000 })
+    expect(view.unit_cost).toBe((view.material_cost + 154000 + 90000) / 10)
+    // El informe de costos de producción del día.
+    const rows = productionCosts(db, userId('contabilidad'), companyId(), '2027-05-14', '2027-05-14')
+    expect(rows.map((r) => [r.order.display_number, r.product.code, r.quantity_produced, r.labor_cost])).toEqual([
+      ['OPR-00001', 'PT-002', 10, 154000],
+    ])
+    expect(productionCosts(db, userId('contabilidad'), companyId(), '2027-05-15', '2027-05-31')).toEqual([])
+    expect(() => productionCosts(db, userId('rrhh'), companyId(), '2027-05-01', '2027-05-31')).toThrow()
   })
 })

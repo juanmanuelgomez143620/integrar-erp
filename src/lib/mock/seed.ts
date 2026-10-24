@@ -4,7 +4,7 @@
 // Credenciales de prueba (sólo backend simulado local): todos los usuarios
 // demo usan la contraseña DEMO_PASSWORD.
 
-import { DEMO_BOMS } from '../domain/boms'
+import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
 import type * as T from '../domain/types'
 import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
@@ -25,7 +25,9 @@ import {
   cmdCreateSupplierQuote,
   cmdSendPurchaseOrder,
   cmdSubmitPurchaseOrder,
+  insertBomOperations,
   insertBoms,
+  insertWorkCenters,
   scanStockAlerts,
   startAccounting,
   type Ctx,
@@ -99,6 +101,9 @@ export function buildSeed(): DB {
     boms: [],
     bomLines: [],
     prdLines: [],
+    workCenters: [],
+    bomOperations: [],
+    prdOperations: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],
@@ -425,8 +430,10 @@ export function buildSeed(): DB {
   // ------------------------------------------------------------ Contabilidad: plan de cuentas, ejercicio y apertura
   startAccounting(ctx(null, 290), companyId)
 
-  // ------------------------------------------------------------ Listas de materiales de los muebles (a validar)
+  // ------------------------------------------------------------ Listas de materiales y centros de trabajo (a validar)
+  insertWorkCenters(ctx(null, 289), companyId, DEMO_WORK_CENTERS)
   insertBoms(ctx(null, 289), companyId, DEMO_BOMS)
+  insertBomOperations(ctx(null, 289), companyId, DEMO_BOM_OPERATIONS)
 
   // ------------------------------------------------------------ Un circuito completo previo (historial de ejemplo)
   const sc = cmdCreateRequisition(

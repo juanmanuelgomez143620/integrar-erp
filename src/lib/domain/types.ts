@@ -272,6 +272,33 @@ export interface BomLine {
   quantity: number
 }
 
+/**
+ * Centro de trabajo (tabla work_centers): un sector del taller con su tarifa de
+ * mano de obra directa y su tasa de carga fabril por hora, predeterminadas.
+ */
+export interface WorkCenter extends Audited {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  /** Mano de obra directa: pesos por hora. */
+  labor_rate: number
+  /** Carga fabril (costos indirectos): pesos por hora. */
+  overhead_rate: number
+  is_active: boolean
+}
+
+/** Las horas que lleva cada unidad en un centro de trabajo (tabla bom_operations): la ruta simplificada. */
+export interface BomOperation {
+  id: string
+  company_id: string
+  bom_id: string
+  line_no: number
+  work_center_id: string
+  /** Por unidad del producto terminado. */
+  hours: number
+}
+
 export interface Supplier extends Partner {
   lead_time_days: number | null
   category: string
@@ -526,6 +553,20 @@ export interface ProductionOrderLine {
   quantity_issued: number
   /** Costo promedio con que salió (0 hasta la entrega). */
   unit_cost: number
+}
+
+/** Las horas de la orden en un centro de trabajo: previstas, con las tarifas de ese momento, y reales. */
+export interface ProductionOrderOperation {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  work_center_id: string
+  hours_planned: number
+  labor_rate: number
+  overhead_rate: number
+  /** Las que registró Producción al terminarla. */
+  hours_actual: number | null
 }
 
 /** Una factura (y cuánto de ella) que cancela un recibo de cobro. */

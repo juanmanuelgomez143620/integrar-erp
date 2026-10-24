@@ -1,7 +1,26 @@
-// Listas de materiales de los muebles de la demo (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2, a validar):
-// cuánto lleva cada unidad. Las usan la demo (src/lib/mock/seed.ts), la plantilla de
-// Supabase (scripts/generate-demo-sql.mjs) y las empresas creadas antes de la Fase 5.
-// Con los costos de conversión (5b), el costo de cada mueble queda cerca de su costo estándar.
+// Listas de materiales y centros de trabajo de la demo (docs/FASE_5_PRODUCCION_Y_COSTOS.md §2 y
+// §4, a validar): cuánto lleva cada unidad de cada material y cuántas horas en cada centro. Los
+// usan la demo (src/lib/mock/seed.ts), la plantilla de Supabase (scripts/generate-demo-sql.mjs) y
+// las empresas creadas antes de la Fase 5. Con los costos de conversión, el costo de cada mueble
+// queda cerca de su costo estándar.
+
+/** Centros de trabajo del taller, con sus tarifas por hora (a validar). */
+// prettier-ignore
+export const DEMO_WORK_CENTERS: { code: string; name: string; labor_rate: number; overhead_rate: number }[] = [
+  // Sierras y cepilladoras: la carga fabril es alta (energía, mantenimiento, amortización).
+  { code: 'CORTE', name: 'Corte y cepillado', labor_rate: 9000, overhead_rate: 7000 },
+  { code: 'ARMADO', name: 'Armado', labor_rate: 8500, overhead_rate: 3500 },
+  { code: 'TERMINACION', name: 'Terminación (lijado, barnizado y embalaje)', labor_rate: 8000, overhead_rate: 4000 },
+]
+
+/** Horas por unidad de cada mueble en cada centro de trabajo (la ruta simplificada, a validar). */
+// prettier-ignore
+export const DEMO_BOM_OPERATIONS: { product: string; operations: [string, number][] }[] = [
+  { product: 'PT-001', operations: [['CORTE', 2.5], ['ARMADO', 1.5], ['TERMINACION', 1]] },
+  { product: 'PT-002', operations: [['CORTE', 0.6], ['ARMADO', 0.6], ['TERMINACION', 0.5]] },
+  { product: 'PT-003', operations: [['CORTE', 1.5], ['ARMADO', 2], ['TERMINACION', 0.5]] },
+  { product: 'PT-004', operations: [['CORTE', 1.5], ['ARMADO', 1.5], ['TERMINACION', 1.1]] },
+]
 
 // prettier-ignore
 export const DEMO_BOMS: { product: string; components: [string, number][] }[] = [

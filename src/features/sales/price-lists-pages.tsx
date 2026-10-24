@@ -20,7 +20,7 @@ import { ProductSelect, SimpleSelect } from '@/components/common/pickers'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api, commands, type PriceListDetail, type PriceListRow } from '@/lib/api'
 import { PRODUCT_TYPES } from '@/lib/domain/catalog'
-import { money, parseAmount } from '@/lib/format'
+import { money, parseAmount, percent } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -332,7 +332,7 @@ function PriceListView({ detail }: { detail: PriceListDetail }) {
                           diff != null && diff < 0 ? 'text-amber-700' : 'text-muted-foreground',
                         )}
                       >
-                        {diff == null ? '—' : `${diff > 0 ? '+' : ''}${Math.round(diff * 1000) / 10} %`}
+                        {diff == null ? '—' : percent(diff * 100, true)}
                       </TableCell>
                       {canEdit && (
                         <TableCell className="text-right">

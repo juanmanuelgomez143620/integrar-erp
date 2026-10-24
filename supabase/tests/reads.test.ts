@@ -227,6 +227,16 @@ describe('ventas', () => {
       for (const code of ['PT-001', 'PT-002', 'PT-003', 'PT-004', 'MP-001', 'NO-EXISTE'])
         await same(u, () => Q.bomDetail(mock, userId(u), company, code), 'bom_detail', [companyPg, code])
       await same(u, () => Q.productionCatalog(mock, userId(u), company), 'production_catalog', [companyPg])
+      await same(u, () => Q.listWorkCenters(mock, userId(u), company), 'work_centers_list', [companyPg])
+      for (const [from, to] of [
+        [todayAR(), todayAR()],
+        ['2020-01-01', '2020-12-31'],
+      ])
+        await same(u, () => Q.productionCosts(mock, userId(u), company, from, to), 'production_costs', [
+          companyPg,
+          from,
+          to,
+        ])
     }
   })
 

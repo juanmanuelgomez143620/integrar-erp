@@ -1866,8 +1866,10 @@ function hasPostedMovements(db: DB, accountId: string) {
   return db.jeLines.some((l) => l.account_id === accountId && posted.has(l.document_id))
 }
 
-function insertBaseChart(ctx: Ctx, companyId: string) {
+/** Las cuentas del plan básico que la empresa todavía no tiene (las nuevas de cada fase). */
+export function insertBaseChart(ctx: Ctx, companyId: string) {
   for (const [code, name, description = '', contra = false] of BASE_CHART) {
+    if (ctx.db.accounts.some((a) => a.company_id === companyId && a.code === code)) continue
     const type = accountTypeOf(code)
     const level = accountLevel(code)
     ctx.db.accounts.push({
@@ -5181,7 +5183,18 @@ export interface BomInput {
   notes: string
   /** Cuánto lleva cada unidad del producto terminado. */
   lines: { component_id: string; quantity: number }[]
+  /** Horas por unidad en cada centro de trabajo (la ruta simplificada, 5b). */
+  operations: { work_center_id: string; hours: number }[]
 }
+
+export const bomOperationsOf = (db: DB, bomId: string) =>
+  db.bomOperations.filter((o) => o.bom_id === bomId).sort((a, b) => a.line_no - b.line_no)
+
+const centersLabel = (n: number) => (n === 1 ? '1 centro de trabajo' : `${n} centros de trabajo`)
+
+/** El costo de unas horas en un centro: mano de obra y carga fabril, cada una con 2 decimales. */
+export const conversionCost = (hours: number, laborRate: number, overheadRate: number) =>
+  round2(round2(hours * laborRate) + round2(hours * overheadRate))
 
 export const bomLinesOf = (db: DB, bomId: string) =>
   db.bomLines.filter((l) => l.bom_id === bomId).sort((a, b) => a.line_no - b.line_no)
@@ -5237,14 +5250,32 @@ export function cmdSaveBom(ctx: Ctx, companyId: string, input: BomInput) {
       return { component: c, quantity: l.quantity }
     })
   if (!lines.length) fail('DATO_INVALIDO', 'Agregá al menos un componente.')
+  const centers = new Set<string>()
+  const operations = (input.operations ?? [])
+    .filter((o) => o.work_center_id)
+    .map((o) => {
+      const center = db.workCenters.find((w) => w.id === o.work_center_id && w.company_id === companyId)
+      if (!center) fail('DATO_INVALIDO', 'Elegí el centro de trabajo.')
+      if (!center.is_active) fail('DATO_INVALIDO', `El centro de trabajo ${workCenterLabel(center)} está inactivo.`)
+      if (centers.has(center.id))
+        fail('DATO_INVALIDO', `${center.code} está dos veces: sumá las horas en una sola línea.`)
+      centers.add(center.id)
+      if (!Number.isFinite(o.hours) || !(o.hours > 0) || round3(o.hours) !== o.hours || o.hours >= 1000)
+        fail('DATO_INVALIDO', `Las horas de ${center.code} por unidad deben ser más de cero, con hasta 3 decimales.`)
+      return { center, hours: o.hours }
+    })
   if (existing) {
     const before = bomLinesOf(db, existing.id)
+    const beforeOps = bomOperationsOf(db, existing.id)
     const same =
       existing.notes === notes &&
       before.length === lines.length &&
-      before.every((l, i) => l.component_id === lines[i].component.id && l.quantity === lines[i].quantity)
+      before.every((l, i) => l.component_id === lines[i].component.id && l.quantity === lines[i].quantity) &&
+      beforeOps.length === operations.length &&
+      beforeOps.every((o, i) => o.work_center_id === operations[i].center.id && o.hours === operations[i].hours)
     if (same) return { id: existing.id }
     db.bomLines = db.bomLines.filter((l) => l.bom_id !== existing.id)
+    db.bomOperations = db.bomOperations.filter((o) => o.bom_id !== existing.id)
     Object.assign(existing, { notes, updated_at: ctx.now, updated_by: ctx.userId })
   }
   const bom: T.Bom = existing ?? {
@@ -5269,6 +5300,16 @@ export function cmdSaveBom(ctx: Ctx, companyId: string, input: BomInput) {
       quantity: l.quantity,
     }),
   )
+  operations.forEach((o, i) =>
+    db.bomOperations.push({
+      id: uid(),
+      company_id: companyId,
+      bom_id: bom.id,
+      line_no: i + 1,
+      work_center_id: o.center.id,
+      hours: o.hours,
+    }),
+  )
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -5276,7 +5317,7 @@ export function cmdSaveBom(ctx: Ctx, companyId: string, input: BomInput) {
     entity_type: 'bom',
     entity_id: bom.id,
     entity_label: `Lista de materiales de ${product.code}`,
-    summary: `${existing ? 'Modificó' : 'Creó'} la lista de materiales de ${productLabel(product)} (${componentsLabel(lines.length)})`,
+    summary: `${existing ? 'Modificó' : 'Creó'} la lista de materiales de ${productLabel(product)} (${componentsLabel(lines.length)}${operations.length ? ` y ${centersLabel(operations.length)}` : ''})`,
   })
   return { id: bom.id }
 }
@@ -5320,6 +5361,39 @@ export function insertBoms(ctx: Ctx, companyId: string, boms: { product: string;
   }
 }
 
+/**
+ * Carga las horas de la demo en las listas de esos productos que todavía no
+ * tienen (las de la demo y las de las empresas anteriores a la 5b), si existen
+ * todos sus centros de trabajo.
+ */
+export function insertBomOperations(
+  ctx: Ctx,
+  companyId: string,
+  rows: { product: string; operations: [string, number][] }[],
+) {
+  const { db } = ctx
+  for (const row of rows) {
+    const product = db.products.find((p) => p.company_id === companyId && p.code === row.product)
+    const bom = product && db.boms.find((b) => b.product_id === product.id)
+    if (!bom || db.bomOperations.some((o) => o.bom_id === bom.id)) continue
+    const centers = row.operations.map(([code, hours]) => ({
+      center: db.workCenters.find((w) => w.company_id === companyId && w.code === code),
+      hours,
+    }))
+    if (centers.some((c) => !c.center)) continue
+    centers.forEach((c, i) =>
+      db.bomOperations.push({
+        id: uid(),
+        company_id: companyId,
+        bom_id: bom.id,
+        line_no: i + 1,
+        work_center_id: c.center!.id,
+        hours: c.hours,
+      }),
+    )
+  }
+}
+
 /** Una lista desactivada no se usa para planificar órdenes nuevas. */
 export function cmdSetBomActive(ctx: Ctx, companyId: string, bomId: string, active: boolean) {
   const { db } = ctx
@@ -5341,6 +5415,125 @@ export function cmdSetBomActive(ctx: Ctx, companyId: string, bomId: string, acti
   })
 }
 
+// ============================================================ Centros de trabajo (docs/FASE_5_PRODUCCION_Y_COSTOS.md §4)
+
+export interface WorkCenterInput {
+  /** Vacío para uno nuevo. */
+  id: string
+  code: string
+  name: string
+  labor_rate: number
+  overhead_rate: number
+}
+
+const workCenterLabel = (w: T.WorkCenter) => `${w.code} ${w.name}`
+
+/** Una tarifa por hora: mayor o igual que cero y con hasta 2 decimales. */
+function validRate(rate: number, what: string) {
+  if (!Number.isFinite(rate) || rate < 0 || round2(rate) !== rate || rate >= 1e9)
+    fail('DATO_INVALIDO', `La ${what} por hora debe ser un importe mayor o igual que cero, con hasta 2 decimales.`)
+  return rate
+}
+
+/** Crea o modifica un centro de trabajo; las órdenes ya cargadas conservan las tarifas con que se planificaron. */
+export function cmdSaveWorkCenter(ctx: Ctx, companyId: string, input: WorkCenterInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'work_center.update')
+  const existing = input.id ? db.workCenters.find((w) => w.id === input.id && w.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'El centro de trabajo no existe.')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código del centro tiene de 1 a 12 letras, números o guiones.')
+  if (db.workCenters.some((w) => w.company_id === companyId && w.code === code && w.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe un centro de trabajo con el código ${code}.`)
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 60) fail('DATO_INVALIDO', 'El nombre del centro tiene de 2 a 60 caracteres.')
+  const laborRate = validRate(input.labor_rate, 'tarifa de mano de obra')
+  const overheadRate = validRate(input.overhead_rate, 'tasa de carga fabril')
+  if (existing) {
+    const after = { ...existing, code, name, labor_rate: laborRate, overhead_rate: overheadRate }
+    const changes = diff(existing, after, ['code', 'name', 'labor_rate', 'overhead_rate'])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, after, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'work_center',
+      entity_id: existing.id,
+      entity_label: workCenterLabel(existing),
+      summary: `Modificó el centro de trabajo ${workCenterLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const center: T.WorkCenter = {
+    id: uid(),
+    company_id: companyId,
+    code,
+    name,
+    labor_rate: laborRate,
+    overhead_rate: overheadRate,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.workCenters.push(center)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'work_center',
+    entity_id: center.id,
+    entity_label: workCenterLabel(center),
+    summary: `Creó el centro de trabajo ${workCenterLabel(center)}: ${money(laborRate)} de mano de obra y ${money(overheadRate)} de carga fabril por hora`,
+  })
+  return { id: center.id }
+}
+
+/** Un centro desactivado no se usa en las listas nuevas. */
+export function cmdSetWorkCenterActive(ctx: Ctx, companyId: string, centerId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'work_center.update')
+  const center = db.workCenters.find((w) => w.id === centerId && w.company_id === companyId)
+  if (!center) fail('DATO_INVALIDO', 'El centro de trabajo no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si el centro está activo.')
+  if (center.is_active === active) return
+  Object.assign(center, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'work_center',
+    entity_id: center.id,
+    entity_label: workCenterLabel(center),
+    summary: `${active ? 'Activó' : 'Desactivó'} el centro de trabajo ${workCenterLabel(center)}`,
+  })
+}
+
+/** Carga los centros de trabajo de la demo que la empresa todavía no tiene (por código). */
+export function insertWorkCenters(
+  ctx: Ctx,
+  companyId: string,
+  rows: { code: string; name: string; labor_rate: number; overhead_rate: number }[],
+) {
+  for (const row of rows) {
+    if (ctx.db.workCenters.some((w) => w.company_id === companyId && w.code === row.code)) continue
+    ctx.db.workCenters.push({
+      id: uid(),
+      company_id: companyId,
+      ...row,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
 // ============================================================ Órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §3)
 
 export interface ProductionOrderInput {
@@ -5355,6 +5548,9 @@ export interface ProductionOrderInput {
 
 export const productionOrderLines = (db: DB, docId: string) =>
   db.prdLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+export const productionOrderOperations = (db: DB, docId: string) =>
+  db.prdOperations.filter((o) => o.document_id === docId).sort((a, b) => a.line_no - b.line_no)
 
 /**
  * Producción planifica la orden: copia la lista de materiales activa del
@@ -5399,6 +5595,13 @@ export function cmdCreateProductionOrder(ctx: Ctx, companyId: string, input: Pro
     if (!(planned > 0)) fail('DATO_INVALIDO', `Con esa cantidad, ${c.code} quedaría en cero: fabricá más unidades.`)
     return { component: c, planned, cost: plannedUnitCost(db, c, input.materials_warehouse_id) }
   })
+  const operations = bomOperationsOf(db, bom.id).map((o) => {
+    const center = db.workCenters.find((w) => w.id === o.work_center_id)!
+    const hours = round3(o.hours * input.quantity)
+    if (!(hours > 0))
+      fail('DATO_INVALIDO', `Con esa cantidad, las horas de ${center.code} quedarían en cero: fabricá más unidades.`)
+    return { center, hours }
+  })
   const doc = newDocument(ctx, companyId, 'PRODUCTION_ORDER', actor, {
     notes,
     pd: {
@@ -5427,8 +5630,24 @@ export function cmdCreateProductionOrder(ctx: Ctx, companyId: string, input: Pro
       unit_cost: 0,
     }),
   )
-  // El costo previsto de los materiales.
-  doc.subtotal = round2(lines.reduce((s, l) => s + round2(l.planned * l.cost), 0))
+  operations.forEach((o, i) =>
+    db.prdOperations.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      work_center_id: o.center.id,
+      hours_planned: o.hours,
+      labor_rate: o.center.labor_rate,
+      overhead_rate: o.center.overhead_rate,
+      hours_actual: null,
+    }),
+  )
+  // El costo previsto: los materiales y la conversión.
+  doc.subtotal = round2(
+    lines.reduce((s, l) => s + round2(l.planned * l.cost), 0) +
+      operations.reduce((s, o) => s + conversionCost(o.hours, o.center.labor_rate, o.center.overhead_rate), 0),
+  )
   doc.total = doc.subtotal
   logAudit(ctx, {
     company_id: companyId,
@@ -5596,7 +5815,29 @@ export const productionMaterialCost = (db: DB, docId: string) =>
  * a su costo real (lo consumido dividido las unidades terminadas) y el costo
  * pasa de productos en proceso a productos terminados.
  */
-export function cmdFinishProductionOrder(ctx: Ctx, docId: string, quantity: number) {
+/** Lo que se aplicó de mano de obra y de carga fabril a una orden (con las horas reales o, si no, las previstas). */
+export function productionConversion(db: DB, docId: string) {
+  const operations = productionOrderOperations(db, docId)
+  const hours = (o: T.ProductionOrderOperation) => o.hours_actual ?? o.hours_planned
+  return {
+    labor: round2(operations.reduce((s, o) => s + round2(hours(o) * o.labor_rate), 0)),
+    overhead: round2(operations.reduce((s, o) => s + round2(hours(o) * o.overhead_rate), 0)),
+  }
+}
+
+/**
+ * Producción termina la orden: registra las horas reales de cada centro (las
+ * que no indica son las previstas) y las unidades que salieron bien, que entran
+ * al stock a su costo real (materiales consumidos más la conversión aplicada,
+ * dividido las unidades terminadas). Asientos: la conversión aplicada a
+ * productos en proceso y el pase a productos terminados.
+ */
+export function cmdFinishProductionOrder(
+  ctx: Ctx,
+  docId: string,
+  quantity: number,
+  hours: { operation_id: string; hours: number }[] = [],
+) {
   const { db } = ctx
   const doc = getDoc(db, docId, 'PRODUCTION_ORDER')
   requireTransition(doc, 'FINISH')
@@ -5610,9 +5851,24 @@ export function cmdFinishProductionOrder(ctx: Ctx, docId: string, quantity: numb
       `Se planificaron ${fmtQty(doc.pd!.quantity, product.uom_code)}: no pueden salir más.`,
       'Si se fabricó de más, Producción carga otra orden.',
     )
+  const operations = productionOrderOperations(db, doc.id)
+  const actual = new Map<string, number>()
+  for (const h of hours) {
+    const operation = operations.find((o) => o.id === h.operation_id)
+    if (!operation) fail('DATO_INVALIDO', 'Una de las horas no es de un centro de trabajo de la orden.')
+    if (actual.has(operation.id))
+      fail('DATO_INVALIDO', 'Un centro de trabajo está dos veces: indicá una sola cantidad de horas.')
+    if (!Number.isFinite(h.hours) || h.hours < 0 || round3(h.hours) !== h.hours || h.hours >= 1e5)
+      fail('DATO_INVALIDO', 'Las horas trabajadas deben ser números mayores o iguales que cero (hasta 3 decimales).')
+    actual.set(operation.id, h.hours)
+  }
+  for (const o of operations) o.hours_actual = actual.get(o.id) ?? o.hours_planned
   const company = getCompany(db, doc.company_id)
   const warehouse = db.warehouses.find((w) => w.id === doc.pd!.output_warehouse_id)!
-  const total = productionMaterialCost(db, doc.id)
+  const materials = productionMaterialCost(db, doc.id)
+  const { labor, overhead } = productionConversion(db, doc.id)
+  const conversion = round2(labor + overhead)
+  const total = round2(materials + conversion)
   const unitCost = round4(total / quantity)
   const actor = transition(ctx, doc, 'FINISH', {
     summary: `Terminó ${doc.display_number}: ingresaron ${fmtQty(quantity, product.uom_code)} de ${product.code} a ${money(unitCost)} por unidad`,
@@ -5629,6 +5885,19 @@ export function cmdFinishProductionOrder(ctx: Ctx, docId: string, quantity: numb
     date: businessDate(company),
   })
   doc.pd = { ...doc.pd!, quantity_produced: quantity, unit_cost: unitCost, finished_at: ctx.now }
+  if (conversion > 0)
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'CONVERSION_PRODUCCION',
+      `Mano de obra y carga fabril aplicadas a ${doc.display_number} (${fmtQty(quantity, product.uom_code)} de ${productLabel(product)}).`,
+      [
+        { key: 'PRODUCCION_EN_PROCESO', debit: conversion, credit: 0 },
+        { key: 'MANO_DE_OBRA_APLICADA', debit: 0, credit: labor },
+        { key: 'CARGA_FABRIL_APLICADA', debit: 0, credit: overhead },
+      ],
+    )
   if (total > 0)
     postEvent(
       ctx,
@@ -6167,7 +6436,7 @@ function uniqueSlug(db: DB, base: string) {
  * Crea la empresa de un curso a partir de la plantilla (H-20, DATABASE.md §12).
  * Copia la estructura (islas, sectores, depósitos, reglas de aprobación,
  * módulos y control interno), los maestros (proveedores, clientes,
- * productos y listas de materiales) y el plan de cuentas; no copia personas ni operaciones, así que
+ * productos, centros de trabajo y listas de materiales) y el plan de cuentas; no copia personas ni operaciones, así que
  * la numeración de documentos empieza en 1. Vuelve a cargar el inventario
  * inicial con su documento (y sus alertas de stock mínimo), abre el ejercicio
  * con su asiento de apertura y deja como supervisor al docente que la crea.
@@ -6223,9 +6492,11 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
     default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,
     default_warehouse_id: p.default_warehouse_id ? (warehouseIds.get(p.default_warehouse_id) ?? null) : null,
   }))
-  // Las listas de materiales, con los productos de la empresa nueva.
+  // Las listas de materiales, con los productos y los centros de trabajo de la empresa nueva.
+  const centerIds = copy(db.workCenters, () => audited)
   const bomIds = copy(db.boms, (b) => ({ ...audited, product_id: productIds.get(b.product_id)! }))
   copy(db.bomLines, (l) => ({ bom_id: bomIds.get(l.bom_id)!, component_id: productIds.get(l.component_id)! }))
+  copy(db.bomOperations, (o) => ({ bom_id: bomIds.get(o.bom_id)!, work_center_id: centerIds.get(o.work_center_id)! }))
   const accountIds = copy(db.accounts, () => audited)
   copy(db.postingRules, (r) => ({ account_id: accountIds.get(r.account_id)! }))
 

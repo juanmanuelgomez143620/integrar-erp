@@ -5,8 +5,15 @@
 // pestañas con el evento `storage`, simulando el tiempo real.
 
 import type * as T from '../domain/types'
-import { DEMO_BOMS } from '../domain/boms'
-import { insertBasePostingRules, insertBoms, startAccounting } from './engine'
+import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
+import {
+  insertBaseChart,
+  insertBasePostingRules,
+  insertBomOperations,
+  insertBoms,
+  insertWorkCenters,
+  startAccounting,
+} from './engine'
 import { buildSeed } from './seed'
 
 export interface DocumentSequence {
@@ -55,6 +62,9 @@ export interface DB {
   boms: T.Bom[]
   bomLines: T.BomLine[]
   prdLines: T.ProductionOrderLine[]
+  workCenters: T.WorkCenter[]
+  bomOperations: T.BomOperation[]
+  prdOperations: T.ProductionOrderOperation[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -69,7 +79,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 12
+export const DB_VERSION = 13
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -122,6 +132,9 @@ const COLLECTIONS = [
   'boms',
   'bomLines',
   'prdLines',
+  'workCenters',
+  'bomOperations',
+  'prdOperations',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -159,6 +172,9 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   boms: 12,
   bomLines: 12,
   prdLines: 12,
+  workCenters: 13,
+  bomOperations: 13,
+  prdOperations: 13,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -268,6 +284,20 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     for (const company of db.companies) {
       insertBasePostingRules(ctx, company.id)
       insertBoms(ctx, company.id, DEMO_BOMS)
+    }
+  },
+  // v12 → v13: centros de trabajo y costos de conversión (Fase 5b): las cuentas de la conversión
+  // aplicada y su regla, y los centros y las horas de la demo en cada empresa que tenga esos productos.
+  12: (db) => {
+    db.workCenters ??= []
+    db.bomOperations ??= []
+    db.prdOperations ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
+      insertBasePostingRules(ctx, company.id)
+      insertWorkCenters(ctx, company.id, DEMO_WORK_CENTERS)
+      insertBomOperations(ctx, company.id, DEMO_BOM_OPERATIONS)
     }
   },
 }

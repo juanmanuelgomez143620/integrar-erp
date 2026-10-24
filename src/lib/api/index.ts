@@ -20,6 +20,7 @@ export type {
   AvailableAction,
   BomComponentLine,
   BomDetail,
+  BomOperationLine,
   BomRow,
   CashFlow,
   CashFlowAccount,
@@ -62,6 +63,7 @@ export type {
   PriceListProduct,
   PriceListRow,
   ProducibleProduct,
+  ProductionCostRow,
   ProductionOrderView,
   ProductDetail,
   ProductRow,
@@ -88,6 +90,7 @@ export type {
   TrialBalance,
   TrialBalanceRow,
   WarehouseAvailability,
+  WorkCenterRow,
 } from '../mock/queries'
 export type {
   AccountInput,
@@ -117,6 +120,7 @@ export type {
   StudentCredential,
   StudentInput,
   TeacherInput,
+  WorkCenterInput,
   MasterKind,
 } from '../mock/engine'
 
@@ -233,6 +237,9 @@ const mockApi = {
   boms: (companyId: string) => query((db, u) => Q.listBoms(db, u, companyId)),
   bom: (companyId: string, productCode: string) => query((db, u) => Q.bomDetail(db, u, companyId, productCode)),
   productionCatalog: (companyId: string) => query((db, u) => Q.productionCatalog(db, u, companyId)),
+  workCenters: (companyId: string) => query((db, u) => Q.listWorkCenters(db, u, companyId)),
+  productionCosts: (companyId: string, from: string, to: string) =>
+    query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
   accounts: (companyId: string) => query((db, u) => Q.listAccounts(db, u, companyId)),
   fiscalYears: (companyId: string) => query((db, u) => Q.listFiscalYears(db, u, companyId)),
   journalBook: (companyId: string, from: string, to: string) =>
@@ -375,8 +382,12 @@ const mockCommands = {
   releaseProductionOrder: (docId: string) => command((c) => E.cmdReleaseProductionOrder(c, docId)),
   issueProductionOrder: (docId: string, input: E.ProductionIssueInput) =>
     command((c) => E.cmdIssueProductionOrder(c, docId, input)),
-  finishProductionOrder: (docId: string, quantity: number) =>
-    command((c) => E.cmdFinishProductionOrder(c, docId, quantity)),
+  finishProductionOrder: (docId: string, quantity: number, hours: { operation_id: string; hours: number }[] = []) =>
+    command((c) => E.cmdFinishProductionOrder(c, docId, quantity, hours)),
+  saveWorkCenter: (companyId: string, input: E.WorkCenterInput) =>
+    command((c) => E.cmdSaveWorkCenter(c, companyId, input)),
+  setWorkCenterActive: (companyId: string, centerId: string, active: boolean) =>
+    command((c) => E.cmdSetWorkCenterActive(c, companyId, centerId, active)),
   cancelProductionOrder: (docId: string, reason: string) =>
     command((c) => E.cmdCancelProductionOrder(c, docId, reason)),
 
