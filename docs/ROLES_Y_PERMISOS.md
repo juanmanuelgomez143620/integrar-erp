@@ -60,7 +60,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | purchasing | `purchase_requisition.read/create/update/approve/cancel`, `purchase_order.read/create/update/approve/cancel/export`; desde la Fase 3, `supplier_invoice.read/create/cancel` (facturas de proveedor); desde la 3c, `rfq.read/create/cancel/award` (solicitudes de cotización) y `supplier_quote.read/create/cancel` (cotizaciones) |
 | payables (Fase 3) | `payable.read` (cuentas corrientes de proveedores); desde la 3b, `payment_order.read/create/approve/pay/cancel` (órdenes de pago) y `treasury.read` (cajas y bancos, flujo de fondos); desde la 3d, `funds_transfer.read/create/cancel` (transferencias entre cuentas) y `bank_reconciliation.read/create/cancel` (conciliaciones bancarias) |
 | inventory | `goods_receipt.read/create/cancel`, `stock.read/export`, `stock_adjustment.read/create/approve/cancel`; desde la Fase 4a, `delivery_note.read/create/cancel` (remitos) |
-| production (Fase 5) | `bom.read/create/update` (listas de materiales) y `production_order.read/create/issue/cancel` (órdenes de producción) |
+| production (Fase 5) | `bom.read/create/update` (listas de materiales) y `production_order.read/create/issue/cancel` (órdenes de producción); desde la 5b, `work_center.read/update` (centros de trabajo) |
 | sales (Fase 4) | `sales_order.read/create/approve/cancel` (pedidos de venta); desde la 4b, `sales_invoice.read/create/cancel` (facturas de venta) y `receivable.read` (cuentas corrientes de clientes); desde la 4c, `customer_receipt.read/create/cancel` (recibos de cobro); desde la 4d, `price_list.read/create/update` (listas de precios) y `sales_quote.read/create/cancel` (presupuestos) |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
@@ -107,7 +107,9 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Lista de precios (Fase 4d) | L | — | L C M¹³ | — | — | L | — | — | — | — | L | Todo |
 | Presupuesto (Fase 4d) | L | — | L C X¹⁴ | — | — | L | L | — | L | — | L | Todo |
 | Lista de materiales (Fase 5a) | L | L | — | L | L C M¹⁵ | L | — | — | — | — | L | Todo |
-| Orden de producción (Fase 5a) | L | L | L | L N¹⁶ | L C X¹⁶ | L | — | — | — | — | L | Todo |
+| Orden de producción (Fase 5a y 5b) | L | L | L | L N¹⁶ | L C X¹⁶ | L | — | — | — | — | L | Todo |
+| Centro de trabajo (Fase 5b) | L | — | — | — | L C M¹⁷ | L | — | — | — | — | L | Todo |
+| Costos de producción (Fase 5b) | L | L | L | L | L | L | — | — | — | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
@@ -125,6 +127,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ¹⁴ Ventas prepara y envía el presupuesto, registra la aceptación del cliente (genera el pedido de venta en borrador, con los mismos ítems y precios) o su rechazo con el motivo, lo da por vencido pasada la validez y lo anula con motivo. No reserva stock ni controla crédito: eso pasa al confirmar el pedido.
 ¹⁵ Producción arma la fórmula de cada producto terminado (materias primas e insumos por unidad), la modifica y la desactiva; las órdenes ya cargadas guardan su copia.
 ¹⁶ Producción planifica la orden, la libera (se controlan y se reservan los materiales), la termina (las unidades que salieron bien entran al stock a su costo real) y la anula; Depósito entrega los materiales (**N**: registra lo que realmente sale de cada uno). Cada isla controla a la otra: lo consumido contra lo entregado y lo que entró al stock contra lo fabricado. Una orden terminada no se anula (a validar).
+¹⁷ Producción da de alta los centros del taller con su tarifa de mano de obra directa y su tasa de carga fabril por hora (predeterminadas, a validar), las cambia y los desactiva; cada orden guarda las tarifas con que se planificó. Al terminar una orden, Producción registra las horas trabajadas en cada centro: con ellas se aplica la conversión.
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 

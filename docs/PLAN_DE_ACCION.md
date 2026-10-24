@@ -46,7 +46,7 @@ Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 pro
 | D8 | Fase 4c: recibo de cobro, antigüedad de saldos y cobros en el flujo de fondos proyectado | Hecho (22/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
 | D9 | Fase 4d: listas de precios y presupuestos | Hecho (22/10, con paridad); falta aplicar sus dos migraciones en Supabase y publicar (con autorización) |
 | D10 | Fase 5a (`docs/FASE_5_PRODUCCION_Y_COSTOS.md`): listas de materiales y orden de producción (liberar con reserva, entrega de materiales, terminación al costo real) | Hecho (22/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
-| D11 | Fase 5b: centros de trabajo, horas y costos de conversión; costo previsto contra real de cada orden | Pendiente |
+| D11 | Fase 5b: centros de trabajo, horas y costos de conversión; costo previsto contra real de cada orden | Hecho (22/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
 | D12 | Fase 5c: necesidades de materiales y solicitud de compra de los faltantes | Pendiente |
 
 ## Reglas para quien ejecute el plan
