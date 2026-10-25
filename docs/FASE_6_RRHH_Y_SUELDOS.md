@@ -11,7 +11,7 @@ Límites: los empleados son personajes de la empresa simulada (nombre y apellido
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
 | 6a | Categorías (sueldo básico) y legajos: alta, cambios y baja del personal, con su sector y, en el taller, su centro de trabajo | RRHH conoce a la planta y lo que cuesta | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 6b | Liquidación mensual: novedades (días, horas extra, ausencias), conceptos remunerativos, descuentos y contribuciones; recibos simulados; asiento `SUELDOS` al confirmarla | El sueldo de cada uno y su costo para la empresa | Pendiente |
+| 6b | Liquidación mensual: novedades (días, horas extra, ausencias), conceptos remunerativos, descuentos y contribuciones; recibos simulados; asiento `SUELDOS` al confirmarla | El sueldo de cada uno y su costo para la empresa | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 6c | Pago de los sueldos y de las cargas sociales por Tesorería (con su asiento y en el flujo de fondos); mano de obra del taller real contra la aplicada a las órdenes | El ciclo cierra en el banco y en el costo de producción | Pendiente |
 
 ## 2. Categorías y legajos (6a)
@@ -30,8 +30,19 @@ Límites: los empleados son personajes de la empresa simulada (nombre y apellido
   - Descuentos del empleado (aportes): jubilación 11 %, ley 19.032 3 % y obra social 3 % del remunerativo.
   - Contribuciones de la empresa (no se descuentan, son costo): un porcentaje único del remunerativo, por ejemplo 24 %.
   - **Neto a cobrar** = remunerativo − descuentos.
-- Estados: **Borrador** (se cargan y corrigen las novedades) → **Confirmada** (se calculan los recibos y se genera el asiento) → **Pagada**. Una confirmada sin pagos se **anula** con motivo y contraasiento.
-- **Recibo simulado** de cada empleado (se imprime): los conceptos con su cantidad e importe, el total remunerativo, los descuentos y el neto, con la leyenda de simulación.
+- Estados: **Borrador** (se cargan y corrigen las novedades) → **Confirmada** (quedan los recibos y se genera el asiento) → **Pagada** (6c). El borrador se **anula** con motivo; la confirmada sin pagos, con motivo y contraasiento.
+- **Recibo simulado** de cada empleado (se imprimen todos juntos, uno por hoja): los conceptos con su cantidad e importe, el total remunerativo, los descuentos y el neto, con la leyenda de simulación.
+- Pantallas: **RRHH → Liquidaciones** (la lista; la nueva pide el mes y la fecha de pago, y propone el día 4 del mes siguiente; el documento muestra los totales, las novedades de cada empleado, que se cambian mientras está en borrador, el asiento y los recibos para imprimir). El docente cambia los porcentajes en **Panel docente → Módulos y control interno → Sueldos**.
+- Decisiones de la implementación **(a validar)**:
+  - Una sola liquidación por mes (sin contar las anuladas), de un mes que ya empezó y no anterior al inicio de actividades; la fecha de pago no puede ser anterior al mes liquidado.
+  - Entran los legajos activos que ingresaron hasta el fin del mes. Quien ingresó en el mes empieza con los días desde su ingreso (mes comercial de 30 días). Las bajas no entran: la liquidación final queda para más adelante.
+  - Al crearla se copian el básico de cada categoría, la antigüedad (años cumplidos al fin del mes) y los porcentajes de la empresa: si después cambian, la liquidación conserva los suyos (para tomarlos, se anula y se hace otra).
+  - Novedades: días trabajados y ausencias sin aviso, enteros que juntos no pasan de 30 (las licencias pagas cuentan como trabajadas); horas extra de 0 a 200, con hasta 2 decimales.
+  - Cada concepto se redondea a centavos; el valor hora es el básico más la antigüedad del mes entero, sobre 200.
+  - El asiento lleva la fecha en que se confirma (el libro diario es correlativo), no la del fin del mes.
+  - Los porcentajes los cambia el docente en la configuración de la empresa: de 0 a 100, con hasta 2 decimales.
+  - La confirma RRHH, la misma isla que la prepara: el control por oposición está en el pago, que hace Tesorería (6c). Una liquidación sin importes (todos con 0 días trabajados) no se confirma. Confirmada, la tarea pasa a Tesorería: pagar los netos en la fecha de pago.
+  - La línea de cada empleado copia si su categoría es del taller y su centro de trabajo: es lo que usa el asiento (mano de obra directa) y lo que usará el informe de la 6c.
 - **Asiento `SUELDOS`** al confirmar: al debe, **Sueldos y jornales** y **Cargas sociales** (el remunerativo y las contribuciones del personal que no es del taller) y **Mano de obra directa** (el remunerativo y las contribuciones del taller: es lo que la tarifa por hora de la Fase 5b aplica a las órdenes; cuenta nueva `5.1.03.01`, del grupo de costos de producción reales, **a validar**); al haber, **Sueldos a pagar** (el neto) y **Cargas sociales a pagar** (los aportes retenidos más las contribuciones).
 
 ## 4. Pagos y mano de obra aplicada (6c)
