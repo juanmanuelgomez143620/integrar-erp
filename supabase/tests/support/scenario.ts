@@ -538,6 +538,29 @@ export function buildScenario(): DB {
   const leaving = db.employees.find((e) => e.company_id === company && e.file_number === 9)!
   E.cmdTerminateEmployee(as('rrhh'), company, leaving.id, addDays(todayAR(), -3), 'Renuncia')
 
+  // Sueldos: la liquidación del mes pasado, con novedades, confirmada; la de este mes, en borrador.
+  const month = (offset: number) => {
+    const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+    d.setUTCMonth(d.getUTCMonth() + offset)
+    return d.toISOString().slice(0, 7)
+  }
+  const lastMonth = E.cmdCreatePayroll(as('rrhh'), company, {
+    period: month(-1),
+    payment_date: `${month(0)}-04`,
+    notes: '',
+  })
+  const lastLines = E.payrollLines(db, lastMonth.id)
+  E.cmdUpdatePayrollLines(as('rrhh'), lastMonth.id, [
+    { line_id: lastLines[1].id, days_worked: 28, absence_days: 2, overtime_50: 4, overtime_100: 0 },
+    { line_id: lastLines[2].id, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 3.5 },
+  ])
+  E.cmdConfirmPayroll(as('rrhh'), lastMonth.id)
+  E.cmdCreatePayroll(as('rrhh'), company, {
+    period: month(0),
+    payment_date: `${month(1)}-05`,
+    notes: 'Faltan las horas extra de la última semana',
+  })
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

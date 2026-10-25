@@ -426,6 +426,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     saveEmployee: (companyId, input) => rpc('employee_save', { ...company(companyId), p_input: input }),
     terminateEmployee: (companyId, employeeId, date, reason) =>
       rpc('employee_terminate', { ...company(companyId), p_employee_id: employeeId, p_date: date, p_reason: reason }),
+    createPayroll: (companyId, input) => rpc('payroll_create', { ...company(companyId), p_input: input }),
+    updatePayrollLines: (docId, lines) => rpc('payroll_update_lines', { ...doc(docId), p_lines: lines }),
+    confirmPayroll: (docId) => rpc('payroll_confirm', doc(docId)),
+    cancelPayroll: (docId, reason) => rpc('payroll_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

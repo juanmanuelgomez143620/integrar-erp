@@ -51,6 +51,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
     newLabel: 'Nueva orden de producción',
     createPerm: 'production_order.create',
   },
+  PAYROLL: { area: 'RRHH', newLabel: 'Nueva liquidación', createPerm: 'payroll.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -348,6 +349,32 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'PAYROLL') {
+    columns.push(
+      { key: 'period', header: 'Mes', sort: (d) => d.py!.period, cell: (d) => d.summary },
+      { key: 'employees', header: 'Empleados', align: 'right', sort: (d) => d.line_count, cell: (d) => d.line_count },
+      {
+        key: 'gross',
+        header: 'Remunerativo',
+        align: 'right',
+        sort: (d) => d.subtotal,
+        cell: (d) => <span className="tabular">{money(d.subtotal)}</span>,
+      },
+      {
+        key: 'net',
+        header: 'Netos a pagar',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular font-medium">{money(d.total)}</span>,
+      },
+      {
+        key: 'payment',
+        header: 'Fecha de pago',
+        sort: (d) => d.py!.payment_date,
+        cell: (d) => date(d.py!.payment_date),
+      },
+    )
+  }
   if (docType === 'PRODUCTION_ORDER') {
     columns.push(
       {
@@ -507,9 +534,11 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
             ? 'Buscar por número o leyenda…'
             : docType === 'PRODUCTION_ORDER'
               ? 'Buscar por número o producto…'
-              : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
-                ? 'Buscar por número, cliente, producto…'
-                : 'Buscar por número, proveedor, producto…'
+              : docType === 'PAYROLL'
+                ? 'Buscar por número o mes…'
+                : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
+                  ? 'Buscar por número, cliente, producto…'
+                  : 'Buscar por número, proveedor, producto…'
         }
         onRowClick={(d) => navigate(d.path)}
         empty={`Todavía no hay ${info.plural.toLowerCase()}.`}

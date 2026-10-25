@@ -45,6 +45,7 @@ import { useCompany } from '@/app/company'
 import { AwardDialog, ComparisonSection } from '@/features/purchasing/quotations/quotation-views'
 import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
+import { PayrollSection, periodLabel } from '@/features/hr/payroll'
 import {
   FinishDialog,
   IssueDialog,
@@ -142,6 +143,10 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     RELEASE: (id) => commands.releaseProductionOrder(id),
     CANCEL: (id, t) => commands.cancelProductionOrder(id, t),
   },
+  PAYROLL: {
+    CONFIRM: (id) => commands.confirmPayroll(id),
+    CANCEL: (id, t) => commands.cancelPayroll(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -162,6 +167,7 @@ const AREA: Record<DocType, string> = {
   CUSTOMER_RECEIPT: 'Pagos y tesorería',
   SALES_QUOTE: 'Ventas',
   PRODUCTION_ORDER: 'Producción',
+  PAYROLL: 'RRHH',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -435,7 +441,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               <TabsTrigger value="history">Historial ({detail.history.length})</TabsTrigger>
             </TabsList>
             <TabsContent value="detail" className="mt-3 flex flex-col gap-4">
-              <Lines detail={detail} />
+              {detail.payroll ? <PayrollSection detail={detail} /> : <Lines detail={detail} />}
               {detail.production_order && detail.production_order.operations.length > 0 && (
                 <OperationsSection view={detail.production_order} />
               )}
@@ -935,6 +941,33 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Referencia del cliente">{so.customer_reference || '—'}</InfoRow>
         {doc.reference_label && <InfoRow label="Presupuesto">{doc.reference_label}</InfoRow>}
         <InfoRow label="Vendió">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'PAYROLL' && detail.payroll) {
+    const py = detail.payroll
+    return (
+      <dl className={grid}>
+        <InfoRow label="Mes liquidado">{periodLabel(py.period)}</InfoRow>
+        <InfoRow label="Fecha de pago">{date(py.payment_date)}</InfoRow>
+        <InfoRow label="Empleados">{py.lines.length}</InfoRow>
+        <InfoRow label="Remunerativo">{money(py.gross)}</InfoRow>
+        <InfoRow label="Aportes retenidos">{money(py.deductions)}</InfoRow>
+        <InfoRow label="Netos a pagar">
+          <span className="font-semibold">{money(py.net)}</span>
+        </InfoRow>
+        <InfoRow label="Contribuciones de la empresa">{money(py.employer)}</InfoRow>
+        <InfoRow label="Costo para la empresa">
+          {money(py.cost)}
+          <span className="text-xs text-muted-foreground">
+            {' '}
+            (taller, mano de obra directa: {money(py.direct_labor)})
+          </span>
+        </InfoRow>
+        <InfoRow label="Liquidó">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}

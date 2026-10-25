@@ -31,6 +31,7 @@ import {
   effectivePermissions,
   fail,
   fullName,
+  fullYears,
   getMember,
   getMemberRoles,
   getProfile,
@@ -51,6 +52,8 @@ import {
   productionMaterialCost,
   productionOrderLines,
   productionOrderOperations,
+  payrollLines,
+  periodLabel,
   productionNeeds,
   productionShortages,
   quoteExpired,
@@ -408,6 +411,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.qtLines.filter((l) => l.document_id === doc.id).length
     case 'PRODUCTION_ORDER':
       return db.prdLines.filter((l) => l.document_id === doc.id).length
+    case 'PAYROLL':
+      return db.pyLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -444,6 +449,9 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     // La orden se resume por lo que fabrica, no por sus materiales.
     case 'PRODUCTION_ORDER':
       return [{ product_id: doc.pd!.product_id }]
+    // La liquidación es de personas, no de productos.
+    case 'PAYROLL':
+      return []
   }
 }
 
@@ -480,9 +488,11 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
         ? `${db.accounts.find((a) => a.id === doc.ft!.from_account_id)?.name} → ${db.accounts.find((a) => a.id === doc.ft!.to_account_id)?.name}`
         : doc.br
           ? `${db.accounts.find((a) => a.id === doc.br!.account_id)?.name} al ${date(doc.br.statement_date)}`
-          : doc.pd
-            ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
-            : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+          : doc.py
+            ? `Sueldos de ${periodLabel(doc.py.period)}`
+            : doc.pd
+              ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
+              : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -539,6 +549,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'SALES_INVOICE',
     'CUSTOMER_RECEIPT',
     'PRODUCTION_ORDER',
+    'PAYROLL',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -1029,6 +1040,16 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         text: `Ingresaron ${qty(doc.pd?.quantity_produced ?? 0, product?.uom_code)} de ${product?.code ?? '—'} a ${money(doc.pd?.unit_cost ?? 0)} por unidad (ver kardex): el costo pasó de productos en proceso a productos terminados.`,
       }
     }
+    case 'PAYROLL:BORRADOR':
+      return {
+        who: 'RRHH',
+        text: 'Cargar las novedades del mes de cada empleado (días trabajados, ausencias sin aviso y horas extra), revisar los recibos y confirmar la liquidación: se registra el asiento de sueldos.',
+      }
+    case 'PAYROLL:CONFIRMADA':
+      return {
+        who: 'Tesorería',
+        text: `Pagar los sueldos el ${date(doc.py?.payment_date)}: ${money(doc.total)} netos. Los aportes retenidos y las contribuciones quedan en Cargas sociales a pagar hasta que se depositen.`,
+      }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -1317,6 +1338,7 @@ export interface DocumentDetail {
   sales_order: SalesOrderView | null
   sales_quote: SalesQuoteView | null
   production_order: ProductionOrderView | null
+  payroll: PayrollView | null
   delivery: DeliveryView | null
   supplier: T.Supplier | null
   customer: T.Customer | null
@@ -1677,10 +1699,15 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                                     { label: 'Entregó los materiales', ...firstBy(['ISSUE']) },
                                     { label: 'Terminó', ...firstBy(['FINISH']) },
                                   ]
-                                : [
-                                    { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                                    { label: 'Controló', name: '', sector: '', at: '' },
-                                  ]
+                                : doc.doc_type === 'PAYROLL'
+                                  ? [
+                                      { label: 'Liquidó', ...firstBy(['CREATE']) },
+                                      { label: 'Confirmó', ...firstBy(['CONFIRM']) },
+                                    ]
+                                  : [
+                                      { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                                      { label: 'Controló', name: '', sector: '', at: '' },
+                                    ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1694,6 +1721,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     sales_order: doc.so ? salesOrderView(db, doc) : null,
     sales_quote: doc.qt ? salesQuoteView(db, doc) : null,
     production_order: doc.pd ? productionOrderView(db, doc) : null,
+    payroll: doc.py ? payrollView(db, doc) : null,
     delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     customer: db.customers.find((c) => c.id === doc.customer_id) ?? null,
@@ -1713,6 +1741,108 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     actions: availableActions(db, userId, doc),
     next_step: nextStep(db, doc),
     signatures,
+  }
+}
+
+export interface PayrollLineView {
+  id: string
+  line_no: number
+  employee: { id: string; file_number: number; first_name: string; last_name: string; hire_date: string }
+  category: { id: string; code: string; name: string }
+  sector: { id: string; code: string; name: string }
+  work_center: { id: string; code: string; name: string } | null
+  basic_salary: number
+  seniority_years: number
+  is_direct_labor: boolean
+  days_worked: number
+  absence_days: number
+  overtime_50: number
+  overtime_100: number
+  basic: number
+  seniority: number
+  attendance: number
+  overtime: number
+  gross: number
+  retirement: number
+  pami: number
+  health: number
+  deductions: number
+  net: number
+  employer: number
+}
+
+/** La liquidación: el mes, los porcentajes, los totales y lo de cada empleado. */
+export interface PayrollView {
+  period: string
+  payment_date: string
+  confirmed_at: string | null
+  rates: T.PayrollRates
+  gross: number
+  deductions: number
+  net: number
+  employer: number
+  /** Lo que le cuesta a la empresa: el remunerativo más las contribuciones. */
+  cost: number
+  /** La parte del taller: la mano de obra directa real. */
+  direct_labor: number
+  lines: PayrollLineView[]
+}
+
+function payrollView(db: DB, doc: T.Document): PayrollView {
+  const lines = payrollLines(db, doc.id)
+  const sum = (value: (l: T.PayrollLine) => number, rows = lines) => round2(rows.reduce((s, l) => s + value(l), 0))
+  return {
+    period: doc.py!.period,
+    payment_date: doc.py!.payment_date,
+    confirmed_at: doc.py!.confirmed_at,
+    rates: doc.py!.rates,
+    gross: sum((l) => l.gross),
+    deductions: sum((l) => l.deductions),
+    net: sum((l) => l.net),
+    employer: sum((l) => l.employer),
+    cost: sum((l) => l.gross + l.employer),
+    direct_labor: sum(
+      (l) => l.gross + l.employer,
+      lines.filter((l) => l.is_direct_labor),
+    ),
+    lines: lines.map((l) => {
+      const e = db.employees.find((x) => x.id === l.employee_id)!
+      const c = db.jobCategories.find((x) => x.id === l.category_id)!
+      const s = db.sectors.find((x) => x.id === e.sector_id)!
+      const w = l.work_center_id ? db.workCenters.find((x) => x.id === l.work_center_id)! : null
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        employee: {
+          id: e.id,
+          file_number: e.file_number,
+          first_name: e.first_name,
+          last_name: e.last_name,
+          hire_date: e.hire_date,
+        },
+        category: { id: c.id, code: c.code, name: c.name },
+        sector: { id: s.id, code: s.code, name: s.name },
+        work_center: w ? { id: w.id, code: w.code, name: w.name } : null,
+        basic_salary: l.basic_salary,
+        seniority_years: l.seniority_years,
+        is_direct_labor: l.is_direct_labor,
+        days_worked: l.days_worked,
+        absence_days: l.absence_days,
+        overtime_50: l.overtime_50,
+        overtime_100: l.overtime_100,
+        basic: l.basic,
+        seniority: l.seniority,
+        attendance: l.attendance,
+        overtime: l.overtime,
+        gross: l.gross,
+        retirement: l.retirement,
+        pami: l.pami,
+        health: l.health,
+        deductions: l.deductions,
+        net: l.net,
+        employer: l.employer,
+      }
+    }),
   }
 }
 
@@ -4055,13 +4185,6 @@ export function listJobCategories(db: DB, userId: string, companyId: string): Jo
       is_active: c.is_active,
       employees: db.employees.filter((e) => e.category_id === c.id && e.status === 'ACTIVO').length,
     }))
-}
-
-/** Años cumplidos entre dos fechas (aaaa-mm-dd): la antigüedad. */
-function fullYears(from: string, to: string) {
-  const [y1, m1, d1] = from.split('-').map(Number)
-  const [y2, m2, d2] = to.split('-').map(Number)
-  return y2 - y1 - (m2 * 100 + d2 < m1 * 100 + d1 ? 1 : 0)
 }
 
 export interface EmployeeRow {

@@ -139,6 +139,7 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
           rc: _rc,
           qt: _qt,
           pd: _pd,
+          py: _py,
           ...d
         }) => d,
       ),
@@ -161,7 +162,8 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
         | 'fv'
         | 'rc'
         | 'qt'
-        | 'pd',
+        | 'pd'
+        | 'py',
     ) => mock.documents.filter((d) => d[key]).map((d) => ({ ...d[key], document_id: d.id, company_id: d.company_id }))
     await insert('purchase_requisitions', sub('pr'))
     await insert('purchase_orders', sub('po'))
@@ -180,6 +182,7 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('customer_receipts', sub('rc'))
     await insert('sales_quotes', sub('qt'))
     await insert('production_orders', sub('pd'))
+    await insert('payrolls', sub('py'))
     await insert('purchase_requisition_lines', mock.prLines as unknown as Row[])
     await insert('purchase_order_lines', mock.poLines as unknown as Row[])
     await insert('goods_receipt_lines', mock.grLines as unknown as Row[])
@@ -198,6 +201,7 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('sales_quote_lines', mock.qtLines as unknown as Row[])
     await insert('production_order_lines', mock.prdLines as unknown as Row[])
     await insert('production_order_operations', mock.prdOperations as unknown as Row[])
+    await insert('payroll_lines', mock.pyLines as unknown as Row[])
     await insert('document_links', mock.docLinks as unknown as Row[])
     await insert('stock_movements', mock.stockMovements as unknown as Row[], true)
     await insert('stock_balances', mock.stockBalances as unknown as Row[])

@@ -58,6 +58,8 @@ export type {
   PaymentCandidate,
   PaymentLineView,
   PaymentView,
+  PayrollLineView,
+  PayrollView,
   PendingRequisitionLine,
   PeriodView,
   PostingRuleRow,
@@ -408,6 +410,11 @@ const mockCommands = {
   saveEmployee: (companyId: string, input: E.EmployeeInput) => command((c) => E.cmdSaveEmployee(c, companyId, input)),
   terminateEmployee: (companyId: string, employeeId: string, date: string, reason: string) =>
     command((c) => E.cmdTerminateEmployee(c, companyId, employeeId, date, reason)),
+  createPayroll: (companyId: string, input: E.PayrollInput) => command((c) => E.cmdCreatePayroll(c, companyId, input)),
+  updatePayrollLines: (docId: string, lines: E.PayrollLineInput[]) =>
+    command((c) => E.cmdUpdatePayrollLines(c, docId, lines)),
+  confirmPayroll: (docId: string) => command((c) => E.cmdConfirmPayroll(c, docId)),
+  cancelPayroll: (docId: string, reason: string) => command((c) => E.cmdCancelPayroll(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

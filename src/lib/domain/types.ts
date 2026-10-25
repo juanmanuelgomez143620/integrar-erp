@@ -55,6 +55,7 @@ export type DocType =
   | 'CUSTOMER_RECEIPT'
   | 'SALES_QUOTE'
   | 'PRODUCTION_ORDER'
+  | 'PAYROLL'
 
 /** Cómo se pagó una orden de pago o se cobró un recibo. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -134,6 +135,22 @@ export interface Course {
 export interface CompanySettings {
   sod_enabled: boolean
   allow_negative_stock: boolean
+  /** Los porcentajes de la liquidación de sueldos (Fase 6b); sin ellos, los de PAYROLL_DEFAULT_RATES. */
+  payroll?: Partial<PayrollRates>
+}
+
+/** Porcentajes de la liquidación de sueldos (a validar: sin pretensión de exactitud legal). */
+export interface PayrollRates {
+  /** Antigüedad: por ciento del básico por año cumplido. */
+  seniority_pct: number
+  /** Presentismo: por ciento del básico más la antigüedad, si no hubo ausencias sin aviso. */
+  attendance_pct: number
+  /** Aportes del empleado: jubilación, ley 19.032 y obra social, sobre el remunerativo. */
+  retirement_pct: number
+  pami_pct: number
+  health_pct: number
+  /** Contribuciones de la empresa sobre el remunerativo. */
+  employer_pct: number
 }
 
 export interface Company {
@@ -287,6 +304,48 @@ export interface WorkCenter extends Audited {
   /** Carga fabril (costos indirectos): pesos por hora. */
   overhead_rate: number
   is_active: boolean
+}
+
+/** Liquidación de sueldos de un mes (Fase 6b). */
+export interface PayrollHeader {
+  /** El mes liquidado: aaaa-mm. */
+  period: string
+  payment_date: string
+  /** Los porcentajes con que se calculó (los de la empresa al crearla). */
+  rates: PayrollRates
+  confirmed_at: string | null
+}
+
+/** Lo de un empleado en una liquidación: sus novedades y los importes calculados. */
+export interface PayrollLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  employee_id: string
+  /** Copias al crearla: la categoría con su básico, la antigüedad al fin del mes y si es del taller. */
+  category_id: string
+  basic_salary: number
+  seniority_years: number
+  is_direct_labor: boolean
+  work_center_id: string | null
+  days_worked: number
+  absence_days: number
+  overtime_50: number
+  overtime_100: number
+  basic: number
+  seniority: number
+  attendance: number
+  overtime: number
+  /** Total remunerativo. */
+  gross: number
+  retirement: number
+  pami: number
+  health: number
+  deductions: number
+  net: number
+  /** Contribuciones de la empresa. */
+  employer: number
 }
 
 /** Categoría del personal (un convenio simplificado, Fase 6a): su sueldo básico mensual. */
@@ -656,6 +715,7 @@ export interface Document extends Audited {
   rc?: CustomerReceiptHeader
   qt?: SalesQuoteHeader
   pd?: ProductionOrderHeader
+  py?: PayrollHeader
 }
 
 export interface RequisitionLine {

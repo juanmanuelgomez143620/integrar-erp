@@ -120,6 +120,8 @@ export const BASE_CHART: ChartRow[] = [
   ['5.1.02', 'Costos de producción aplicados'],
   ['5.1.02.01', 'Mano de obra directa aplicada', 'Mano de obra que las órdenes de producción cargaron a su costo (horas por tarifa). Regulariza (resta) a los sueldos de la fábrica: la diferencia es la sub- o sobreaplicación.', true],
   ['5.1.02.02', 'Carga fabril aplicada', 'Costos indirectos de fabricación que las órdenes cargaron a su costo (horas por tasa). Regulariza (resta) a los gastos reales de la fábrica.', true],
+  ['5.1.03', 'Costos de producción reales'],
+  ['5.1.03.01', 'Mano de obra directa', 'Sueldos y contribuciones del personal del taller: el costo real de la mano de obra. Contra la aplicada a las órdenes (5.1.02.01) da la sub- o sobreaplicación.'],
   ['5.2', 'Gastos de administración y comercialización'],
   ['5.2.01', 'Gastos en personal'],
   ['5.2.01.01', 'Sueldos y jornales', 'Remuneraciones del personal.'],
@@ -197,6 +199,11 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'CONVERSION_PRODUCCION', key: 'CARGA_FABRIL_APLICADA', code: '5.1.02.02' },
   { event: 'PRODUCCION_TERMINADA', key: 'PRODUCTO_TERMINADO', code: '1.1.05.04' },
   { event: 'PRODUCCION_TERMINADA', key: 'PRODUCCION_EN_PROCESO', code: '1.1.05.03' },
+  { event: 'SUELDOS', key: 'REMUNERACIONES', code: '5.2.01.01' },
+  { event: 'SUELDOS', key: 'CONTRIBUCIONES', code: '5.2.01.02' },
+  { event: 'SUELDOS', key: 'MANO_DE_OBRA_DIRECTA', code: '5.1.03.01' },
+  { event: 'SUELDOS', key: 'SUELDOS_A_PAGAR', code: '2.1.03.01' },
+  { event: 'SUELDOS', key: 'CARGAS_SOCIALES_A_PAGAR', code: '2.1.03.02' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */

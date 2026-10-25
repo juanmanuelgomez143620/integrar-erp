@@ -24,6 +24,7 @@ import type { ModuleCode, RoleCode } from '@/lib/domain/types'
 import { relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { PayrollRatesSection } from '@/features/hr/payroll'
 import { BulkStudentsDialog } from './bulk-students-dialog'
 
 export function TeacherPage() {
@@ -232,6 +233,7 @@ export function TeacherPage() {
               </li>
             </ul>
           </Section>
+          <PayrollRatesSection />
         </TabsContent>
 
         <TabsContent value="activity" className="mt-3 grid gap-4 lg:grid-cols-[280px_1fr]">

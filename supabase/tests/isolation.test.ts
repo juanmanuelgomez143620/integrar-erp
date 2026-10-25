@@ -107,6 +107,8 @@ async function snapshot(company: string) {
     'production_order_operations',
     'job_categories',
     'employees',
+    'payrolls',
+    'payroll_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -154,7 +156,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                                   ? B.salesQuote
                                   : fn.startsWith('opr_')
                                     ? B.productionOrder
-                                    : B.order
+                                    : fn.startsWith('payroll_')
+                                      ? B.payroll
+                                      : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -290,6 +294,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_job_category_id: B.jobCategory,
     p_employee_id: B.employee,
     p_date: '2027-05-01',
+    p_lines: JSON.stringify([
+      { line_id: B.payrollLine, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 0 },
+    ]),
     p_document_ids: `{${B.productionOrder}}`,
   }
   const args: Record<string, unknown> = {}
@@ -645,6 +652,17 @@ beforeAll(async () => {
     await one(`select id from public.job_categories where company_id = $1 and code = 'OFICIAL'`, [B.id])
   ).id
   B.employee = (await one(`select id from public.employees where company_id = $1 and file_number = 2`, [B.id])).id
+  // La liquidación de B, del mes en curso.
+  const thisMonth = (await one("select to_char(private.business_date($1), 'YYYY-MM') as id", [B.id])).id
+  B.payroll = (
+    await rpc<{ id: string }>('docenteB', 'payroll_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({ period: thisMonth, payment_date: `${thisMonth}-28`, notes: '' }),
+    })
+  ).id
+  B.payrollLine = (
+    await one(`select id from public.payroll_lines where document_id = $1 order by line_no limit 1`, [B.payroll])
+  ).id
 
   bIds = new Set(
     (
@@ -687,6 +705,7 @@ beforeAll(async () => {
          union select id::text from public.production_order_operations where company_id = $1
          union select id::text from public.job_categories where company_id = $1
          union select id::text from public.employees where company_id = $1
+         union select id::text from public.payroll_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

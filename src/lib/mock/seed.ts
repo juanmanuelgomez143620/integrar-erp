@@ -109,6 +109,7 @@ export function buildSeed(): DB {
     prdOperations: [],
     jobCategories: [],
     employees: [],
+    pyLines: [],
     postingRules: [],
     accounts: [],
     fiscalYears: [],

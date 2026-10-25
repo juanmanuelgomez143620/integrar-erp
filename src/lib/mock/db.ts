@@ -70,6 +70,7 @@ export interface DB {
   prdOperations: T.ProductionOrderOperation[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
+  pyLines: T.PayrollLine[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -84,7 +85,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 14
+export const DB_VERSION = 15
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -142,6 +143,7 @@ const COLLECTIONS = [
   'prdOperations',
   'jobCategories',
   'employees',
+  'pyLines',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -316,6 +318,16 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     for (const company of db.companies) {
       insertJobCategories(ctx, company.id, DEMO_JOB_CATEGORIES)
       insertEmployees(ctx, company.id, DEMO_EMPLOYEES)
+    }
+  },
+  // v14 → v15: liquidaciones de sueldos (Fase 6b): la cuenta de la mano de obra directa real y
+  // las reglas del asiento de sueldos.
+  14: (db) => {
+    db.pyLines ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
+      insertBasePostingRules(ctx, company.id)
     }
   },
 }

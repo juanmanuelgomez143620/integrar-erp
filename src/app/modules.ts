@@ -16,6 +16,7 @@ import {
   CalendarRange,
   ClipboardCheck,
   ClipboardList,
+  Coins,
   Factory,
   FilePen,
   FileSearch,
@@ -182,6 +183,7 @@ export const NAV: NavGroup[] = [
     label: 'RRHH',
     items: [
       { label: 'Legajos', path: 'rrhh/legajos', icon: IdCard, permission: 'employee.read' },
+      { label: 'Liquidaciones', path: 'rrhh/liquidaciones', icon: Coins, permission: 'payroll.read' },
       { label: 'Categorías', path: 'rrhh/categorias', icon: BriefcaseBusiness, permission: 'employee.read' },
     ],
   },

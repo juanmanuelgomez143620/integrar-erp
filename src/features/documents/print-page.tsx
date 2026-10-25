@@ -14,6 +14,7 @@ import {
 } from '@/lib/domain/catalog'
 import { date, dateTime, money, qty } from '@/lib/format'
 import { useCompany } from '@/app/company'
+import { PayrollReceipts } from '@/features/hr/payroll-receipts'
 
 const LEGEND = 'DOCUMENTO DE SIMULACIÓN EDUCATIVA — SIN VALIDEZ FISCAL'
 
@@ -27,6 +28,8 @@ export function PrintPage() {
   })
   if (isLoading || error) return <Loading error={error} />
   if (!data) return <p className="p-10 text-center">Documento no encontrado.</p>
+  // La liquidación se imprime como recibos: uno por empleado.
+  if (data.payroll) return <PayrollReceipts detail={data} company={company.company} />
   const { doc, lines, supplier, warehouse, journal, payment, receipt, rfq, quote, transfer, reconciliation } = data
   const c = company.company
   const info = DOC_TYPES[doc.doc_type]

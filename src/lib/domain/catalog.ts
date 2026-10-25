@@ -11,6 +11,7 @@ import type {
   ModuleCode,
   MovementType,
   PaymentMethod,
+  PayrollRates,
   Priority,
   ProductType,
   RoleCode,
@@ -59,6 +60,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   work_center: 'production',
   production_order: 'production',
   employee: 'hr',
+  payroll: 'hr',
   supplier_invoice: 'purchasing',
   payable: 'payables',
   payment_order: 'payables',
@@ -144,7 +146,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -199,7 +201,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -209,9 +211,14 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
+    'payroll.read',
   ],
   // Legajos y categorías del personal (Fase 6a).
-  RRHH: [...CORE_READ, 'employee.read', 'employee.create', 'employee.update', 'work_center.read'],
+  RRHH: [
+    ...CORE_READ, 'employee.read', 'employee.create', 'employee.update', 'work_center.read',
+    // Liquida los sueldos (Fase 6b); Tesorería los paga (6c).
+    'payroll.read', 'payroll.create', 'payroll.cancel',
+  ],
   IMPUESTOS: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
@@ -232,6 +239,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
+    'payroll.read',
   ],
   DOCENTE: [],
 }
@@ -330,6 +338,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'SALES_QUOTE', prefix: 'PRE', name: 'Presupuesto', plural: 'Presupuestos',
     resource: 'sales_quote', module: 'sales', path: 'ventas/presupuestos',
     description: 'Oferta que Ventas le hace a un cliente: productos, cantidades, precios y hasta cuándo vale. No compromete stock ni crédito: si el cliente la acepta, se genera el pedido de venta.',
+  },
+  PAYROLL: {
+    code: 'PAYROLL', prefix: 'LIQ', name: 'Liquidación de sueldos', plural: 'Liquidaciones de sueldos',
+    resource: 'payroll', module: 'hr', path: 'rrhh/liquidaciones',
+    description: 'Los sueldos de un mes: las novedades de cada empleado, lo que cobra (el remunerativo menos sus aportes) y lo que le cuesta a la empresa (más las contribuciones). Simulada: sin validez legal.',
   },
   PRODUCTION_ORDER: {
     code: 'PRODUCTION_ORDER', prefix: 'OPR', name: 'Orden de producción', plural: 'Órdenes de producción',
@@ -452,6 +465,11 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     RECHAZADO: { label: 'Rechazado', badge: 'danger', final: true, description: 'El cliente no lo aceptó.' },
     VENCIDO: { label: 'Vencido', badge: 'neutral', final: true, description: 'Pasó la validez sin respuesta del cliente: para venderle, se prepara otro con los precios del día.' },
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto.' },
+  },
+  PAYROLL: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'RRHH carga las novedades del mes de cada empleado.' },
+    CONFIRMADA: { label: 'Confirmada', badge: 'info', final: false, description: 'Los recibos están calculados y el asiento de sueldos, registrado: falta pagarla.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba confirmada, un contraasiento revirtió el de sueldos.' },
   },
   PRODUCTION_ORDER: {
     BORRADOR: { label: 'Planificada', badge: 'neutral', final: false, description: 'Producción la está planificando: todavía no reservó materiales.' },
@@ -626,6 +644,11 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('PRODUCTION_ORDER', 'LIBERADA', 'CANCEL', 'ANULADA', 'production_order.cancel', 'Anular', 'Queda sin efecto y la reserva de materiales se libera.', true, 'destructive'),
   t('PRODUCTION_ORDER', 'EN_PROCESO', 'FINISH', 'TERMINADA', 'production_order.create', 'Terminar', 'Registrá las unidades que salieron bien: entran al stock a su costo real.'),
   t('PRODUCTION_ORDER', 'EN_PROCESO', 'CANCEL', 'ANULADA', 'production_order.cancel', 'Anular con devolución', 'Los materiales vuelven al depósito y un contraasiento revierte el consumo.', true, 'destructive'),
+
+  // Liquidación de sueldos
+  t('PAYROLL', 'BORRADOR', 'CONFIRM', 'CONFIRMADA', 'payroll.create', 'Confirmar', 'Quedan los recibos y se registra el asiento de sueldos.'),
+  t('PAYROLL', 'BORRADOR', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'La liquidación queda sin efecto.', true, 'destructive'),
+  t('PAYROLL', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'Un contraasiento revierte el de sueldos.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -702,6 +725,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'SALES_QUOTE', status: 'ENVIADO', taskType: 'SEGUIR_PRE', assignee: 'ROLE', role: 'VENTAS', title: 'Seguir {number} por {total}', description: 'Registrar la aceptación o el rechazo del cliente antes de que venza la oferta.' },
   { docType: 'PRODUCTION_ORDER', status: 'BORRADOR', taskType: 'LIBERAR_OPR', assignee: 'CREATOR', title: 'Liberar {number}', description: 'Revisar el producto, la cantidad y los materiales, y liberar la orden para reservarlos.' },
   { docType: 'PRODUCTION_ORDER', status: 'LIBERADA', taskType: 'ENTREGAR_MATERIALES', assignee: 'ROLE', role: 'DEPOSITO', title: 'Entregar los materiales de {number}', description: 'Preparar los materiales reservados, entregarlos a Producción y registrar lo que sale de cada uno.' },
+  { docType: 'PAYROLL', status: 'BORRADOR', taskType: 'CONFIRMAR_LIQ', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar las novedades del mes de cada empleado y confirmar la liquidación.' },
   { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },
 ]
 
@@ -884,6 +908,16 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       INSUMO: 'Insumos consumidos',
     },
   },
+  SUELDOS: {
+    label: 'Sueldos (liquidación confirmada)',
+    keys: {
+      REMUNERACIONES: 'Remuneraciones del personal que no es del taller',
+      CONTRIBUCIONES: 'Contribuciones de la empresa por ese personal',
+      MANO_DE_OBRA_DIRECTA: 'Remuneraciones y contribuciones del personal del taller',
+      SUELDOS_A_PAGAR: 'Netos a pagar',
+      CARGAS_SOCIALES_A_PAGAR: 'Aportes retenidos y contribuciones a pagar',
+    },
+  },
   CONVERSION_PRODUCCION: {
     label: 'Costos de conversión aplicados (orden de producción terminada)',
     keys: {
@@ -906,4 +940,14 @@ export const JOURNAL_ORIGINS: Record<JournalEntryOrigin, string> = {
   APERTURA: 'Apertura',
   CONTRAASIENTO: 'Contraasiento',
   AUTOMATICO: 'Automático',
+}
+
+/** Porcentajes por defecto de la liquidación de sueldos (docs/FASE_6_RRHH_Y_SUELDOS.md §3, a validar). */
+export const PAYROLL_DEFAULT_RATES: PayrollRates = {
+  seniority_pct: 1,
+  attendance_pct: 8.33,
+  retirement_pct: 11,
+  pami_pct: 3,
+  health_pct: 3,
+  employer_pct: 24,
 }

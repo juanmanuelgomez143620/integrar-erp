@@ -10,7 +10,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createSupabaseBackend } from '../../src/lib/api/supabase'
 import { addDays, todayAR } from '../../src/lib/format'
-import type { DocType } from '../../src/lib/domain/types'
+import type { CompanySettings, DocType } from '../../src/lib/domain/types'
 import type { DB } from '../../src/lib/mock/db'
 import * as E from '../../src/lib/mock/engine'
 import * as Q from '../../src/lib/mock/queries'
@@ -133,6 +133,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['sales_quote_lines', mock.qtLines],
     ['production_order_lines', mock.prdLines],
     ['production_order_operations', mock.prdOperations],
+    ['payroll_lines', mock.pyLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -203,7 +204,14 @@ function canonical(input: unknown): unknown {
       return v
     }
     if (Array.isArray(v)) return v.map(walk)
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))
+    // Las claves en orden fijo: jsonb las ordena a su manera ("to" antes que "from") y los ids
+    // nuevos se numeran por orden de aparición.
+    if (v && typeof v === 'object')
+      return Object.fromEntries(
+        Object.entries(v)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([k, x]) => [k, walk(x)]),
+      )
     return v
   }
   return walk(value)
@@ -3209,6 +3217,161 @@ describe('paridad de comandos', () => {
     await reads('con la baja')
   })
 
+  it('liquidación de sueldos: crear, novedades, confirmar con su asiento, anular y los porcentajes del docente', async () => {
+    const companyPg = pg(company)
+    const month = (offset: number) => {
+      const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+      d.setUTCMonth(d.getUTCMonth() + offset)
+      return d.toISOString().slice(0, 7)
+    }
+    const payrolls = () => mock.documents.filter((d) => d.company_id === company && d.doc_type === 'PAYROLL')
+    const reads = async (label: string) => {
+      for (const d of payrolls())
+        await sameRead(
+          `${d.display_number} ${label}`,
+          'rrhh',
+          (b) => b.api.document(companyPg, 'PAYROLL', d.display_number),
+          (u) => Q.documentDetail(mock, u, company, 'PAYROLL', d.display_number),
+        )
+      await sameRead(
+        `liquidaciones ${label}`,
+        'tesoreria',
+        (b) => b.api.documents(companyPg, 'PAYROLL'),
+        (u) => Q.listDocuments(mock, u, company, 'PAYROLL'),
+      )
+    }
+    await reads('al empezar')
+
+    // Crearla: quién y con qué datos.
+    const input = (over: Partial<E.PayrollInput> = {}): E.PayrollInput => ({
+      period: month(-2),
+      payment_date: `${month(-1)}-04`,
+      notes: '',
+      ...over,
+    })
+    const create = (label: string, username: string, data: E.PayrollInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreatePayroll(c, company, data),
+        (b) => b.commands.createPayroll(companyPg, data),
+      )
+    expect(await create('Contabilidad no liquida', 'contabilidad', input())).toBeNull()
+    for (const [label, over] of [
+      ['un mes mal escrito', { period: '2026-1' }],
+      ['un mes que no empezó', { period: month(1), payment_date: `${month(1)}-28` }],
+      ['antes del inicio de actividades', { period: '2015-02', payment_date: '2015-03-04' }],
+      ['un mes ya liquidado', { period: month(0), payment_date: `${month(1)}-05` }],
+      ['una fecha de pago que no existe', { payment_date: '2026-02-30' }],
+      ['una fecha de pago anterior al mes', { payment_date: `${month(-3)}-28` }],
+    ] as [string, Partial<E.PayrollInput>][])
+      expect(await create(label, 'rrhh', input(over)), label).toBeNull()
+    const createdPayroll = (label: string, data: E.PayrollInput) =>
+      created(
+        label,
+        'rrhh',
+        (c) => E.cmdCreatePayroll(c, company, data),
+        (b) => b.commands.createPayroll(companyPg, data),
+      )
+    const older = await createdPayroll('la de hace dos meses', input())
+
+    // Novedades.
+    const lines = E.payrollLines(mock, older)
+    type Row = E.PayrollLineInput
+    const update = (label: string, username: string, docId: string, rows: Row[]) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdUpdatePayrollLines(c, docId, rows),
+        (b) =>
+          b.commands.updatePayrollLines(
+            pg(docId),
+            rows.map((r) => ({
+              ...r,
+              line_id: mock.pyLines.some((l) => l.id === r.line_id) ? pg(r.line_id) : r.line_id,
+            })),
+          ),
+      )
+    const row = (i: number, over: Partial<Row> = {}): Row => ({
+      line_id: lines[i].id,
+      days_worked: 30,
+      absence_days: 0,
+      overtime_50: 0,
+      overtime_100: 0,
+      ...over,
+    })
+    expect(await update('Contabilidad no carga novedades', 'contabilidad', older, [row(0)])).toBeNull()
+    for (const [label, rows] of [
+      ['31 días', [row(0, { days_worked: 31 })]],
+      ['días y ausencias que pasan de 30', [row(0, { days_worked: 29, absence_days: 2 })]],
+      ['medio día', [row(0, { days_worked: 29.5 })]],
+      ['250 horas extra', [row(1, { overtime_50: 250 })]],
+      ['horas con tres decimales', [row(1, { overtime_100: 1.555 })]],
+      ['un empleado de otra liquidación', [{ ...row(0), line_id: E.payrollLines(mock, payrolls()[0].id)[0].id }]],
+      ['un empleado dos veces', [row(0), row(0)]],
+    ] as [string, Row[]][])
+      expect(await update(label, 'rrhh', older, rows), label).toBeNull()
+    expect(
+      await update('las novedades del mes', 'rrhh', older, [
+        row(0, { days_worked: 27, absence_days: 3 }),
+        row(1, { overtime_50: 6.5, overtime_100: 2 }),
+        row(3, { days_worked: 0 }),
+      ]),
+    ).not.toBeNull()
+    await reads('con las novedades')
+
+    // Confirmar y anular.
+    const confirm = (label: string, username: string, docId: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdConfirmPayroll(c, docId),
+        (b) => b.commands.confirmPayroll(pg(docId)),
+      )
+    const cancel = (label: string, username: string, docId: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelPayroll(c, docId, reason),
+        (b) => b.commands.cancelPayroll(pg(docId), reason),
+      )
+    expect(await confirm('Tesorería no la confirma', 'tesoreria', older)).toBeNull()
+    expect(await confirm('confirmarla', 'rrhh', older)).not.toBeNull()
+    expect(await confirm('otra vez', 'rrhh', older)).toBeNull()
+    expect(await update('confirmada, sin novedades', 'rrhh', older, [row(0)])).toBeNull()
+    expect(await cancel('sin motivo', 'rrhh', older, ' ')).toBeNull()
+    expect(await cancel('Tesorería no la anula', 'tesoreria', older, 'Error de cálculo')).toBeNull()
+    expect(await cancel('anularla con su contraasiento', 'rrhh', older, 'Faltaban las horas extra')).not.toBeNull()
+    const draft = payrolls().find((d) => d.status === 'BORRADOR')!
+    expect(await cancel('el borrador sin motivo', 'rrhh', draft.id, '')).toBeNull()
+    expect(await cancel('el borrador', 'rrhh', draft.id, 'Se rehace con las horas extra')).not.toBeNull()
+    await reads('después de confirmar y anular')
+
+    // Los porcentajes los cambia el docente; la liquidación nueva los usa.
+    const settings = (label: string, username: string, data: Partial<CompanySettings>) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdUpdateCompanySettings(c, company, data),
+        (b) => b.commands.updateCompanySettings(companyPg, data),
+      )
+    expect(await settings('RRHH no cambia los porcentajes', 'rrhh', { payroll: { employer_pct: 22 } })).toBeNull()
+    expect(await settings('un porcentaje de más de 100', 'docente', { payroll: { employer_pct: 120 } })).toBeNull()
+    expect(await settings('con tres decimales', 'docente', { payroll: { attendance_pct: 8.333 } })).toBeNull()
+    expect(
+      await settings('contribuciones del 22 %', 'docente', { payroll: { employer_pct: 22, attendance_pct: 8.5 } }),
+    ).not.toBeNull()
+    await createdPayroll('otra vez la de hace dos meses', input({ notes: 'Con los porcentajes nuevos' }))
+    await createdPayroll('y la de este mes', input({ period: month(0), payment_date: `${month(1)}-05` }))
+    await reads('con los porcentajes nuevos')
+    await sameRead(
+      'la configuración de la empresa',
+      'docente',
+      (b) => b.api.companyContext(mock.companies.find((c) => c.id === company)!.slug),
+      (u) => Q.companyContext(mock, u, mock.companies.find((c) => c.id === company)!.slug),
+    )
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -3229,6 +3392,7 @@ describe('paridad de comandos', () => {
       'CUSTOMER_RECEIPT',
       'SALES_QUOTE',
       'PRODUCTION_ORDER',
+      'PAYROLL',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

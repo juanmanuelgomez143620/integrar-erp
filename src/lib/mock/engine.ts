@@ -10,6 +10,7 @@ import {
   DOC_STATUSES,
   DOC_TYPES,
   MODULES,
+  PAYROLL_DEFAULT_RATES,
   POSTING_EVENTS,
   PRODUCT_TYPES,
   ROLES,
@@ -6454,6 +6455,266 @@ export function insertEmployees(
   }
 }
 
+// ============================================================ Liquidación de sueldos (docs/FASE_6_RRHH_Y_SUELDOS.md §3)
+
+/** Los porcentajes de la empresa para liquidar: los que configuró el docente y, los demás, por defecto. */
+export function payrollRates(company: T.Company): T.PayrollRates {
+  return { ...PAYROLL_DEFAULT_RATES, ...(company.settings.payroll ?? {}) }
+}
+
+/** Años cumplidos entre dos fechas (aaaa-mm-dd): la antigüedad. */
+export function fullYears(from: string, to: string) {
+  const [y1, m1, d1] = from.split('-').map(Number)
+  const [y2, m2, d2] = to.split('-').map(Number)
+  return y2 - y1 - (m2 * 100 + d2 < m1 * 100 + d1 ? 1 : 0)
+}
+
+/** El último día de un mes (aaaa-mm). */
+export function periodEnd(period: string) {
+  const [y, m] = period.split('-').map(Number)
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+}
+
+/** "05/2027": el mes liquidado, para los textos. */
+export const periodLabel = (period: string) => `${period.slice(5, 7)}/${period.slice(0, 4)}`
+
+export interface PayrollNovelties {
+  days_worked: number
+  absence_days: number
+  overtime_50: number
+  overtime_100: number
+}
+
+/**
+ * Los importes de un empleado, cada concepto redondeado a centavos: básico
+ * proporcional a los días (mes de 30), antigüedad, presentismo (si no faltó sin
+ * aviso), horas extra (valor hora: básico más antigüedad del mes entero, sobre
+ * 200), aportes y contribuciones.
+ */
+export function payrollAmounts(rates: T.PayrollRates, basicSalary: number, years: number, n: PayrollNovelties) {
+  const basic = round2((basicSalary * n.days_worked) / 30)
+  const seniority = round2((basic * rates.seniority_pct * years) / 100)
+  const attendance = n.absence_days === 0 ? round2(((basic + seniority) * rates.attendance_pct) / 100) : 0
+  const hourly = round2((basicSalary + round2((basicSalary * rates.seniority_pct * years) / 100)) / 200)
+  const overtime = round2(round2(hourly * 1.5 * n.overtime_50) + round2(hourly * 2 * n.overtime_100))
+  const gross = round2(basic + seniority + attendance + overtime)
+  const retirement = round2((gross * rates.retirement_pct) / 100)
+  const pami = round2((gross * rates.pami_pct) / 100)
+  const health = round2((gross * rates.health_pct) / 100)
+  const deductions = round2(retirement + pami + health)
+  return {
+    basic,
+    seniority,
+    attendance,
+    overtime,
+    gross,
+    retirement,
+    pami,
+    health,
+    deductions,
+    net: round2(gross - deductions),
+    employer: round2((gross * rates.employer_pct) / 100),
+  }
+}
+
+export const payrollLines = (db: DB, docId: string) =>
+  db.pyLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** Los totales de la liquidación: el remunerativo (subtotal) y los netos a pagar (total). */
+function setPayrollTotals(db: DB, doc: T.Document) {
+  const lines = payrollLines(db, doc.id)
+  doc.subtotal = round2(lines.reduce((s, l) => s + l.gross, 0))
+  doc.total = round2(lines.reduce((s, l) => s + l.net, 0))
+}
+
+export interface PayrollInput {
+  /** El mes: aaaa-mm. */
+  period: string
+  payment_date: string
+  notes: string
+}
+
+/**
+ * RRHH prepara la liquidación de un mes con el personal activo que ingresó hasta
+ * el fin del mes; copia el básico de cada categoría, la antigüedad y los
+ * porcentajes de la empresa. Las novedades empiezan en 30 días (o desde el ingreso).
+ */
+export function cmdCreatePayroll(ctx: Ctx, companyId: string, input: PayrollInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'payroll.create')
+  const company = getCompany(db, companyId)
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) fail('DATO_INVALIDO', 'El período es un mes: aaaa-mm.')
+  if (input.period > businessDate(company).slice(0, 7))
+    fail('DATO_INVALIDO', 'Ese mes todavía no empezó: no se puede liquidar.')
+  if (input.period < company.start_date.slice(0, 7))
+    fail('DATO_INVALIDO', `La empresa empezó sus actividades el ${fmtDate(company.start_date)}: no hay sueldos antes.`)
+  const other = db.documents.find(
+    (d) =>
+      d.company_id === companyId && d.doc_type === 'PAYROLL' && d.status !== 'ANULADA' && d.py!.period === input.period,
+  )
+  if (other) fail('DATO_INVALIDO', `Ya hay una liquidación de ${periodLabel(input.period)}: ${other.display_number}.`)
+  if (!isIsoDate(input.payment_date)) fail('DATO_INVALIDO', 'La fecha de pago no es válida.')
+  if (input.payment_date < `${input.period}-01`)
+    fail('DATO_INVALIDO', 'La fecha de pago no puede ser anterior al mes liquidado.')
+  const notes = input.notes.trim()
+  if (notes.length > 500) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 500 caracteres.')
+  const end = periodEnd(input.period)
+  const staff = db.employees
+    .filter((e) => e.company_id === companyId && e.status === 'ACTIVO' && e.hire_date <= end)
+    .sort((a, b) => a.file_number - b.file_number)
+  if (!staff.length) fail('DATO_INVALIDO', `No hay personal activo para liquidar ${periodLabel(input.period)}.`)
+  const rates = payrollRates(company)
+  const doc = newDocument(ctx, companyId, 'PAYROLL', actor, {
+    notes,
+    py: { period: input.period, payment_date: input.payment_date, rates, confirmed_at: null },
+  })
+  staff.forEach((e, i) => {
+    const category = db.jobCategories.find((c) => c.id === e.category_id)!
+    const years = fullYears(e.hire_date, end)
+    // Quien ingresó en el mes cobra desde su ingreso (mes comercial de 30 días).
+    const days = e.hire_date.slice(0, 7) === input.period ? 31 - Math.min(Number(e.hire_date.slice(8, 10)), 30) : 30
+    const novelties = { days_worked: days, absence_days: 0, overtime_50: 0, overtime_100: 0 }
+    db.pyLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      employee_id: e.id,
+      category_id: category.id,
+      basic_salary: category.basic_salary,
+      seniority_years: years,
+      is_direct_labor: category.is_direct_labor,
+      work_center_id: e.work_center_id,
+      ...novelties,
+      ...payrollAmounts(rates, category.basic_salary, years, novelties),
+    })
+  })
+  setPayrollTotals(db, doc)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'payroll',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: sueldos de ${periodLabel(input.period)} (${staff.length} empleado${staff.length > 1 ? 's' : ''})`,
+  })
+  openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Las novedades de un empleado en la liquidación, por su línea. */
+export interface PayrollLineInput extends PayrollNovelties {
+  line_id: string
+}
+
+/** Cambia las novedades de la liquidación en borrador y recalcula los importes. */
+export function cmdUpdatePayrollLines(ctx: Ctx, docId: string, lines: PayrollLineInput[]) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PAYROLL')
+  const actor = requirePermission(ctx, doc.company_id, 'payroll.create')
+  if (doc.status !== 'BORRADOR')
+    fail('TRANSICION_INVALIDA', 'Sólo se cambian las novedades de una liquidación en borrador.')
+  const own = payrollLines(db, doc.id)
+  const seen = new Set<string>()
+  const days = (n: number) => Number.isInteger(n) && n >= 0 && n <= 30
+  const hours = (h: number) => Number.isFinite(h) && h >= 0 && h <= 200 && round2(h) === h
+  for (const input of lines) {
+    const line = own.find((l) => l.id === input.line_id)
+    if (!line) fail('DATO_INVALIDO', 'Uno de los empleados no es de la liquidación.')
+    if (seen.has(line.id)) fail('DATO_INVALIDO', 'Un empleado está dos veces: indicá sus novedades una sola vez.')
+    seen.add(line.id)
+    const employee = db.employees.find((e) => e.id === line.employee_id)!
+    const who = `${employee.last_name}, ${employee.first_name}`
+    if (!days(input.days_worked) || !days(input.absence_days) || input.days_worked + input.absence_days > 30)
+      fail('DATO_INVALIDO', `Los días trabajados y las ausencias de ${who} son enteros que juntos no pasan de 30.`)
+    if (!hours(input.overtime_50) || !hours(input.overtime_100))
+      fail('DATO_INVALIDO', `Las horas extra de ${who} van de 0 a 200, con hasta 2 decimales.`)
+  }
+  for (const input of lines) {
+    const line = own.find((l) => l.id === input.line_id)!
+    const novelties = {
+      days_worked: input.days_worked,
+      absence_days: input.absence_days,
+      overtime_50: input.overtime_50,
+      overtime_100: input.overtime_100,
+    }
+    Object.assign(line, novelties, payrollAmounts(doc.py!.rates, line.basic_salary, line.seniority_years, novelties))
+  }
+  setPayrollTotals(db, doc)
+  doc.updated_at = ctx.now
+  doc.updated_by = ctx.userId
+  logAudit(ctx, {
+    company_id: doc.company_id,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'payroll',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    summary: `Cambió las novedades de ${doc.display_number}`,
+  })
+}
+
+/**
+ * Confirmar: quedan los recibos y se registra el asiento de sueldos (SUELDOS): el
+ * personal del taller, como mano de obra directa; los demás, como sueldos y cargas sociales.
+ */
+export function cmdConfirmPayroll(ctx: Ctx, docId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PAYROLL')
+  requireTransition(doc, 'CONFIRM')
+  requirePermission(ctx, doc.company_id, 'payroll.create')
+  const lines = payrollLines(db, doc.id)
+  const sum = (rows: T.PayrollLine[], value: (l: T.PayrollLine) => number) =>
+    round2(rows.reduce((s, l) => s + value(l), 0))
+  if (!(sum(lines, (l) => l.gross) > 0))
+    fail('DATO_INVALIDO', 'La liquidación no tiene importes: revisá los días trabajados.')
+  const period = periodLabel(doc.py!.period)
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    summary: `Confirmó ${doc.display_number}: sueldos de ${period}, ${money(doc.total)} netos a pagar`,
+  })
+  doc.py = { ...doc.py!, confirmed_at: ctx.now }
+  const direct = lines.filter((l) => l.is_direct_labor)
+  const others = lines.filter((l) => !l.is_direct_labor)
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    'SUELDOS',
+    `Sueldos de ${period} (${doc.display_number}): ${lines.length} empleado${lines.length > 1 ? 's' : ''}.`,
+    [
+      { key: 'REMUNERACIONES', debit: sum(others, (l) => l.gross), credit: 0 },
+      { key: 'CONTRIBUCIONES', debit: sum(others, (l) => l.employer), credit: 0 },
+      { key: 'MANO_DE_OBRA_DIRECTA', debit: sum(direct, (l) => l.gross + l.employer), credit: 0 },
+      { key: 'SUELDOS_A_PAGAR', debit: 0, credit: sum(lines, (l) => l.net) },
+      { key: 'CARGAS_SOCIALES_A_PAGAR', debit: 0, credit: sum(lines, (l) => l.deductions + l.employer) },
+    ],
+  )
+}
+
+/** Anular: la que está en borrador, sin más; la confirmada, con el contraasiento del de sueldos. */
+export function cmdCancelPayroll(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PAYROLL')
+  if (doc.status !== 'CONFIRMADA') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'payroll.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? `: el contraasiento ${reversal.display_number} revirtió el de sueldos` : ''} — ${comment}`,
+  })
+}
+
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
@@ -6718,11 +6979,32 @@ export function cmdSetModule(ctx: Ctx, companyId: string, module: T.ModuleCode, 
   })
 }
 
+const PAYROLL_RATE_KEYS = Object.keys(PAYROLL_DEFAULT_RATES) as (keyof T.PayrollRates)[]
+const comparable = (settings: T.CompanySettings) => ({ ...settings, payroll: settings.payroll ?? null })
+
+/**
+ * El docente cambia el control interno (separación de funciones, stock negativo)
+ * o los porcentajes de la liquidación de sueldos de la empresa.
+ */
 export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: Partial<T.CompanySettings>) {
   const actor = requireSupervisor(ctx, companyId)
   const company = getCompany(ctx.db, companyId)
   const before = { ...company.settings }
-  company.settings = { ...company.settings, ...settings }
+  const after: T.CompanySettings = { ...company.settings }
+  for (const key of ['sod_enabled', 'allow_negative_stock'] as const)
+    if (typeof settings[key] === 'boolean') after[key] = settings[key]
+  if (settings.payroll) {
+    const rates: Partial<T.PayrollRates> = { ...(before.payroll ?? {}) }
+    for (const key of PAYROLL_RATE_KEYS) {
+      const value = settings.payroll[key]
+      if (value === undefined) continue
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100 || round2(value) !== value)
+        fail('DATO_INVALIDO', 'Los porcentajes de la liquidación van de 0 a 100, con hasta 2 decimales.')
+      rates[key] = value
+    }
+    after.payroll = rates
+  }
+  company.settings = after
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -6730,8 +7012,11 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
     entity_type: 'company',
     entity_id: companyId,
     entity_label: company.legal_name,
-    summary: 'Cambió la configuración de control interno de la empresa',
-    changes: diff(before, company.settings, ['sod_enabled', 'allow_negative_stock']),
+    summary: settings.payroll
+      ? 'Cambió los porcentajes de la liquidación de sueldos'
+      : 'Cambió la configuración de control interno de la empresa',
+    // Sin porcentajes configurados, la base los compara como null.
+    changes: diff(comparable(before), comparable(company.settings), ['sod_enabled', 'allow_negative_stock', 'payroll']),
   })
 }
 
