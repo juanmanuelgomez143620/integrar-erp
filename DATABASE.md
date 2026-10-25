@@ -894,7 +894,7 @@ La mayoría son **nuevos tipos de documento** sobre `documents` más sus líneas
 | Ventas | `price_lists` (+precios por producto; cada cliente puede tener la suya en `customers.price_list_id`), `sales_quotes` (+líneas), `sales_orders` (+líneas), `delivery_notes` (+líneas), `sales_invoices` (+líneas), `customer_receipts` (+líneas); lo reservado no se guarda: es lo que les falta entregar a los pedidos en curso (docs/FASE_4_VENTAS_Y_CLIENTES.md) | 4 |
 | Producción | `boms` (+`bom_lines`: la lista de materiales de cada producto terminado, y `bom_operations`: sus horas por unidad en cada centro), `production_orders` (+líneas: lo previsto y lo entregado de cada material; el consumo y el ingreso son movimientos de stock; +`production_order_operations`: las horas previstas y reales de cada centro, con las tarifas al planificar), `work_centers` (5b: tarifa de mano de obra directa y tasa de carga fabril por hora) (docs/FASE_5_PRODUCCION_Y_COSTOS.md) | 5 |
 | Costos | `cost_records`, `overhead_rates`, `standard_costs`; vistas de desvíos previsto vs. real | 5 |
-| RRHH | `employees`, `job_positions`, `employee_categories`, `attendance_records`, `leaves`, `hr_events` (novedades) | 6 |
+| RRHH | `job_categories` (6a: el sueldo básico mensual de cada categoría y si es del taller) y `employees` (6a: los legajos, con sector y, en el taller, centro de trabajo; la baja con fecha y motivo); después, las novedades del mes (docs/FASE_6_RRHH_Y_SUELDOS.md) | 6 |
 | Sueldos | `payroll_concepts`, `payroll_runs`, `payslips`, `payslip_lines` | 6 |
 | Impuestos | `tax_types`, `tax_rates`, `tax_obligations`, `tax_calendar`, `withholdings`, `perceptions` | 7 |
 | Logística | `carriers`, `vehicles`, `routes`, `shipments`, `shipment_items` | 7 |

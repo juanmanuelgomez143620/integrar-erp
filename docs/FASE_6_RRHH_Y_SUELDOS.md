@@ -10,7 +10,7 @@ Límites: los empleados son personajes de la empresa simulada (nombre y apellido
 
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
-| 6a | Categorías (sueldo básico) y legajos: alta, cambios y baja del personal, con su sector y, en el taller, su centro de trabajo | RRHH conoce a la planta y lo que cuesta | Pendiente |
+| 6a | Categorías (sueldo básico) y legajos: alta, cambios y baja del personal, con su sector y, en el taller, su centro de trabajo | RRHH conoce a la planta y lo que cuesta | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 6b | Liquidación mensual: novedades (días, horas extra, ausencias), conceptos remunerativos, descuentos y contribuciones; recibos simulados; asiento `SUELDOS` al confirmarla | El sueldo de cada uno y su costo para la empresa | Pendiente |
 | 6c | Pago de los sueldos y de las cargas sociales por Tesorería (con su asiento y en el flujo de fondos); mano de obra del taller real contra la aplicada a las órdenes | El ciclo cierra en el banco y en el costo de producción | Pendiente |
 
@@ -18,7 +18,9 @@ Límites: los empleados son personajes de la empresa simulada (nombre y apellido
 
 - **Categoría** (la mantiene RRHH): código, nombre y **sueldo básico mensual** (un convenio simplificado, **a validar**): por ejemplo Oficial carpintero, Medio oficial, Ayudante de taller, Administrativo, Vendedor y Encargado. Si es del taller, su sueldo es **mano de obra directa**.
 - **Legajo** de cada empleado: número correlativo, apellido y nombre (inventados), fecha de ingreso (para la antigüedad), categoría, sector de la empresa y, si trabaja en el taller, su **centro de trabajo** (Corte, Armado, Terminación). Se da de **baja** con fecha y motivo; no se borra. Sin documento, domicilio ni otros datos personales.
-- La demo trae unos diez empleados **(a validar)**: cinco del taller (uno o dos por centro), dos de administración, uno de ventas, uno de depósito y el encargado. Sus sueldos guardan relación con las tarifas de mano de obra de los centros (Fase 5b), así la comparación del paso 6c da diferencias chicas y explicables.
+- La demo trae diez empleados **(a validar)**: seis del taller (dos por centro), una administrativa, una vendedora, un operario de depósito y la encargada general, con siete categorías. Sus sueldos guardan relación con las tarifas de mano de obra de los centros (Fase 5b), así la comparación del paso 6c da diferencias chicas y explicables. La empresa nueva de un curso copia el personal de la plantilla.
+- Pantallas: **RRHH → Legajos** (el alta, los cambios y la baja en el mismo diálogo; las bajas se ven a pedido) y **RRHH → Categorías**.
+- Decisiones de la implementación **(a validar)**: la fecha de ingreso no puede ser futura ni anterior al inicio de actividades de la empresa; una categoría con personal activo no cambia entre taller y no taller (primero se pasa a esa gente a otra categoría); una categoría o un centro inactivo no se asigna, pero quien ya lo tiene lo conserva; la baja es definitiva (no hay reincorporación: se da de alta un legajo nuevo) y el número de legajo nunca se reutiliza. RRHH ve los centros de trabajo para asignarlos.
 
 ## 3. Liquidación mensual (6b, `LIQ-00001`)
 

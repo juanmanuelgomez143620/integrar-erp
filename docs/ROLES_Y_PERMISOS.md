@@ -38,7 +38,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 | `CONTABILIDAD` | Contabilidad | 4 | Contabilidad | Plan de cuentas, asientos, libros y cierre de los meses (Fase 2); balances (fases siguientes) |
 | `IMPUESTOS` | Impuestos | 4 | Impuestos | Libros IVA, obligaciones y vencimientos (Fase 7) |
 | `TESORERIA` | Tesorería y Finanzas | 5 | Tesorería | Prepara y ejecuta los pagos a proveedores y controla cajas y bancos (Fase 3b); cobros desde la Fase 4 |
-| `RRHH` | Recursos Humanos y Sueldos | 6 | RRHH | Legajos, novedades y liquidación (Fase 6) |
+| `RRHH` | Recursos Humanos y Sueldos | 6 | RRHH | Legajos y categorías del personal (Fase 6a); novedades y liquidación (6b) |
 | `PRODUCCION` | Producción | 7 | Producción | Detecta necesidades (SC en MVP); órdenes de producción (Fase 5) |
 | `COSTOS` *(Fase 5)* | Costos | 7 | Costos | Costeo de órdenes, previsto vs. real |
 | `DEPOSITO` | Depósito y Stock | 8 | Depósito | Recepciones, stock, ajustes, alertas de mínimo, SC de reposición |
@@ -64,6 +64,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | sales (Fase 4) | `sales_order.read/create/approve/cancel` (pedidos de venta); desde la 4b, `sales_invoice.read/create/cancel` (facturas de venta) y `receivable.read` (cuentas corrientes de clientes); desde la 4c, `customer_receipt.read/create/cancel` (recibos de cobro); desde la 4d, `price_list.read/create/update` (listas de precios) y `sales_quote.read/create/cancel` (presupuestos) |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
+| hr (Fase 6) | `employee.read/create/update` (categorías y legajos del personal) |
 | audit | `audit.read`, `audit.export` |
 
 Implícitos para cualquier miembro: ver y tomar sus tareas, sus notificaciones, su perfil, y el historial de los documentos que puede leer.
@@ -108,8 +109,9 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Presupuesto (Fase 4d) | L | — | L C X¹⁴ | — | — | L | L | — | L | — | L | Todo |
 | Lista de materiales (Fase 5a) | L | L | — | L | L C M¹⁵ | L | — | — | — | — | L | Todo |
 | Orden de producción (Fase 5a y 5b) | L | L | L | L N¹⁶ | L C X¹⁶ | L | — | — | — | — | L | Todo |
-| Centro de trabajo (Fase 5b) | L | — | — | — | L C M¹⁷ | L | — | — | — | — | L | Todo |
+| Centro de trabajo (Fase 5b) | L | — | — | — | L C M¹⁷ | L | — | L | — | — | L | Todo |
 | Costos de producción (Fase 5b) | L | L | L | L | L | L | — | — | — | — | L | Todo |
+| Categorías y legajos del personal (Fase 6a) | L | — | — | — | — | L | — | L C M X¹⁸ | — | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
@@ -128,8 +130,9 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ¹⁵ Producción arma la fórmula de cada producto terminado (materias primas e insumos por unidad), la modifica y la desactiva; las órdenes ya cargadas guardan su copia.
 ¹⁶ Producción planifica la orden, la libera (se controlan y se reservan los materiales), la termina (las unidades que salieron bien entran al stock a su costo real) y la anula; Depósito entrega los materiales (**N**: registra lo que realmente sale de cada uno). Cada isla controla a la otra: lo consumido contra lo entregado y lo que entró al stock contra lo fabricado. Una orden terminada no se anula (a validar). Desde la 5c, Producción (o Depósito) le pide a Compras los faltantes de las órdenes planificadas: genera una solicitud de compra en borrador, vinculada a las órdenes (con `purchase_requisition.create`).
 ¹⁷ Producción da de alta los centros del taller con su tarifa de mano de obra directa y su tasa de carga fabril por hora (predeterminadas, a validar), las cambia y los desactiva; cada orden guarda las tarifas con que se planificó. Al terminar una orden, Producción registra las horas trabajadas en cada centro: con ellas se aplica la conversión.
+¹⁸ RRHH mantiene las categorías (sueldo básico mensual, a validar) y los legajos: da de alta al personal (con el número siguiente), lo cambia de categoría, sector o centro de trabajo y le da de baja (**X**, con fecha y motivo; no se borra ni se reincorpora). Los empleados son personajes de la empresa simulada, sin datos personales. Ve los centros de trabajo para asignar al personal del taller.
 
-En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
+En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (desde la Fase 6a, RRHH lleva los legajos) (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
 ## 5. Reglas de aprobación del MVP
 
