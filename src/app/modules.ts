@@ -11,6 +11,7 @@ import {
   BookOpen,
   Calculator,
   Boxes,
+  BriefcaseBusiness,
   Building2,
   CalendarRange,
   ClipboardCheck,
@@ -22,6 +23,7 @@ import {
   HandCoins,
   Handshake,
   History,
+  IdCard,
   Inbox,
   Landmark,
   Layers,
@@ -174,6 +176,13 @@ export const NAV: NavGroup[] = [
         icon: Calculator,
         permission: 'production_order.read',
       },
+    ],
+  },
+  {
+    label: 'RRHH',
+    items: [
+      { label: 'Legajos', path: 'rrhh/legajos', icon: IdCard, permission: 'employee.read' },
+      { label: 'Categorías', path: 'rrhh/categorias', icon: BriefcaseBusiness, permission: 'employee.read' },
     ],
   },
   {

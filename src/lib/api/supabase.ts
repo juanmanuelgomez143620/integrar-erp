@@ -282,6 +282,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     workCenters: (companyId) => rpc('work_centers_list', company(companyId)),
     productionCosts: (companyId, from, to) =>
       rpc('production_costs', { ...company(companyId), p_from: from, p_to: to }),
+    jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
+    employees: (companyId) => rpc('employees_list', company(companyId)),
     productionNeeds: (companyId, documentIds = null) =>
       rpc('production_needs', { ...company(companyId), p_document_ids: documentIds }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
@@ -418,6 +420,12 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     cancelProductionOrder: (docId, reason) => rpc('opr_cancel', { ...doc(docId), p_reason: reason }),
     requestProductionMaterials: (companyId, documentIds) =>
       rpc('opr_request_materials', { ...company(companyId), p_document_ids: documentIds }),
+    saveJobCategory: (companyId, input) => rpc('job_category_save', { ...company(companyId), p_input: input }),
+    setJobCategoryActive: (companyId, categoryId, active) =>
+      rpc('job_category_set_active', { ...company(companyId), p_job_category_id: categoryId, p_active: active }),
+    saveEmployee: (companyId, input) => rpc('employee_save', { ...company(companyId), p_input: input }),
+    terminateEmployee: (companyId, employeeId, date, reason) =>
+      rpc('employee_terminate', { ...company(companyId), p_employee_id: employeeId, p_date: date, p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

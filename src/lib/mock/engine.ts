@@ -6133,6 +6133,327 @@ export function cmdRequestProductionMaterials(ctx: Ctx, companyId: string, docum
   return { id: doc.id, display_number: doc.display_number }
 }
 
+// ============================================================ Categorías y legajos del personal (docs/FASE_6_RRHH_Y_SUELDOS.md §2)
+
+export interface JobCategoryInput {
+  /** Vacío para una nueva. */
+  id: string
+  code: string
+  name: string
+  basic_salary: number
+  is_direct_labor: boolean
+}
+
+export const jobCategoryLabel = (c: T.JobCategory) => `${c.code} ${c.name}`
+export const employeeLabel = (e: T.Employee) => `${e.last_name}, ${e.first_name} (legajo ${e.file_number})`
+
+/** Crea o modifica una categoría del personal, con su sueldo básico mensual. */
+export function cmdSaveJobCategory(ctx: Ctx, companyId: string, input: JobCategoryInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'employee.update')
+  const existing = input.id ? db.jobCategories.find((c) => c.id === input.id && c.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'La categoría no existe.')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código de la categoría tiene de 1 a 12 letras, números o guiones.')
+  if (db.jobCategories.some((c) => c.company_id === companyId && c.code === code && c.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe una categoría con el código ${code}.`)
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 60)
+    fail('DATO_INVALIDO', 'El nombre de la categoría tiene de 2 a 60 caracteres.')
+  const salary = input.basic_salary
+  if (!Number.isFinite(salary) || !(salary > 0) || round2(salary) !== salary || salary >= 1e9)
+    fail('DATO_INVALIDO', 'El sueldo básico debe ser un importe mayor que cero, con hasta 2 decimales.')
+  if (typeof input.is_direct_labor !== 'boolean') fail('DATO_INVALIDO', 'Indicá si la categoría es del taller.')
+  if (existing) {
+    if (
+      existing.is_direct_labor !== input.is_direct_labor &&
+      db.employees.some((e) => e.category_id === existing.id && e.status === 'ACTIVO')
+    )
+      fail(
+        'DATO_INVALIDO',
+        `${jobCategoryLabel(existing)} tiene personal activo: no se puede cambiar si es del taller.`,
+        'Pasá antes a ese personal a otra categoría.',
+      )
+    const after = { ...existing, code, name, basic_salary: salary, is_direct_labor: input.is_direct_labor }
+    const changes = diff(existing, after, ['code', 'name', 'basic_salary', 'is_direct_labor'])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, after, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'job_category',
+      entity_id: existing.id,
+      entity_label: jobCategoryLabel(existing),
+      summary: `Modificó la categoría ${jobCategoryLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const category: T.JobCategory = {
+    id: uid(),
+    company_id: companyId,
+    code,
+    name,
+    basic_salary: salary,
+    is_direct_labor: input.is_direct_labor,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.jobCategories.push(category)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'job_category',
+    entity_id: category.id,
+    entity_label: jobCategoryLabel(category),
+    summary: `Creó la categoría ${jobCategoryLabel(category)}: sueldo básico de ${money(salary)}${category.is_direct_labor ? ', del taller' : ''}`,
+  })
+  return { id: category.id }
+}
+
+/** Una categoría desactivada no se asigna a nadie más; quien ya la tiene la conserva. */
+export function cmdSetJobCategoryActive(ctx: Ctx, companyId: string, categoryId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'employee.update')
+  const category = db.jobCategories.find((c) => c.id === categoryId && c.company_id === companyId)
+  if (!category) fail('DATO_INVALIDO', 'La categoría no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si la categoría está activa.')
+  if (category.is_active === active) return
+  Object.assign(category, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'job_category',
+    entity_id: category.id,
+    entity_label: jobCategoryLabel(category),
+    summary: `${active ? 'Activó' : 'Desactivó'} la categoría ${jobCategoryLabel(category)}`,
+  })
+}
+
+export interface EmployeeInput {
+  /** Vacío para un legajo nuevo. */
+  id: string
+  first_name: string
+  last_name: string
+  hire_date: string
+  category_id: string
+  sector_id: string
+  /** Sólo el personal del taller (categoría de mano de obra directa) tiene centro de trabajo. */
+  work_center_id: string | null
+}
+
+/**
+ * Da de alta un legajo (con el número siguiente) o lo modifica. El personal del
+ * taller trabaja en un centro de trabajo; el de las demás áreas, no.
+ */
+export function cmdSaveEmployee(ctx: Ctx, companyId: string, input: EmployeeInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, input.id ? 'employee.update' : 'employee.create')
+  const company = getCompany(db, companyId)
+  const existing = input.id ? db.employees.find((e) => e.id === input.id && e.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'El legajo no existe.')
+  if (existing?.status === 'BAJA')
+    fail('TRANSICION_INVALIDA', `${employeeLabel(existing)} está dado de baja: el legajo ya no se modifica.`)
+  const firstName = input.first_name.trim()
+  if (firstName.length < 2 || firstName.length > 60) fail('DATO_INVALIDO', 'El nombre tiene de 2 a 60 caracteres.')
+  const lastName = input.last_name.trim()
+  if (lastName.length < 2 || lastName.length > 60) fail('DATO_INVALIDO', 'El apellido tiene de 2 a 60 caracteres.')
+  if (!isIsoDate(input.hire_date)) fail('DATO_INVALIDO', 'La fecha de ingreso no es válida.')
+  if (input.hire_date > businessDate(company))
+    fail('DATO_INVALIDO', 'La fecha de ingreso no puede ser posterior a hoy.')
+  if (input.hire_date < company.start_date)
+    fail(
+      'DATO_INVALIDO',
+      `La fecha de ingreso no puede ser anterior al inicio de actividades de la empresa (${fmtDate(company.start_date)}).`,
+    )
+  const category = db.jobCategories.find((c) => c.id === input.category_id && c.company_id === companyId)
+  if (!category) fail('DATO_INVALIDO', 'Elegí la categoría.')
+  if (!category.is_active && category.id !== existing?.category_id)
+    fail('DATO_INVALIDO', `La categoría ${jobCategoryLabel(category)} está inactiva.`)
+  const sector = db.sectors.find((s) => s.id === input.sector_id && s.company_id === companyId)
+  if (!sector) fail('DATO_INVALIDO', 'Elegí el sector.')
+  let workCenterId: string | null = null
+  if (category.is_direct_labor) {
+    const center = input.work_center_id
+      ? db.workCenters.find((w) => w.id === input.work_center_id && w.company_id === companyId)
+      : undefined
+    if (!center) fail('DATO_INVALIDO', 'El personal del taller trabaja en un centro de trabajo: elegilo.')
+    if (!center.is_active && center.id !== existing?.work_center_id)
+      fail('DATO_INVALIDO', `El centro de trabajo ${workCenterLabel(center)} está inactivo.`)
+    workCenterId = center.id
+  } else if (input.work_center_id) fail('DATO_INVALIDO', 'Sólo el personal del taller tiene centro de trabajo.')
+  const fields = {
+    first_name: firstName,
+    last_name: lastName,
+    hire_date: input.hire_date,
+    category_id: category.id,
+    sector_id: sector.id,
+    work_center_id: workCenterId,
+  }
+  if (existing) {
+    const changes = diff(existing, { ...existing, ...fields }, [
+      'first_name',
+      'last_name',
+      'hire_date',
+      'category_id',
+      'sector_id',
+      'work_center_id',
+    ])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, fields, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'employee',
+      entity_id: existing.id,
+      entity_label: employeeLabel(existing),
+      summary: `Modificó el legajo ${existing.file_number} (${existing.last_name}, ${existing.first_name})`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const fileNumber =
+    Math.max(0, ...db.employees.filter((e) => e.company_id === companyId).map((e) => e.file_number)) + 1
+  const employee: T.Employee = {
+    id: uid(),
+    company_id: companyId,
+    file_number: fileNumber,
+    ...fields,
+    status: 'ACTIVO',
+    termination_date: null,
+    termination_reason: '',
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.employees.push(employee)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'employee',
+    entity_id: employee.id,
+    entity_label: employeeLabel(employee),
+    summary: `Dio de alta el legajo ${fileNumber}: ${lastName}, ${firstName} (${category.name})`,
+  })
+  return { id: employee.id }
+}
+
+/** La baja de un legajo, con su fecha y su motivo: no se borra ni se vuelve a modificar. */
+export function cmdTerminateEmployee(
+  ctx: Ctx,
+  companyId: string,
+  employeeId: string,
+  terminationDate: string,
+  reason: string,
+) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'employee.update')
+  const company = getCompany(db, companyId)
+  const employee = db.employees.find((e) => e.id === employeeId && e.company_id === companyId)
+  if (!employee) fail('DATO_INVALIDO', 'El legajo no existe.')
+  if (employee.status === 'BAJA') fail('TRANSICION_INVALIDA', `${employeeLabel(employee)} ya está dado de baja.`)
+  if (!isIsoDate(terminationDate)) fail('DATO_INVALIDO', 'La fecha de baja no es válida.')
+  if (terminationDate < employee.hire_date)
+    fail('DATO_INVALIDO', `La baja no puede ser anterior al ingreso (${fmtDate(employee.hire_date)}).`)
+  if (terminationDate > businessDate(company)) fail('DATO_INVALIDO', 'La fecha de baja no puede ser posterior a hoy.')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo de la baja: queda en el legajo.')
+  Object.assign(employee, {
+    status: 'BAJA',
+    termination_date: terminationDate,
+    termination_reason: comment,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'DEACTIVATE',
+    entity_type: 'employee',
+    entity_id: employee.id,
+    entity_label: employeeLabel(employee),
+    summary: `Dio de baja el legajo ${employee.file_number} (${employee.last_name}, ${employee.first_name}) el ${fmtDate(terminationDate)} — ${comment}`,
+  })
+}
+
+/** Carga las categorías de la demo que la empresa todavía no tiene (por código). */
+export function insertJobCategories(
+  ctx: Ctx,
+  companyId: string,
+  rows: { code: string; name: string; basic_salary: number; is_direct_labor: boolean }[],
+) {
+  for (const row of rows) {
+    if (ctx.db.jobCategories.some((c) => c.company_id === companyId && c.code === row.code)) continue
+    ctx.db.jobCategories.push({
+      id: uid(),
+      company_id: companyId,
+      ...row,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
+/**
+ * Carga el personal de la demo si la empresa todavía no tiene legajos: cada uno con
+ * su categoría, su sector y su centro de trabajo por código (si falta alguno, ese no).
+ */
+export function insertEmployees(
+  ctx: Ctx,
+  companyId: string,
+  rows: {
+    file_number: number
+    first_name: string
+    last_name: string
+    hire_date: string
+    category: string
+    sector: string
+    work_center: string | null
+  }[],
+) {
+  const { db } = ctx
+  if (db.employees.some((e) => e.company_id === companyId)) return
+  for (const row of rows) {
+    const category = db.jobCategories.find((c) => c.company_id === companyId && c.code === row.category)
+    const sector = db.sectors.find((s) => s.company_id === companyId && s.code === row.sector)
+    const center = row.work_center
+      ? db.workCenters.find((w) => w.company_id === companyId && w.code === row.work_center)
+      : null
+    if (!category || !sector || center === undefined) continue
+    db.employees.push({
+      id: uid(),
+      company_id: companyId,
+      file_number: row.file_number,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      hire_date: row.hire_date,
+      category_id: category.id,
+      sector_id: sector.id,
+      work_center_id: center?.id ?? null,
+      status: 'ACTIVO',
+      termination_date: null,
+      termination_reason: '',
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
 // ============================================================ Tareas y notificaciones
 
 export function cmdClaimTask(ctx: Ctx, taskId: string, claim: boolean) {
@@ -6604,7 +6925,8 @@ function uniqueSlug(db: DB, base: string) {
  * Crea la empresa de un curso a partir de la plantilla (H-20, DATABASE.md §12).
  * Copia la estructura (islas, sectores, depósitos, reglas de aprobación,
  * módulos y control interno), los maestros (proveedores, clientes,
- * productos, centros de trabajo y listas de materiales) y el plan de cuentas; no copia personas ni operaciones, así que
+ * productos, centros de trabajo, listas de materiales y el personal ficticio con sus categorías) y el plan de
+ * cuentas; no copia usuarios ni operaciones, así que
  * la numeración de documentos empieza en 1. Vuelve a cargar el inventario
  * inicial con su documento (y sus alertas de stock mínimo), abre el ejercicio
  * con su asiento de apertura y deja como supervisor al docente que la crea.
@@ -6648,7 +6970,7 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   }
 
   const islandIds = copy(db.islands)
-  copy(db.sectors, (s) => ({ island_id: s.island_id ? (islandIds.get(s.island_id) ?? null) : null }))
+  const sectorIds = copy(db.sectors, (s) => ({ island_id: s.island_id ? (islandIds.get(s.island_id) ?? null) : null }))
   const warehouseIds = copy(db.warehouses)
   copy(db.approvalRules)
   for (const m of of(db.companyModules)) db.companyModules.push({ ...m, company_id: companyId })
@@ -6665,6 +6987,14 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   const bomIds = copy(db.boms, (b) => ({ ...audited, product_id: productIds.get(b.product_id)! }))
   copy(db.bomLines, (l) => ({ bom_id: bomIds.get(l.bom_id)!, component_id: productIds.get(l.component_id)! }))
   copy(db.bomOperations, (o) => ({ bom_id: bomIds.get(o.bom_id)!, work_center_id: centerIds.get(o.work_center_id)! }))
+  // El personal: categorías y legajos, con los sectores y los centros de trabajo de la empresa nueva.
+  const categoryIds = copy(db.jobCategories, () => audited)
+  copy(db.employees, (e) => ({
+    ...audited,
+    category_id: categoryIds.get(e.category_id)!,
+    sector_id: sectorIds.get(e.sector_id)!,
+    work_center_id: e.work_center_id ? (centerIds.get(e.work_center_id) ?? null) : null,
+  }))
   const accountIds = copy(db.accounts, () => audited)
   copy(db.postingRules, (r) => ({ account_id: accountIds.get(r.account_id)! }))
 

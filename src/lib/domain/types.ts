@@ -24,6 +24,7 @@ export type ModuleCode =
   | 'sales'
   | 'inventory'
   | 'production'
+  | 'hr'
   | 'payables'
   | 'accounting'
   | 'management'
@@ -286,6 +287,39 @@ export interface WorkCenter extends Audited {
   /** Carga fabril (costos indirectos): pesos por hora. */
   overhead_rate: number
   is_active: boolean
+}
+
+/** Categoría del personal (un convenio simplificado, Fase 6a): su sueldo básico mensual. */
+export interface JobCategory extends Audited {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  /** Sueldo básico mensual. */
+  basic_salary: number
+  /** Si es del taller: su sueldo es mano de obra directa y el empleado trabaja en un centro de trabajo. */
+  is_direct_labor: boolean
+  is_active: boolean
+}
+
+export type EmployeeStatus = 'ACTIVO' | 'BAJA'
+
+/** Legajo de un empleado de la empresa simulada (un personaje: sin documento ni datos reales). */
+export interface Employee extends Audited {
+  id: string
+  company_id: string
+  /** Número de legajo, correlativo en la empresa. */
+  file_number: number
+  first_name: string
+  last_name: string
+  hire_date: string
+  category_id: string
+  sector_id: string
+  /** El centro de trabajo, si es del taller. */
+  work_center_id: string | null
+  status: EmployeeStatus
+  termination_date: string | null
+  termination_reason: string
 }
 
 /** Las horas que lleva cada unidad en un centro de trabajo (tabla bom_operations): la ruta simplificada. */

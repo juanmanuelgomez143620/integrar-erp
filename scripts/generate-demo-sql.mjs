@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 5b).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 6a).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261022150200_demo_template_conversion.sql'
+const target = process.argv[2] ?? '20261024130200_demo_template_legajos.sql'
 
 const server = await createServer({
   root,
@@ -40,6 +40,7 @@ try {
   const { buildSeed } = await server.ssrLoadModule('/src/lib/mock/seed.ts')
   const chart = await server.ssrLoadModule('/src/lib/domain/chart-of-accounts.ts')
   const { DEMO_BOMS, DEMO_BOM_OPERATIONS, DEMO_WORK_CENTERS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
+  const { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES } = await server.ssrLoadModule('/src/lib/domain/employees.ts')
   const bomOperationRows = DEMO_BOM_OPERATIONS.flatMap((b) =>
     b.operations.map(([center, hours], i) => ({ product: b.product, line_no: i + 1, center, hours })),
   )
@@ -304,6 +305,66 @@ begin
 end;
 $$;
 
+-- ------------------------------------------------------------------ El personal de la demo (a validar)
+create or replace function private.demo_job_category_rows()
+returns table (code text, name text, basic_salary numeric, is_direct_labor boolean)
+language sql
+immutable
+set search_path = ''
+as $$
+  select c.code::text, c.name::text, c.basic_salary::numeric, c.is_direct_labor::boolean
+    from (values
+${values(DEMO_JOB_CATEGORIES, ['code', 'name', 'basic_salary', 'is_direct_labor'])}
+    ) as c (code, name, basic_salary, is_direct_labor)
+$$;
+
+-- Las categorías de la demo que la empresa todavía no tiene, por código (insertJobCategories).
+create or replace function private.insert_demo_job_categories(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.job_categories (company_id, code, name, basic_salary, is_direct_labor)
+  select p_company, r.code, r.name, r.basic_salary, r.is_direct_labor
+    from private.demo_job_category_rows() r
+   where not exists (select 1 from public.job_categories c where c.company_id = p_company and c.code = r.code)
+$$;
+
+create or replace function private.demo_employee_rows()
+returns table (file_number int, first_name text, last_name text, hire_date date, category text, sector text,
+               work_center text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select e.file_number::int, e.first_name::text, e.last_name::text, e.hire_date::date, e.category::text,
+         e.sector::text, e.work_center::text
+    from (values
+${values(DEMO_EMPLOYEES, ['file_number', 'first_name', 'last_name', 'hire_date', 'category', 'sector', 'work_center'])}
+    ) as e (file_number, first_name, last_name, hire_date, category, sector, work_center)
+$$;
+
+-- El personal de la demo, si la empresa todavía no tiene legajos: cada uno con su
+-- categoría, su sector y su centro de trabajo por código; si falta alguno, ese no
+-- (insertEmployees).
+create or replace function private.insert_demo_employees(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.employees (company_id, file_number, first_name, last_name, hire_date, category_id, sector_id,
+                                work_center_id)
+  select p_company, r.file_number, r.first_name, r.last_name, r.hire_date, c.id, s.id, w.id
+    from private.demo_employee_rows() r
+    join public.job_categories c on c.company_id = p_company and c.code = r.category
+    join public.sectors s on s.company_id = p_company and s.code = r.sector
+    left join public.work_centers w on w.company_id = p_company and w.code = r.work_center
+   where not exists (select 1 from public.employees x where x.company_id = p_company)
+     and (r.work_center is null or w.id is not null)
+$$;
+
 -- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()
 returns uuid
@@ -392,6 +453,9 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
   perform private.insert_demo_work_centers(v_id);
   perform private.insert_demo_boms(v_id);
   perform private.insert_demo_bom_operations(v_id);
+  -- El personal: categorías y legajos (a validar).
+  perform private.insert_demo_job_categories(v_id);
+  perform private.insert_demo_employees(v_id);
 
   -- Inventario inicial documentado (un ajuste por depósito), contabilidad con su
   -- asiento de apertura y alertas de arranque.
@@ -407,7 +471,7 @@ $$;
   console.log(
     `${file}\n${sectors.length} sectores · ${warehouses.length} depósitos · ${suppliers.length} proveedores · ` +
       `${of(db.customers).length} clientes · ${products.length} productos · ${initial.length} ajustes de inventario inicial · ` +
-      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales · ${DEMO_WORK_CENTERS.length} centros de trabajo`,
+      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales · ${DEMO_WORK_CENTERS.length} centros de trabajo · ${DEMO_JOB_CATEGORIES.length} categorías · ${DEMO_EMPLOYEES.length} legajos`,
   )
 } finally {
   await server.close()

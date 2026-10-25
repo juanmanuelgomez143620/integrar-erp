@@ -6,11 +6,14 @@
 
 import type * as T from '../domain/types'
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
+import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES } from '../domain/employees'
 import {
   insertBaseChart,
   insertBasePostingRules,
   insertBomOperations,
   insertBoms,
+  insertEmployees,
+  insertJobCategories,
   insertWorkCenters,
   startAccounting,
 } from './engine'
@@ -65,6 +68,8 @@ export interface DB {
   workCenters: T.WorkCenter[]
   bomOperations: T.BomOperation[]
   prdOperations: T.ProductionOrderOperation[]
+  jobCategories: T.JobCategory[]
+  employees: T.Employee[]
   postingRules: T.PostingRule[]
   accounts: T.Account[]
   fiscalYears: T.FiscalYear[]
@@ -79,7 +84,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 13
+export const DB_VERSION = 14
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -135,6 +140,8 @@ const COLLECTIONS = [
   'workCenters',
   'bomOperations',
   'prdOperations',
+  'jobCategories',
+  'employees',
   'postingRules',
   'accounts',
   'fiscalYears',
@@ -298,6 +305,17 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       insertBasePostingRules(ctx, company.id)
       insertWorkCenters(ctx, company.id, DEMO_WORK_CENTERS)
       insertBomOperations(ctx, company.id, DEMO_BOM_OPERATIONS)
+    }
+  },
+  // v13 → v14: categorías y legajos del personal (Fase 6a), con los de la demo en cada empresa que
+  // todavía no tenga legajos.
+  13: (db) => {
+    db.jobCategories ??= []
+    db.employees ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      insertJobCategories(ctx, company.id, DEMO_JOB_CATEGORIES)
+      insertEmployees(ctx, company.id, DEMO_EMPLOYEES)
     }
   },
 }

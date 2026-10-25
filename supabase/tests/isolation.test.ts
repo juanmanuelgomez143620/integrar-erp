@@ -105,6 +105,8 @@ async function snapshot(company: string) {
     'work_centers',
     'bom_operations',
     'production_order_operations',
+    'job_categories',
+    'employees',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -226,6 +228,14 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     output_warehouse_id: B.warehouse,
     labor_rate: 1,
     overhead_rate: 1,
+    basic_salary: 1,
+    is_direct_labor: true,
+    first_name: 'Intruso',
+    last_name: 'Externo',
+    hire_date: '2027-03-01',
+    category_id: B.jobCategory,
+    sector_id: B.sector,
+    work_center_id: B.workCenter,
   }
   const values: Record<string, unknown> = {
     p_company_id: company,
@@ -277,6 +287,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_quantity: 1,
     p_work_center_id: B.workCenter,
     p_hours: JSON.stringify([{ operation_id: B.productionOperation, hours: 1 }]),
+    p_job_category_id: B.jobCategory,
+    p_employee_id: B.employee,
+    p_date: '2027-05-01',
     p_document_ids: `{${B.productionOrder}}`,
   }
   const args: Record<string, unknown> = {}
@@ -628,6 +641,11 @@ beforeAll(async () => {
     ])
   ).id
 
+  B.jobCategory = (
+    await one(`select id from public.job_categories where company_id = $1 and code = 'OFICIAL'`, [B.id])
+  ).id
+  B.employee = (await one(`select id from public.employees where company_id = $1 and file_number = 2`, [B.id])).id
+
   bIds = new Set(
     (
       await db.admin<{ id: string }>(
@@ -667,6 +685,8 @@ beforeAll(async () => {
          union select id::text from public.work_centers where company_id = $1
          union select id::text from public.bom_operations where company_id = $1
          union select id::text from public.production_order_operations where company_id = $1
+         union select id::text from public.job_categories where company_id = $1
+         union select id::text from public.employees where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

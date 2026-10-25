@@ -4028,3 +4028,88 @@ export function productionNeedsView(
     })),
   }))
 }
+
+export interface JobCategoryRow {
+  id: string
+  code: string
+  name: string
+  basic_salary: number
+  is_direct_labor: boolean
+  is_active: boolean
+  /** Personal activo de la categoría. */
+  employees: number
+}
+
+/** Las categorías del personal, con cuánta gente activa tiene cada una (docs/FASE_6_RRHH_Y_SUELDOS.md §2). */
+export function listJobCategories(db: DB, userId: string, companyId: string): JobCategoryRow[] {
+  assertPerm(db, userId, companyId, 'employee.read')
+  return db.jobCategories
+    .filter((c) => c.company_id === companyId)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((c) => ({
+      id: c.id,
+      code: c.code,
+      name: c.name,
+      basic_salary: c.basic_salary,
+      is_direct_labor: c.is_direct_labor,
+      is_active: c.is_active,
+      employees: db.employees.filter((e) => e.category_id === c.id && e.status === 'ACTIVO').length,
+    }))
+}
+
+/** Años cumplidos entre dos fechas (aaaa-mm-dd): la antigüedad. */
+function fullYears(from: string, to: string) {
+  const [y1, m1, d1] = from.split('-').map(Number)
+  const [y2, m2, d2] = to.split('-').map(Number)
+  return y2 - y1 - (m2 * 100 + d2 < m1 * 100 + d1 ? 1 : 0)
+}
+
+export interface EmployeeRow {
+  id: string
+  file_number: number
+  first_name: string
+  last_name: string
+  hire_date: string
+  /** Años cumplidos desde el ingreso (hasta la baja, si la tuvo). */
+  seniority_years: number
+  status: T.EmployeeStatus
+  termination_date: string | null
+  termination_reason: string
+  category: { id: string; code: string; name: string; basic_salary: number; is_direct_labor: boolean }
+  sector: { id: string; code: string; name: string }
+  work_center: { id: string; code: string; name: string } | null
+}
+
+/** Los legajos del personal, por número (docs/FASE_6_RRHH_Y_SUELDOS.md §2). */
+export function listEmployees(db: DB, userId: string, companyId: string): EmployeeRow[] {
+  assertPerm(db, userId, companyId, 'employee.read')
+  const today = todayAR()
+  return db.employees
+    .filter((e) => e.company_id === companyId)
+    .sort((a, b) => a.file_number - b.file_number)
+    .map((e) => {
+      const c = db.jobCategories.find((x) => x.id === e.category_id)!
+      const s = db.sectors.find((x) => x.id === e.sector_id)!
+      const w = e.work_center_id ? db.workCenters.find((x) => x.id === e.work_center_id)! : null
+      return {
+        id: e.id,
+        file_number: e.file_number,
+        first_name: e.first_name,
+        last_name: e.last_name,
+        hire_date: e.hire_date,
+        seniority_years: fullYears(e.hire_date, e.termination_date ?? today),
+        status: e.status,
+        termination_date: e.termination_date,
+        termination_reason: e.termination_reason,
+        category: {
+          id: c.id,
+          code: c.code,
+          name: c.name,
+          basic_salary: c.basic_salary,
+          is_direct_labor: c.is_direct_labor,
+        },
+        sector: { id: s.id, code: s.code, name: s.name },
+        work_center: w ? { id: w.id, code: w.code, name: w.name } : null,
+      }
+    })
+}

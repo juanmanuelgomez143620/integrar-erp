@@ -84,6 +84,21 @@ const mockOperations = ofTemplate(seed.boms)
   )
   .sort()
 
+/** El personal de la demo: "categoría básico taller" y "legajo apellido categoría sector centro ingreso". */
+const mockCategoryCode = Object.fromEntries(ofTemplate(seed.jobCategories).map((c) => [c.id, c.code]))
+const mockSectorCode = Object.fromEntries(ofTemplate(seed.sectors).map((x) => [x.id, x.code]))
+const mockCategories = ofTemplate(seed.jobCategories)
+  .map((c) => `${c.code} ${c.basic_salary} ${c.is_direct_labor}`)
+  .sort()
+const mockStaff = ofTemplate(seed.employees)
+  .map(
+    (e) =>
+      `${e.file_number} ${e.last_name} ${mockCategoryCode[e.category_id]} ${mockSectorCode[e.sector_id]} ${
+        e.work_center_id ? mockCenterCode[e.work_center_id] : '-'
+      } ${e.hire_date}`,
+  )
+  .sort()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -177,6 +192,33 @@ const operations = async (company: string) =>
          join public.products p on p.id = b.product_id
          join public.work_centers w on w.id = o.work_center_id
         where o.company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const categories = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select code || ' ' || (basic_salary::float8)::text || ' ' || is_direct_labor::text as line
+         from public.job_categories where company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const staff = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select e.file_number || ' ' || e.last_name || ' ' || c.code || ' ' || s.code || ' ' || coalesce(w.code, '-')
+              || ' ' || e.hire_date::text as line
+         from public.employees e
+         join public.job_categories c on c.id = e.category_id
+         join public.sectors s on s.id = e.sector_id
+         left join public.work_centers w on w.id = e.work_center_id
+        where e.company_id = $1`,
       [company],
     )
   )
@@ -368,6 +410,13 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await operations(template)).toEqual(mockOperations)
   })
 
+  it('tiene las mismas categorías y el mismo personal que la demo', async () => {
+    expect(mockCategories).toHaveLength(7)
+    expect(await categories(template)).toEqual(mockCategories)
+    expect(mockStaff).toHaveLength(10)
+    expect(await staff(template)).toEqual(mockStaff)
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -433,6 +482,8 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await boms(created.id)).toEqual(mockBoms)
     expect(await centers(created.id)).toEqual(mockCenters)
     expect(await operations(created.id)).toEqual(mockOperations)
+    expect(await categories(created.id)).toEqual(mockCategories)
+    expect(await staff(created.id)).toEqual(mockStaff)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

@@ -3043,6 +3043,172 @@ describe('paridad de comandos', () => {
     await needs('pedidos otra vez')
   })
 
+  it('personal: categorías y legajos (alta, cambios, validaciones y baja)', async () => {
+    const companyPg = pg(company)
+    const inCompany = <R extends { company_id: string; code: string }>(rows: R[], code: string) =>
+      rows.find((r) => r.company_id === company && r.code === code)!
+    /** El id de la base si el registro existe; si no (vacío o inventado), tal cual. */
+    const known = (id: string | null) =>
+      id && [...mock.jobCategories, ...mock.sectors, ...mock.workCenters, ...mock.employees].some((x) => x.id === id)
+        ? pg(id)
+        : id
+    const reads = async (label: string) => {
+      for (const username of ['rrhh', 'gerencia'])
+        await sameRead(
+          `categorías ${label} (${username})`,
+          username,
+          (b) => b.api.jobCategories(companyPg),
+          (u) => Q.listJobCategories(mock, u, company),
+        )
+      for (const username of ['rrhh', 'auditor'])
+        await sameRead(
+          `legajos ${label} (${username})`,
+          username,
+          (b) => b.api.employees(companyPg),
+          (u) => Q.listEmployees(mock, u, company),
+        )
+    }
+    await reads('al empezar')
+
+    // Categorías.
+    const categoryInput = (over: Partial<E.JobCategoryInput> = {}): E.JobCategoryInput => ({
+      id: '',
+      code: 'BARNIZADOR',
+      name: 'Barnizador',
+      basic_salary: 1080000.5,
+      is_direct_labor: true,
+      ...over,
+    })
+    const saveCategory = (label: string, username: string, input: E.JobCategoryInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveJobCategory(c, company, input),
+        (b) => b.commands.saveJobCategory(companyPg, { ...input, id: known(input.id) ?? '' }),
+      )
+    expect(await saveCategory('Producción no lleva las categorías', 'produccion', categoryInput())).toBeNull()
+    for (const [label, over] of [
+      ['un código repetido', { code: 'OFICIAL' }],
+      ['un código con espacios', { code: 'con espacios' }],
+      ['un nombre corto', { name: 'B' }],
+      ['un sueldo de cero', { basic_salary: 0 }],
+      ['un sueldo con tres decimales', { basic_salary: 1000.555 }],
+      ['sin decir si es del taller', { is_direct_labor: 'sí' as unknown as boolean }],
+      ['una categoría que no existe', { id: crypto.randomUUID() }],
+    ] as [string, Partial<E.JobCategoryInput>][])
+      expect(await saveCategory(label, 'rrhh', categoryInput(over)), label).toBeNull()
+    const created = await saveCategory('la categoría de barnizador', 'rrhh', categoryInput())
+    expect(created).not.toBeNull()
+    loaded.link(created!.mock.id, (created!.pg as { id: string }).id)
+    const barnizador = created!.mock.id
+    expect(await saveCategory('sin cambios', 'rrhh', categoryInput({ id: barnizador }))).not.toBeNull()
+    expect(
+      await saveCategory('un aumento', 'rrhh', categoryInput({ id: barnizador, basic_salary: 1120000 })),
+    ).not.toBeNull()
+    const oficial = inCompany(mock.jobCategories, 'OFICIAL')
+    expect(
+      await saveCategory(
+        'el oficial, con personal activo, no deja de ser del taller',
+        'rrhh',
+        categoryInput({
+          id: oficial.id,
+          code: 'OFICIAL',
+          name: oficial.name,
+          basic_salary: oficial.basic_salary,
+          is_direct_labor: false,
+        }),
+      ),
+    ).toBeNull()
+    const setActive = (label: string, id: string, active: boolean) =>
+      step(
+        label,
+        'rrhh',
+        (c) => E.cmdSetJobCategoryActive(c, company, id, active),
+        (b) => b.commands.setJobCategoryActive(companyPg, pg(id), active),
+      )
+    expect(await setActive('desactivar el barnizador', barnizador, false)).not.toBeNull()
+    expect(await setActive('desactivarlo otra vez', barnizador, false)).not.toBeNull()
+    await reads('con las categorías')
+
+    // Legajos.
+    const employeeInput = (over: Partial<E.EmployeeInput> = {}): E.EmployeeInput => ({
+      id: '',
+      first_name: 'Mirta',
+      last_name: 'Sosa Benítez',
+      hire_date: addDays(todayAR(), -10),
+      category_id: inCompany(mock.jobCategories, 'AYUDANTE').id,
+      sector_id: inCompany(mock.sectors, 'PRO').id,
+      work_center_id: inCompany(mock.workCenters, 'CORTE').id,
+      ...over,
+    })
+    const saveEmployee = (label: string, username: string, input: E.EmployeeInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveEmployee(c, company, input),
+        (b) =>
+          b.commands.saveEmployee(companyPg, {
+            ...input,
+            id: known(input.id) ?? '',
+            category_id: known(input.category_id) ?? '',
+            sector_id: known(input.sector_id) ?? '',
+            work_center_id: known(input.work_center_id),
+          }),
+      )
+    expect(await saveEmployee('Gerencia no da de alta', 'gerencia', employeeInput())).toBeNull()
+    for (const [label, over] of [
+      ['un nombre corto', { first_name: 'M' }],
+      ['sin apellido', { last_name: ' ' }],
+      ['una fecha que no existe', { hire_date: '2027-02-30' }],
+      ['un ingreso futuro', { hire_date: addDays(todayAR(), 1) }],
+      ['un ingreso antes del inicio de actividades', { hire_date: '2015-03-01' }],
+      ['sin categoría', { category_id: '' }],
+      ['una categoría inactiva', { category_id: barnizador }],
+      ['sin sector', { sector_id: '' }],
+      ['del taller sin centro', { work_center_id: null }],
+      [
+        'administrativo con centro',
+        { category_id: inCompany(mock.jobCategories, 'ADMIN').id, sector_id: inCompany(mock.sectors, 'CON').id },
+      ],
+      ['un legajo que no existe', { id: crypto.randomUUID() }],
+    ] as [string, Partial<E.EmployeeInput>][])
+      expect(await saveEmployee(label, 'rrhh', employeeInput(over)), label).toBeNull()
+    const hired = await saveEmployee('el alta', 'rrhh', employeeInput())
+    expect(hired).not.toBeNull()
+    loaded.link(hired!.mock.id, (hired!.pg as { id: string }).id)
+    const mirta = hired!.mock.id
+    expect(await saveEmployee('sin cambios', 'rrhh', employeeInput({ id: mirta }))).not.toBeNull()
+    expect(
+      await saveEmployee(
+        'pasa a medio oficial en armado',
+        'rrhh',
+        employeeInput({
+          id: mirta,
+          category_id: inCompany(mock.jobCategories, 'MEDIO-OF').id,
+          work_center_id: inCompany(mock.workCenters, 'ARMADO').id,
+        }),
+      ),
+    ).not.toBeNull()
+    await reads('con el alta')
+
+    const terminate = (label: string, username: string, date: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdTerminateEmployee(c, company, mirta, date, reason),
+        (b) => b.commands.terminateEmployee(companyPg, pg(mirta), date, reason),
+      )
+    expect(await terminate('Contabilidad no da de baja', 'contabilidad', todayAR(), 'Renuncia')).toBeNull()
+    expect(await terminate('antes del ingreso', 'rrhh', addDays(todayAR(), -11), 'Renuncia')).toBeNull()
+    expect(await terminate('una fecha futura', 'rrhh', addDays(todayAR(), 1), 'Renuncia')).toBeNull()
+    expect(await terminate('una fecha que no existe', 'rrhh', '2027-13-01', 'Renuncia')).toBeNull()
+    expect(await terminate('sin motivo', 'rrhh', todayAR(), ' ')).toBeNull()
+    expect(await terminate('la baja', 'rrhh', todayAR(), 'Renuncia para mudarse')).not.toBeNull()
+    expect(await terminate('otra vez', 'rrhh', todayAR(), 'Renuncia')).toBeNull()
+    expect(await saveEmployee('después de la baja no se modifica', 'rrhh', employeeInput({ id: mirta }))).toBeNull()
+    await reads('con la baja')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

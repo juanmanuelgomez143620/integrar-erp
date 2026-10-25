@@ -515,6 +515,29 @@ export function buildScenario(): DB {
   E.cmdCancelProductionOrder(as('produccion'), spoiled.id, 'Se cortó mal la madera')
   E.cmdCreateProductionOrder(as('produccion'), company, productionOrder('PT-003', 10), false)
 
+  // RRHH: una categoría nueva (y otra desactivada), un ingreso al taller y una baja.
+  const inCompany = <R extends { company_id: string; code: string }>(rows: R[], code: string) =>
+    rows.find((r) => r.company_id === company && r.code === code)!
+  E.cmdSaveJobCategory(as('rrhh'), company, {
+    id: '',
+    code: 'LUSTRADOR',
+    name: 'Lustrador',
+    basic_salary: 1150000,
+    is_direct_labor: true,
+  })
+  E.cmdSetJobCategoryActive(as('rrhh'), company, inCompany(db.jobCategories, 'OPERARIO').id, false)
+  E.cmdSaveEmployee(as('rrhh'), company, {
+    id: '',
+    first_name: 'Rubén',
+    last_name: 'Acuña',
+    hire_date: addDays(todayAR(), -20),
+    category_id: inCompany(db.jobCategories, 'LUSTRADOR').id,
+    sector_id: inCompany(db.sectors, 'PRO').id,
+    work_center_id: inCompany(db.workCenters, 'TERMINACION').id,
+  })
+  const leaving = db.employees.find((e) => e.company_id === company && e.file_number === 9)!
+  E.cmdTerminateEmployee(as('rrhh'), company, leaving.id, addDays(todayAR(), -3), 'Renuncia')
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

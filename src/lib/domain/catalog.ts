@@ -27,6 +27,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   sales: { name: 'Ventas y cobranzas', lockable: true },
   inventory: { name: 'Depósito y stock', lockable: true },
   production: { name: 'Producción y costos', lockable: true },
+  hr: { name: 'RRHH y sueldos', lockable: true },
   payables: { name: 'Pagos y tesorería', lockable: true },
   accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
@@ -57,6 +58,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   bom: 'production',
   work_center: 'production',
   production_order: 'production',
+  employee: 'hr',
   supplier_invoice: 'purchasing',
   payable: 'payables',
   payment_order: 'payables',
@@ -97,7 +99,7 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Registra los asientos, lleva los libros contables y cierra los meses.' },
   IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones y libros contables (obligaciones en fases siguientes).' },
   TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Prepara y ejecuta los pagos a proveedores y controla los saldos de caja y bancos.' },
-  RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Legajos y sueldos en fases siguientes.' },
+  RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Lleva los legajos y las categorías del personal; las liquidaciones de sueldos llegan en la Fase 6b.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.' },
   LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Consulta recepciones y stock (despachos en fases siguientes).' },
@@ -142,7 +144,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -197,7 +199,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -208,7 +210,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
   ],
-  RRHH: [...CORE_READ],
+  // Legajos y categorías del personal (Fase 6a).
+  RRHH: [...CORE_READ, 'employee.read', 'employee.create', 'employee.update', 'work_center.read'],
   IMPUESTOS: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
@@ -228,7 +231,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_invoice.read', 'payable.read', 'posting_rule.read', 'payment_order.read', 'treasury.read',
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
-    'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read',
+    'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
   ],
   DOCENTE: [],
 }

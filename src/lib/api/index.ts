@@ -39,11 +39,13 @@ export type {
   DocRef,
   DocumentDetail,
   DocumentListItem,
+  EmployeeRow,
   FiscalYearView,
   FlowNode,
   InvoiceableOrder,
   InvoiceableSalesOrder,
   IssuedCheque,
+  JobCategoryRow,
   JournalBook,
   JournalBookEntry,
   JournalView,
@@ -241,6 +243,8 @@ const mockApi = {
   workCenters: (companyId: string) => query((db, u) => Q.listWorkCenters(db, u, companyId)),
   productionCosts: (companyId: string, from: string, to: string) =>
     query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
+  jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
+  employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
   /** Las necesidades de materiales de las órdenes planificadas (todas, o las indicadas). */
   productionNeeds: (companyId: string, documentIds: string[] | null = null) =>
     query((db, u) => Q.productionNeedsView(db, u, companyId, documentIds)),
@@ -396,6 +400,14 @@ const mockCommands = {
     command((c) => E.cmdCancelProductionOrder(c, docId, reason)),
   requestProductionMaterials: (companyId: string, documentIds: string[]) =>
     command((c) => E.cmdRequestProductionMaterials(c, companyId, documentIds)),
+
+  saveJobCategory: (companyId: string, input: E.JobCategoryInput) =>
+    command((c) => E.cmdSaveJobCategory(c, companyId, input)),
+  setJobCategoryActive: (companyId: string, categoryId: string, active: boolean) =>
+    command((c) => E.cmdSetJobCategoryActive(c, companyId, categoryId, active)),
+  saveEmployee: (companyId: string, input: E.EmployeeInput) => command((c) => E.cmdSaveEmployee(c, companyId, input)),
+  terminateEmployee: (companyId: string, employeeId: string, date: string, reason: string) =>
+    command((c) => E.cmdTerminateEmployee(c, companyId, employeeId, date, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

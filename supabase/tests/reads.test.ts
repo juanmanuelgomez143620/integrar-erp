@@ -266,6 +266,15 @@ describe('ventas', () => {
   })
 })
 
+describe('personal', () => {
+  it('las categorías y los legajos, con la antigüedad y las bajas', async () => {
+    for (const u of [...USERS, 'rrhh']) {
+      await same(u, () => Q.listJobCategories(mock, userId(u), company), 'job_categories_list', [companyPg])
+      await same(u, () => Q.listEmployees(mock, userId(u), company), 'employees_list', [companyPg])
+    }
+  })
+})
+
 describe('cuentas corrientes de proveedores e imputación automática', () => {
   it('saldos por proveedor', async () => {
     for (const u of USERS) await same(u, () => Q.listPayables(mock, userId(u), company), 'payables_list', [companyPg])
