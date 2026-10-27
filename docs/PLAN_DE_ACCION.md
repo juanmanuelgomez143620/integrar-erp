@@ -48,7 +48,7 @@ Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 pro
 | D10 | Fase 5a (`docs/FASE_5_PRODUCCION_Y_COSTOS.md`): listas de materiales y orden de producción (liberar con reserva, entrega de materiales, terminación al costo real) | Hecho (22/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
 | D11 | Fase 5b: centros de trabajo, horas y costos de conversión; costo previsto contra real de cada orden | Hecho (22/10, con paridad); falta aplicar sus cuatro migraciones en Supabase y publicar (con autorización) |
 | D12 | Fase 5c: necesidades de materiales y solicitud de compra de los faltantes | Hecho (24/10, con paridad); falta aplicar su migración en Supabase y publicar (con autorización). Con esto la Fase 5 está completa |
-| D13 | Fase 6: legajos, novedades del mes, liquidación simulada con recibo, asiento de sueldos y pago por Tesorería; con los sueldos reales, la mano de obra sub- o sobreaplicada de la Fase 5 | En curso (diseño en `docs/FASE_6_RRHH_Y_SUELDOS.md`): 6a y 6b hechas (24/10 y 25/10, con paridad; falta aplicar sus ocho migraciones en Supabase); sigue la 6c (pagos y mano de obra real contra aplicada) |
+| D13 | Fase 6: legajos, novedades del mes, liquidación simulada con recibo, asiento de sueldos y pago por Tesorería; con los sueldos reales, la mano de obra sub- o sobreaplicada de la Fase 5 | Hecha (diseño en `docs/FASE_6_RRHH_Y_SUELDOS.md`): 6a, 6b y 6c (24/10 a 26/10, con paridad; falta aplicar sus doce migraciones en Supabase) |
 | D14 | Fase 7: libros IVA y posición mensual, calendario de obligaciones, logística de entregas y tablero de control | Pendiente |
 | D15 | Fase 8: motor de escenarios con consignas, criterios de logro y progreso por isla | Pendiente |
 

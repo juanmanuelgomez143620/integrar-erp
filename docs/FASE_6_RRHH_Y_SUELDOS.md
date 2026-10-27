@@ -12,7 +12,7 @@ Límites: los empleados son personajes de la empresa simulada (nombre y apellido
 |---|---|---|---|
 | 6a | Categorías (sueldo básico) y legajos: alta, cambios y baja del personal, con su sector y, en el taller, su centro de trabajo | RRHH conoce a la planta y lo que cuesta | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 6b | Liquidación mensual: novedades (días, horas extra, ausencias), conceptos remunerativos, descuentos y contribuciones; recibos simulados; asiento `SUELDOS` al confirmarla | El sueldo de cada uno y su costo para la empresa | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 6c | Pago de los sueldos y de las cargas sociales por Tesorería (con su asiento y en el flujo de fondos); mano de obra del taller real contra la aplicada a las órdenes | El ciclo cierra en el banco y en el costo de producción | Pendiente |
+| 6c | Pago de los sueldos y de las cargas sociales por Tesorería (con su asiento y en el flujo de fondos); mano de obra del taller real contra la aplicada a las órdenes | El ciclo cierra en el banco y en el costo de producción | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 
 ## 2. Categorías y legajos (6a)
 
@@ -47,9 +47,18 @@ Límites: los empleados son personajes de la empresa simulada (nombre y apellido
 
 ## 4. Pagos y mano de obra aplicada (6c)
 
-- **Pagar los sueldos** (Tesorería): de una cuenta bancaria, el neto de la liquidación. Asiento **`PAGO_SUELDOS`**: Sueldos a pagar al debe, el banco al haber. La liquidación confirmada aparece en el **flujo de fondos proyectado** en su fecha de pago (Fase 3d).
-- **Pagar las cargas sociales** del mes (Tesorería): los aportes y las contribuciones al organismo de la seguridad social (simulado). Asiento **`PAGO_CARGAS_SOCIALES`**: Cargas sociales a pagar al debe, el banco al haber.
-- **Mano de obra del taller**, por mes: lo **real** (la cuenta Mano de obra directa, `5.1.03.01`) contra lo **aplicado** a las órdenes terminadas en el mes (Mano de obra directa aplicada, `5.1.02.01`, horas × tarifa de la Fase 5b). La diferencia es la mano de obra **subaplicada** (se cargó de menos al costo) o **sobreaplicada**; el saldo neto de las dos cuentas ya la muestra en el estado de resultados, y un informe la explica por mes. **A validar**: si Contabilidad la ajusta con un asiento contra el costo de ventas.
+- **Pagar los sueldos** (Tesorería, desde la liquidación confirmada): elige la caja o el banco (lo habitual es el banco, por transferencia a la cuenta sueldo de cada empleado) y paga los netos de todos. Asiento **`PAGO_SUELDOS`**: Sueldos a pagar al debe, la caja o el banco al haber. La liquidación pasa a **Sueldos pagados**.
+- **Pagar las cargas sociales** del mes (Tesorería, después de los sueldos): los aportes retenidos y las contribuciones, al organismo de la seguridad social (simulado). Asiento **`PAGO_CARGAS_SOCIALES`**: Cargas sociales a pagar al debe, la caja o el banco al haber. La liquidación queda **Pagada**.
+- **Flujo de fondos** (Fase 3d): el real suma el concepto **Sueldos y cargas sociales**; el proyectado resta los netos sin pagar en su fecha de pago y las cargas sociales sin pagar en su vencimiento.
+- **Mano de obra del taller**, por mes y por centro de trabajo: lo **real** (el remunerativo y las contribuciones del personal del taller en la liquidación del mes, lo que fue a Mano de obra directa, `5.1.03.01`) contra lo **aplicado** a las órdenes terminadas en el mes (horas × tarifa de la Fase 5b, lo que fue a Mano de obra directa aplicada, `5.1.02.01`). La diferencia es la mano de obra **subaplicada** (se cargó de menos al costo) o **sobreaplicada**; el saldo neto de las dos cuentas ya la muestra en el estado de resultados, y el informe (**Contabilidad → Mano de obra del taller**) la explica por mes, con el costo real por hora aplicada contra la tarifa. **A validar**: si Contabilidad la ajusta con un asiento contra el costo de ventas.
+- Decisiones de la implementación **(a validar)**:
+  - Se paga todo junto (no empleado por empleado), desde una sola caja o banco y por el total (sin pagos parciales). Las cargas sociales se pagan después de los sueldos y vencen el día 10 del mes siguiente al liquidado.
+  - Tiene que alcanzar el saldo de la caja o el banco, como en las órdenes de pago: si no, primero se consiguen los fondos (el flujo proyectado lo anticipa).
+  - **SoD-6**: quien preparó o confirmó la liquidación no paga sus sueldos ni sus cargas sociales (pasa si un estudiante tiene los roles de RRHH y de Tesorería); el docente, como supervisor, sí.
+  - Un pago no se anula (la transferencia a los empleados no vuelve) y una liquidación con algo pagado ya no se anula: un error se corrige con un asiento manual de Contabilidad.
+  - La mano de obra real de un mes es la de su liquidación confirmada (también si ya se pagó), repartida por el centro de trabajo de cada empleado del taller; la aplicada, la de las órdenes terminadas en el mes (el día de su ingreso al stock), con las horas reales de cada centro por la tarifa que copió la orden.
+  - El informe lo ven quienes ven las liquidaciones (Gerencia, Contabilidad, Tesorería, RRHH y Auditoría). A validar: si Producción también lo ve, para ajustar las tarifas de sus centros.
+- Pantallas: en la liquidación, **Pagar los sueldos** y después **Pagar las cargas sociales** (Tesorería elige la caja o el banco y ve si alcanza el saldo); la cabecera muestra cada pago o su vencimiento. **Pagos y tesorería → Flujo de fondos** suma la columna de sueldos y cargas sociales; **Contabilidad → Mano de obra del taller** tiene el informe por mes.
 
 ## 5. Asientos automáticos (reglas base, a validar)
 
@@ -75,4 +84,4 @@ Módulo nuevo **`hr`** ("RRHH y sueldos"), que el docente puede bloquear.
 | `payroll.create/cancel` (preparar, confirmar y anular) | RRHH |
 | `payroll.pay` (pagar sueldos y cargas sociales) | Tesorería |
 
-RRHH liquida y Tesorería paga: quien calcula los sueldos no mueve el dinero (control por oposición). Queda **a validar** si Gerencia aprueba la liquidación antes del pago.
+RRHH liquida y Tesorería paga: quien calcula los sueldos no mueve el dinero (control por oposición, SoD-6). Queda **a validar** si Gerencia aprueba la liquidación antes del pago.
