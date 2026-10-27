@@ -36,7 +36,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 | `COMPRAS` | Compras | 2 | Compras | Atiende solicitudes, gestiona proveedores, emite órdenes de compra |
 | `VENTAS` | Ventas | 3 | Ventas | Clientes (MVP); presupuestos, pedidos y facturación (Fase 4) |
 | `CONTABILIDAD` | Contabilidad | 4 | Contabilidad | Plan de cuentas, asientos, libros y cierre de los meses (Fase 2); balances (fases siguientes) |
-| `IMPUESTOS` | Impuestos | 4 | Impuestos | Libros IVA, obligaciones y vencimientos (Fase 7) |
+| `IMPUESTOS` | Impuestos | 4 | Impuestos | Libros IVA y declaración mensual de IVA (Fase 7a); ingresos brutos y vencimientos (7b) |
 | `TESORERIA` | Tesorería y Finanzas | 5 | Tesorería | Prepara y ejecuta los pagos a proveedores y controla cajas y bancos (Fase 3b); cobros desde la Fase 4; sueldos y cargas sociales desde la 6c |
 | `RRHH` | Recursos Humanos y Sueldos | 6 | RRHH | Legajos y categorías del personal (Fase 6a); novedades y liquidación (6b) |
 | `PRODUCCION` | Producción | 7 | Producción | Detecta necesidades (SC en MVP); órdenes de producción (Fase 5) |
@@ -65,6 +65,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
 | hr (Fase 6) | `employee.read/create/update` (categorías y legajos del personal); desde la 6b, `payroll.read/create/cancel` (liquidaciones de sueldos) y, desde la 6c, `payroll.pay` (pagar los sueldos y las cargas sociales) |
+| tax (Fase 7) | `tax_return.read/create/cancel/pay` (libros IVA y declaraciones de impuestos) |
 | audit | `audit.read`, `audit.export` |
 
 Implícitos para cualquier miembro: ver y tomar sus tareas, sus notificaciones, su perfil, y el historial de los documentos que puede leer.
@@ -114,6 +115,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Categorías y legajos del personal (Fase 6a) | L | — | — | — | — | L | — | L C M X¹⁸ | — | — | L | Todo |
 | Liquidación de sueldos (Fase 6b y 6c) | L | — | — | — | — | L | L P²⁰ | L C X¹⁹ | — | — | L | Todo |
 | Mano de obra del taller (Fase 6c) | L | — | — | — | — | L | L | L | — | — | L | Todo |
+| Libros IVA y declaraciones de impuestos (Fase 7a) | L | — | — | — | — | L | L P²¹ | — | L C X²¹ | — | L | Todo |
 
 ¹ Compras **rechaza** una SC o **cierra su saldo**; no la crea.
 ² Compras aprueba **sólo** OC dentro de su límite y **creadas por otro usuario** (ver §5 y §6).
@@ -135,8 +137,9 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ¹⁸ RRHH mantiene las categorías (sueldo básico mensual, a validar) y los legajos: da de alta al personal (con el número siguiente), lo cambia de categoría, sector o centro de trabajo y le da de baja (**X**, con fecha y motivo; no se borra ni se reincorpora). Los empleados son personajes de la empresa simulada, sin datos personales. Ve los centros de trabajo para asignar al personal del taller.
 ¹⁹ RRHH prepara la liquidación del mes (entra el personal activo), carga las novedades de cada empleado (días trabajados, ausencias sin aviso y horas extra), la confirma (se genera el asiento de sueldos) y la anula con motivo (la confirmada, con contraasiento). Los porcentajes de aportes y contribuciones los fija el docente. Tesorería la consulta para pagarla (Fase 6c): quien liquida no mueve el dinero.
 ²⁰ Tesorería paga los sueldos (los netos de todos los empleados) y después las cargas sociales (los aportes retenidos y las contribuciones), desde una caja o un banco con saldo; cada pago genera su asiento. SoD-6: quien preparó o confirmó la liquidación no la paga. Un pago no se anula, y una liquidación con algo pagado tampoco.
+²¹ Impuestos prepara la declaración de un mes terminado con los libros IVA, la presenta (se registra el asiento del impuesto) y la anula con motivo mientras no esté pagada y sea la última. Tesorería paga el saldo al fisco (simulado) desde una caja o un banco con saldo. SoD-10: quien la preparó o la presentó no la paga.
 
-En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (desde la Fase 6a, RRHH lleva los legajos; desde la 6b, liquida los sueldos, y desde la 6c Tesorería los paga) (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
+En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (desde la Fase 6a, RRHH lleva los legajos; desde la 6b, liquida los sueldos, y desde la 6c Tesorería los paga; desde la 7a, Impuestos liquida el IVA) (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
 ## 5. Reglas de aprobación del MVP
 
@@ -165,6 +168,7 @@ Se implementa como regla explícita porque es **contenido a enseñar**, no sólo
 | SoD-8 | Quien carga un pedido de venta no autoriza su crédito | Validación en `so_approve` y `so_reject` | 4a |
 | SoD-9 | Quien emite una factura de venta no registra su cobro | Validación al confirmar el recibo (`rc_create` y `rc_confirm`) | 4c |
 | SoD-6 | Quien liquida los sueldos (prepara o confirma la liquidación) no los paga ni paga sus cargas sociales; la aprobación de la liquidación por Gerencia queda a validar | Matriz + validación en `payroll_pay_salaries` y `payroll_pay_charges` | 6c |
+| SoD-10 | Quien liquida un impuesto (prepara o presenta la declaración) no lo paga | Matriz + validación en `tax_return_pay` | 7a |
 
 - Configuración por empresa: `settings.sod_enabled` (por defecto **activado**). Si una isla tiene un solo estudiante, el docente puede desactivarla o aprobar como supervisor.
 - Cuando una acción se bloquea por esta regla, la interfaz muestra el motivo y la explicación: el bloqueo es una oportunidad de aprendizaje.

@@ -10,7 +10,7 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
-| 7a | Libros IVA compras y ventas por mes; declaración mensual de IVA (débito menos crédito y saldo a favor anterior) con su asiento al presentarla; pago por Tesorería | Impuestos sabe cuánto IVA se paga y de dónde sale | Pendiente |
+| 7a | Libros IVA compras y ventas por mes; declaración mensual de IVA (débito menos crédito y saldo a favor anterior) con su asiento al presentarla; pago por Tesorería | Impuestos sabe cuánto IVA se paga y de dónde sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas; calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado | Nada vence sin que se vea | Pendiente |
 | 7c | Logística: transportistas y vehículos; hojas de ruta con los remitos despachados; entrega con conformidad o no entrega con motivo | El pedido termina cuando el cliente lo recibe | Pendiente |
 | 7d | Tablero de control: indicadores por área, comparación con el mes anterior y alertas | Gerencia ve la empresa entera en una pantalla | Pendiente |
@@ -28,7 +28,10 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
   - El mes de cada factura es el de su asiento (la registración), no la fecha del comprobante.
   - Una sola declaración por impuesto y mes (sin contar las anuladas). Después de la primera presentada, los meses van en orden: no se prepara la de un mes si la del anterior no está presentada.
   - Vence el día 20 del mes siguiente.
-  - Quien la presentó no la paga (SoD-10), como en los sueldos.
+  - Quien la preparó o la presentó no la paga (SoD-10), como en los sueldos.
+  - Lo hace la isla de Impuestos; en la demo, el usuario de Contabilidad también tiene ese rol.
+  - A validar: si para practicar en una sola clase se deja declarar el mes en curso (hoy, sólo uno terminado).
+- Pantallas: **Impuestos → Libros IVA** (el mes y el libro, con el resumen por alícuota y el enlace a cada factura) e **Impuestos → Declaraciones** (la nueva se prepara con el mes; el documento muestra de dónde sale el saldo, con los enlaces a los dos libros, y Tesorería la paga eligiendo la caja o el banco). El flujo de fondos suma la columna de impuestos.
 
 ## 3. Ingresos brutos y calendario (7b)
 

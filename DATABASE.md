@@ -896,7 +896,7 @@ La mayoría son **nuevos tipos de documento** sobre `documents` más sus líneas
 | Costos | `cost_records`, `overhead_rates`, `standard_costs`; vistas de desvíos previsto vs. real | 5 |
 | RRHH | `job_categories` (6a: el sueldo básico mensual de cada categoría y si es del taller) y `employees` (6a: los legajos, con sector y, en el taller, centro de trabajo; la baja con fecha y motivo) (docs/FASE_6_RRHH_Y_SUELDOS.md) | 6 |
 | Sueldos | `payrolls` (6b: la liquidación de un mes, documento `LIQ`, con su fecha de pago y la copia de los porcentajes de la empresa; 6c: el día y la caja o el banco del pago de los sueldos y del de las cargas sociales) y `payroll_lines` (el recibo de cada empleado: la copia del básico, la antigüedad, si es del taller y su centro; las novedades y cada concepto calculado); los conceptos son fijos (básico, antigüedad, presentismo, horas extra, tres aportes y las contribuciones) y sus porcentajes están en `companies.settings.payroll` | 6 |
-| Impuestos | `tax_types`, `tax_rates`, `tax_obligations`, `tax_calendar`, `withholdings`, `perceptions` | 7 |
+| Impuestos | `tax_returns` (7a: la declaración mensual de un impuesto, documento `DJ`: el mes, su vencimiento, lo calculado de los libros, el saldo a favor anterior y el que queda, y el pago); los libros IVA no se guardan: salen de los asientos de las facturas de cada mes (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md) | 7 |
 | Logística | `carriers`, `vehicles`, `routes`, `shipments`, `shipment_items` | 7 |
 | Escenarios | `scenarios`, `scenario_runs`, `assignments` (consignas), `assignment_submissions` | 8 |
 | Tutor IA | `tutor_sessions`, `tutor_messages` | 9 |
