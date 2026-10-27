@@ -298,6 +298,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
       { line_id: B.payrollLine, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 0 },
     ]),
     p_document_ids: `{${B.productionOrder}}`,
+    p_period: '2027-05',
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {

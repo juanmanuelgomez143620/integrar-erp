@@ -21,6 +21,7 @@ import {
   FilePen,
   FileSearch,
   GraduationCap,
+  Hammer,
   HandCoins,
   Handshake,
   History,
@@ -207,6 +208,8 @@ export const NAV: NavGroup[] = [
         icon: Workflow,
         permission: 'posting_rule.read',
       },
+      // Lo ven quienes ven las liquidaciones (docs/FASE_6_RRHH_Y_SUELDOS.md §4).
+      { label: 'Mano de obra del taller', path: 'contabilidad/mano-de-obra', icon: Hammer, permission: 'payroll.read' },
     ],
   },
   {

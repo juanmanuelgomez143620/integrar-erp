@@ -1,0 +1,12 @@
+-- 57. Las empresas creadas antes de la Fase 6c reciben las reglas de los asientos del pago
+-- de los sueldos y de las cargas sociales (UPGRADES[15] de src/lib/mock/db.ts). Idempotente.
+
+do $$
+declare
+  v_company uuid;
+begin
+  for v_company in select c.id from public.companies c order by c.created_at, c.id loop
+    perform private.insert_base_posting_rules(v_company);
+  end loop;
+end;
+$$;

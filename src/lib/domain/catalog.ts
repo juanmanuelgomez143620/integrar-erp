@@ -211,7 +211,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
-    'payroll.read',
+    // Paga los sueldos y las cargas sociales (Fase 6c; SoD-6: no los que liquidó).
+    'payroll.read', 'payroll.pay',
   ],
   // Legajos y categorías del personal (Fase 6a).
   RRHH: [
@@ -468,7 +469,9 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
   },
   PAYROLL: {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'RRHH carga las novedades del mes de cada empleado.' },
-    CONFIRMADA: { label: 'Confirmada', badge: 'info', final: false, description: 'Los recibos están calculados y el asiento de sueldos, registrado: falta pagarla.' },
+    CONFIRMADA: { label: 'Confirmada', badge: 'info', final: false, description: 'Los recibos están calculados y el asiento de sueldos, registrado: Tesorería tiene que pagar los sueldos.' },
+    SUELDOS_PAGADOS: { label: 'Sueldos pagados', badge: 'warning', final: false, description: 'Tesorería pagó los netos a los empleados: faltan las cargas sociales (los aportes retenidos y las contribuciones).' },
+    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagaron los sueldos y las cargas sociales: el ciclo de la liquidación terminó.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba confirmada, un contraasiento revirtió el de sueldos.' },
   },
   PRODUCTION_ORDER: {
@@ -648,7 +651,9 @@ export const TRANSITIONS: TransitionInfo[] = [
   // Liquidación de sueldos
   t('PAYROLL', 'BORRADOR', 'CONFIRM', 'CONFIRMADA', 'payroll.create', 'Confirmar', 'Quedan los recibos y se registra el asiento de sueldos.'),
   t('PAYROLL', 'BORRADOR', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'La liquidación queda sin efecto.', true, 'destructive'),
+  t('PAYROLL', 'CONFIRMADA', 'PAY', 'SUELDOS_PAGADOS', 'payroll.pay', 'Pagar los sueldos', 'Paga los netos de todos los empleados desde una caja o un banco: genera el asiento de pago.'),
   t('PAYROLL', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'Un contraasiento revierte el de sueldos.', true, 'destructive'),
+  t('PAYROLL', 'SUELDOS_PAGADOS', 'PAY', 'PAGADA', 'payroll.pay', 'Pagar las cargas sociales', 'Paga los aportes retenidos y las contribuciones del mes (simulado): genera el asiento de pago.'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -726,6 +731,8 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'PRODUCTION_ORDER', status: 'BORRADOR', taskType: 'LIBERAR_OPR', assignee: 'CREATOR', title: 'Liberar {number}', description: 'Revisar el producto, la cantidad y los materiales, y liberar la orden para reservarlos.' },
   { docType: 'PRODUCTION_ORDER', status: 'LIBERADA', taskType: 'ENTREGAR_MATERIALES', assignee: 'ROLE', role: 'DEPOSITO', title: 'Entregar los materiales de {number}', description: 'Preparar los materiales reservados, entregarlos a Producción y registrar lo que sale de cada uno.' },
   { docType: 'PAYROLL', status: 'BORRADOR', taskType: 'CONFIRMAR_LIQ', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar las novedades del mes de cada empleado y confirmar la liquidación.' },
+  { docType: 'PAYROLL', status: 'CONFIRMADA', taskType: 'PAGAR_SUELDOS', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar los sueldos de {number} por {total}', description: 'Transferir los netos a los empleados en la fecha de pago y registrar el pago.' },
+  { docType: 'PAYROLL', status: 'SUELDOS_PAGADOS', taskType: 'PAGAR_CARGAS_SOCIALES', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar las cargas sociales de {number}', description: 'Pagar los aportes retenidos y las contribuciones del mes antes del vencimiento, y registrar el pago.' },
   { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },
 ]
 
@@ -756,6 +763,9 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   LIBERAR_OPR: 'Liberar orden de producción',
   ENTREGAR_MATERIALES: 'Entregar materiales',
   TERMINAR_OPR: 'Terminar orden de producción',
+  CONFIRMAR_LIQ: 'Confirmar liquidación',
+  PAGAR_SUELDOS: 'Pagar sueldos',
+  PAGAR_CARGAS_SOCIALES: 'Pagar cargas sociales',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -916,6 +926,20 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       MANO_DE_OBRA_DIRECTA: 'Remuneraciones y contribuciones del personal del taller',
       SUELDOS_A_PAGAR: 'Netos a pagar',
       CARGAS_SOCIALES_A_PAGAR: 'Aportes retenidos y contribuciones a pagar',
+    },
+  },
+  PAGO_SUELDOS: {
+    label: 'Pago de sueldos (liquidación)',
+    keys: {
+      // La contrapartida es la caja o el banco elegido, no una regla.
+      SUELDOS_A_PAGAR: 'Netos que se pagan',
+    },
+  },
+  PAGO_CARGAS_SOCIALES: {
+    label: 'Pago de cargas sociales (liquidación)',
+    keys: {
+      // La contrapartida es la caja o el banco elegido, no una regla.
+      CARGAS_SOCIALES_A_PAGAR: 'Aportes retenidos y contribuciones que se pagan',
     },
   },
   CONVERSION_PRODUCCION: {

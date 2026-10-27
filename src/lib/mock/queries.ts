@@ -52,7 +52,10 @@ import {
   productionMaterialCost,
   productionOrderLines,
   productionOrderOperations,
+  chargesDue,
+  payrollCharges,
   payrollLines,
+  payrollLiquidators,
   periodLabel,
   productionNeeds,
   productionShortages,
@@ -650,6 +653,15 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       reason =
         'Separación de funciones: registraste una de las facturas; tiene que pagarla otro integrante de Tesorería.'
     }
+    if (
+      doc.doc_type === 'PAYROLL' &&
+      tr.action === 'PAY' &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      payrollLiquidators(db, doc).includes(userId)
+    ) {
+      reason = 'Separación de funciones: liquidaste estos sueldos; tiene que pagarlos otro integrante de Tesorería.'
+    }
     if (doc.doc_type === 'RFQ' && tr.action === 'AWARD' && !quotesOf(db, doc.id).some((q) => quoteIsValid(db, q))) {
       reason = 'Todavía no hay cotizaciones vigentes para adjudicar.'
     }
@@ -1049,6 +1061,11 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       return {
         who: 'Tesorería',
         text: `Pagar los sueldos el ${date(doc.py?.payment_date)}: ${money(doc.total)} netos. Los aportes retenidos y las contribuciones quedan en Cargas sociales a pagar hasta que se depositen.`,
+      }
+    case 'PAYROLL:SUELDOS_PAGADOS':
+      return {
+        who: 'Tesorería',
+        text: `Pagar las cargas sociales antes del ${date(chargesDue(doc.py!.period))}: ${money(payrollCharges(db, doc.id))} entre los aportes retenidos a los empleados y las contribuciones de la empresa.`,
       }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
@@ -1785,12 +1802,25 @@ export interface PayrollView {
   cost: number
   /** La parte del taller: la mano de obra directa real. */
   direct_labor: number
+  /** Lo que se paga a la seguridad social: los aportes retenidos más las contribuciones. */
+  charges: number
+  /** Su vencimiento: el día 10 del mes siguiente al liquidado. */
+  charges_due: string
+  /** Los pagos de Tesorería (Fase 6c): el día y desde qué caja o banco. */
+  salaries_paid_on: string | null
+  salaries_account: { id: string; code: string; name: string } | null
+  charges_paid_on: string | null
+  charges_account: { id: string; code: string; name: string } | null
   lines: PayrollLineView[]
 }
 
 function payrollView(db: DB, doc: T.Document): PayrollView {
   const lines = payrollLines(db, doc.id)
   const sum = (value: (l: T.PayrollLine) => number, rows = lines) => round2(rows.reduce((s, l) => s + value(l), 0))
+  const account = (id: string | null) => {
+    const a = id ? db.accounts.find((x) => x.id === id) : undefined
+    return a ? { id: a.id, code: a.code, name: a.name } : null
+  }
   return {
     period: doc.py!.period,
     payment_date: doc.py!.payment_date,
@@ -1805,6 +1835,12 @@ function payrollView(db: DB, doc: T.Document): PayrollView {
       (l) => l.gross + l.employer,
       lines.filter((l) => l.is_direct_labor),
     ),
+    charges: sum((l) => l.deductions + l.employer),
+    charges_due: chargesDue(doc.py!.period),
+    salaries_paid_on: doc.py!.salaries_paid_on,
+    salaries_account: account(doc.py!.salaries_account_id),
+    charges_paid_on: doc.py!.charges_paid_on,
+    charges_account: account(doc.py!.charges_account_id),
     lines: lines.map((l) => {
       const e = db.employees.find((x) => x.id === l.employee_id)!
       const c = db.jobCategories.find((x) => x.id === l.category_id)!
@@ -3203,7 +3239,7 @@ export function paymentCandidates(db: DB, userId: string, companyId: string, sup
 
 // ============================================================ Flujo de fondos (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
 
-export type CashConceptKey = 'APERTURA' | 'COBROS' | 'PAGOS' | 'TRANSFERENCIAS' | 'OTROS'
+export type CashConceptKey = 'APERTURA' | 'COBROS' | 'PAGOS' | 'SUELDOS' | 'TRANSFERENCIAS' | 'OTROS'
 
 export interface CashFlowConcept {
   key: CashConceptKey
@@ -3235,6 +3271,7 @@ const CASH_CONCEPTS: [CashConceptKey, string][] = [
   ['APERTURA', 'Saldos de apertura'],
   ['COBROS', 'Cobros a clientes'],
   ['PAGOS', 'Pagos a proveedores'],
+  ['SUELDOS', 'Sueldos y cargas sociales'],
   ['TRANSFERENCIAS', 'Movimientos entre cajas y bancos'],
   ['OTROS', 'Otros asientos de Contabilidad'],
 ]
@@ -3256,6 +3293,7 @@ function cashConcept(db: DB, entry: T.Document): CashConceptKey {
     .find((d) => d && d.doc_type !== 'JOURNAL_ENTRY')
   if (source?.doc_type === 'CUSTOMER_RECEIPT') return 'COBROS'
   if (source?.doc_type === 'PAYMENT_ORDER') return 'PAGOS'
+  if (source?.doc_type === 'PAYROLL') return 'SUELDOS'
   if (source?.doc_type === 'FUNDS_TRANSFER') return 'TRANSFERENCIAS'
   return base.je?.origin === 'APERTURA' ? 'APERTURA' : 'OTROS'
 }
@@ -3321,6 +3359,9 @@ export interface CashProjectionBucket {
   /** Lo que falta pagar de las facturas de proveedores que vencen en el tramo. */
   payments: number
   invoices: number
+  /** Los sueldos sin pagar (en su fecha de pago) y las cargas sociales sin pagar (en su vencimiento). */
+  payroll: number
+  payroll_items: number
   /** Saldo de cajas y bancos que quedaría después de cobrar y pagar hasta este tramo. */
   balance: number
 }
@@ -3347,8 +3388,8 @@ const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - D
 
 /**
  * Flujo de fondos proyectado: desde el saldo de hoy, lo que falta cobrar de las
- * facturas de venta y pagar de las de proveedores, por vencimiento, y el saldo
- * que quedaría tras cada tramo.
+ * facturas de venta y pagar de las de proveedores y de los sueldos y las cargas
+ * sociales, por vencimiento, y el saldo que quedaría tras cada tramo.
  */
 export function cashProjection(db: DB, userId: string, companyId: string): CashProjection {
   assertPerm(db, userId, companyId, 'treasury.read')
@@ -3365,6 +3406,15 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
   const receivable = registeredSalesInvoices(db, companyId)
     .map((d) => receivableInvoice(db, d, today))
     .filter((i) => i.pending > 0)
+  const payrolls = db.documents.filter((d) => d.company_id === companyId && d.doc_type === 'PAYROLL')
+  const salaries = [
+    ...payrolls
+      .filter((d) => d.status === 'CONFIRMADA')
+      .map((d) => ({ due_date: d.py!.payment_date, amount: d.total })),
+    ...payrolls
+      .filter((d) => d.status === 'CONFIRMADA' || d.status === 'SUELDOS_PAGADOS')
+      .map((d) => ({ due_date: chargesDue(d.py!.period), amount: payrollCharges(db, d.id) })),
+  ].filter((p) => p.amount > 0)
   let running = balance
   const buckets = CASH_BUCKETS.map(([key, label, upTo], i) => {
     const after = i === 0 ? -Infinity : CASH_BUCKETS[i - 1][2]
@@ -3377,7 +3427,9 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
     const toCollect = within(receivable)
     const payments = round2(inBucket.reduce((sum, inv) => sum + inv.pending, 0))
     const collections = round2(toCollect.reduce((sum, inv) => sum + inv.pending, 0))
-    running = round2(running + collections - payments)
+    const toPay = within(salaries)
+    const payroll = round2(toPay.reduce((sum, p) => sum + p.amount, 0))
+    running = round2(running + collections - payments - payroll)
     return {
       key,
       label,
@@ -3385,6 +3437,8 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
       receivables: toCollect.length,
       payments,
       invoices: inBucket.length,
+      payroll,
+      payroll_items: toPay.length,
       balance: running,
     }
   })
@@ -4098,6 +4152,97 @@ export function productionCosts(
         unit_cost: doc.pd!.unit_cost ?? 0,
       }
     })
+}
+
+/** La mano de obra de un centro de trabajo en un mes (docs/FASE_6_RRHH_Y_SUELDOS.md §4). */
+export interface LaborVarianceRow {
+  /** Con su tarifa de hoy (null: personal del taller sin centro). */
+  work_center: { id: string; code: string; name: string; labor_rate: number } | null
+  /** Las horas reales de las órdenes terminadas en el mes. */
+  hours: number
+  /** Lo aplicado a esas órdenes: las horas por la tarifa que copió cada una. */
+  applied: number
+  /** Lo real: el remunerativo más las contribuciones del personal del centro en la liquidación del mes. */
+  real: number
+  employees: number
+  /** Aplicada menos real: si es positiva, sobreaplicada; si es negativa, subaplicada. */
+  difference: number
+}
+
+export interface LaborVariance {
+  period: string
+  /** La liquidación del mes que no está anulada: en borrador, todavía no cuenta como real. */
+  payroll: { id: string; display_number: string; path: string; status_info: StatusInfo } | null
+  /** Las órdenes terminadas en el mes (el día de su ingreso al stock). */
+  orders: { id: string; display_number: string; path: string }[]
+  rows: LaborVarianceRow[]
+  hours: number
+  applied: number
+  real: number
+  difference: number
+}
+
+/** La mano de obra del taller de un mes, por centro: la aplicada a las órdenes contra la real de los sueldos. */
+export function laborVariance(db: DB, userId: string, companyId: string, period: string): LaborVariance {
+  assertPerm(db, userId, companyId, 'payroll.read')
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) fail('DATO_INVALIDO', 'El período es un mes: aaaa-mm.')
+  const payroll = db.documents.find(
+    (d) => d.company_id === companyId && d.doc_type === 'PAYROLL' && d.status !== 'ANULADA' && d.py!.period === period,
+  )
+  const lines =
+    payroll && payroll.status !== 'BORRADOR' ? payrollLines(db, payroll.id).filter((l) => l.is_direct_labor) : []
+  const finishedOn = (docId: string) =>
+    db.stockMovements.find((m) => m.document_id === docId && m.movement_type === 'INGRESO_PRODUCCION')?.movement_date ??
+    ''
+  const orders = db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PRODUCTION_ORDER' &&
+        d.status === 'TERMINADA' &&
+        finishedOn(d.id).slice(0, 7) === period,
+    )
+    .sort((a, b) => a.number - b.number)
+  const operations = orders.flatMap((o) => productionOrderOperations(db, o.id))
+  const hoursOf = (o: T.ProductionOrderOperation) => o.hours_actual ?? o.hours_planned
+  const centers = new Set([...lines.map((l) => l.work_center_id), ...operations.map((o) => o.work_center_id)])
+  const rows = [...centers]
+    .map((id) => {
+      const w = id ? db.workCenters.find((x) => x.id === id) : undefined
+      const ops = operations.filter((o) => o.work_center_id === id)
+      const staff = lines.filter((l) => l.work_center_id === id)
+      const applied = round2(ops.reduce((s, o) => s + round2(hoursOf(o) * o.labor_rate), 0))
+      const real = round2(staff.reduce((s, l) => s + l.gross + l.employer, 0))
+      return {
+        work_center: w ? { id: w.id, code: w.code, name: w.name, labor_rate: w.labor_rate } : null,
+        hours: round3(ops.reduce((s, o) => s + hoursOf(o), 0)),
+        applied,
+        real,
+        employees: staff.length,
+        difference: round2(applied - real),
+      }
+    })
+    .sort((a, b) => (!a.work_center ? 1 : !b.work_center ? -1 : a.work_center.code < b.work_center.code ? -1 : 1))
+  const total = (value: (r: LaborVarianceRow) => number) => rows.reduce((s, r) => s + value(r), 0)
+  const applied = round2(total((r) => r.applied))
+  const real = round2(total((r) => r.real))
+  return {
+    period,
+    payroll: payroll
+      ? {
+          id: payroll.id,
+          display_number: payroll.display_number,
+          path: docPath(db, payroll),
+          status_info: DOC_STATUSES.PAYROLL[payroll.status],
+        }
+      : null,
+    orders: orders.map((o) => ({ id: o.id, display_number: o.display_number, path: docPath(db, o) })),
+    rows,
+    hours: round3(total((r) => r.hours)),
+    applied,
+    real,
+    difference: round2(applied - real),
+  }
 }
 
 export interface ProductionNeedRow {

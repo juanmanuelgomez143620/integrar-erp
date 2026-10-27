@@ -1,22 +1,31 @@
-// Pruebas de la liquidación de sueldos (docs/FASE_6_RRHH_Y_SUELDOS.md §3) sobre buildSeed() y los cmd*.
+// Pruebas de la liquidación de sueldos y de sus pagos (docs/FASE_6_RRHH_Y_SUELDOS.md §3 y §4) sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PAYROLL_DEFAULT_RATES } from '../domain/catalog'
+import { money } from '../format'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
+  cmdAssignRole,
   cmdCancelPayroll,
   cmdConfirmPayroll,
   cmdCreatePayroll,
+  cmdFinishProductionOrder,
+  cmdIssueProductionOrder,
+  cmdPayPayrollCharges,
+  cmdPayPayrollSalaries,
   cmdSaveEmployee,
   cmdUpdateCompanySettings,
   cmdUpdatePayrollLines,
   payrollAmounts,
   payrollLines,
+  productionOrderLines,
+  productionOrderOperations,
+  round2,
   type Ctx,
   type PayrollInput,
 } from './engine'
-import { documentDetail, listDocuments } from './queries'
+import { cashFlow, cashProjection, documentDetail, laborVariance, listDocuments } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -261,5 +270,199 @@ describe('liquidación de sueldos', () => {
     expect(upgraded.version).toBe(DB_VERSION)
     expect(upgraded.accounts.some((a) => a.company_id === company && a.code === '5.1.03.01')).toBe(true)
     expect(upgraded.postingRules.filter((r) => r.company_id === company && r.event === 'SUELDOS')).toHaveLength(5)
+  })
+})
+
+describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
+  const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
+  const bank = () => account('1.1.01.03')
+  const pending = (docId: string) =>
+    db.tasks.filter((t) => t.document_id === docId && t.status === 'PENDIENTE').map((t) => t.title)
+  const charges = (docId: string) => round2(payrollLines(db, docId).reduce((s, l) => s + l.deductions + l.employer, 0))
+
+  /** Una liquidación de mayo confirmada con dos empleados (los demás, sin días): alcanza el banco de la demo. */
+  function confirmed(username = 'rrhh') {
+    const { id } = cmdCreatePayroll(ctx(username), companyId(), input())
+    cmdUpdatePayrollLines(
+      ctx(username),
+      id,
+      payrollLines(db, id)
+        .slice(2)
+        .map((l) => ({ line_id: l.id, days_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 })),
+    )
+    cmdConfirmPayroll(ctx(username), id)
+    return id
+  }
+
+  it('Tesorería paga los sueldos y después las cargas sociales, cada pago con su asiento', () => {
+    const id = confirmed()
+    const doc = byNumber('LIQ-00001')
+    expect(pending(id)).toEqual([`Pagar los sueldos de LIQ-00001 por ${money(doc.total)}`])
+    const pay = (fn: typeof cmdPayPayrollSalaries, username: string, accountId: string, code: string) =>
+      expectBusinessError(() => fn(ctx(username), id, accountId), code)
+    expect(pay(cmdPayPayrollCharges, 'tesoreria', bank(), 'TRANSICION_INVALIDA')).toBe(
+      'Primero se pagan los sueldos de LIQ-00001; después, sus cargas sociales.',
+    )
+    pay(cmdPayPayrollSalaries, 'rrhh', bank(), 'SIN_PERMISO')
+    pay(cmdPayPayrollSalaries, 'tesoreria', account('2.1.03.01'), 'DATO_INVALIDO')
+    expect(pay(cmdPayPayrollSalaries, 'tesoreria', account('1.1.01.01'), 'SALDO_INSUFICIENTE')).toMatch(
+      /^No alcanza el saldo de 1\.1\.01\.01 Caja: hay \$\s[\d.,]+ y los sueldos netos de 05\/2027 son \$\s[\d.,]+\.$/,
+    )
+
+    cmdPayPayrollSalaries(ctx('tesoreria'), id, bank())
+    expect(doc).toMatchObject({
+      status: 'SUELDOS_PAGADOS',
+      py: { salaries_paid_on: '2027-05-14', salaries_account_id: bank(), charges_paid_on: null },
+    })
+    expect(db.audit.find((a) => a.document_id === id && a.action === 'PAY')!.summary).toBe(
+      `Pagó los sueldos de 05/2027 (LIQ-00001): ${money(doc.total)} netos desde 1.1.01.03 Banco cuenta corriente`,
+    )
+    expect(pay(cmdPayPayrollSalaries, 'tesoreria', bank(), 'TRANSICION_INVALIDA')).toBe(
+      'Los sueldos de LIQ-00001 ya están pagados: faltan las cargas sociales.',
+    )
+    expect(pending(id)).toEqual(['Pagar las cargas sociales de LIQ-00001'])
+    // Con algo pagado ya no se anula.
+    expectBusinessError(() => cmdCancelPayroll(ctx('rrhh'), id, 'Error de cálculo'), 'TRANSICION_INVALIDA')
+
+    cmdPayPayrollCharges(ctx('tesoreria'), id, bank())
+    expect(doc).toMatchObject({ status: 'PAGADA', py: { charges_paid_on: '2027-05-14', charges_account_id: bank() } })
+    expect(pending(id)).toEqual([])
+    // El de sueldos y, después, los dos pagos: cada deuda contra el banco.
+    expect(entriesOf(id).slice(1)).toEqual([
+      [`2.1.03.01 ${doc.total} 0`, `1.1.01.03 0 ${doc.total}`],
+      [`2.1.03.02 ${charges(id)} 0`, `1.1.01.03 0 ${charges(id)}`],
+    ])
+    expect(documentDetail(db, userId('tesoreria'), companyId(), 'PAYROLL', 'LIQ-00001')!.payroll).toMatchObject({
+      charges: charges(id),
+      charges_due: '2027-06-10',
+      salaries_paid_on: '2027-05-14',
+      salaries_account: { code: '1.1.01.03' },
+      charges_account: { code: '1.1.01.03' },
+    })
+  })
+
+  it('SoD-6: quien liquidó los sueldos no los paga (salvo que el docente apague la regla)', () => {
+    cmdAssignRole(
+      ctx('docente'),
+      companyId(),
+      userId('rrhh'),
+      'TESORERIA',
+      db.sectors.find((s) => s.code === 'TES')!.id,
+    )
+    const id = confirmed('rrhh')
+    const payAction = (username: string) =>
+      documentDetail(db, userId(username), companyId(), 'PAYROLL', 'LIQ-00001')!.actions.find((a) => a.action === 'PAY')
+    expect(payAction('rrhh')).toMatchObject({
+      label: 'Pagar los sueldos',
+      enabled: false,
+      reason: 'Separación de funciones: liquidaste estos sueldos; tiene que pagarlos otro integrante de Tesorería.',
+    })
+    expect(payAction('tesoreria')).toMatchObject({ label: 'Pagar los sueldos', enabled: true })
+    expect(expectBusinessError(() => cmdPayPayrollSalaries(ctx('rrhh'), id, bank()), 'SEPARACION_FUNCIONES')).toBe(
+      'No podés pagar LIQ-00001: la liquidaste vos.',
+    )
+    cmdPayPayrollSalaries(ctx('tesoreria'), id, bank())
+    expect(payAction('tesoreria')).toMatchObject({ label: 'Pagar las cargas sociales', enabled: true })
+    expectBusinessError(() => cmdPayPayrollCharges(ctx('rrhh'), id, bank()), 'SEPARACION_FUNCIONES')
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { sod_enabled: false })
+    cmdPayPayrollCharges(ctx('rrhh'), id, bank())
+    expect(byNumber('LIQ-00001').status).toBe('PAGADA')
+  })
+
+  it('el flujo de fondos: lo que falta pagar en el proyectado y lo pagado como concepto propio en el real', () => {
+    const id = confirmed()
+    const doc = byNumber('LIQ-00001')
+    // Hoy es el 14/05: los sueldos se pagan el 04/06 (a 21 días) y las cargas vencen el 10/06 (a 27 días).
+    const month = () => cashProjection(db, userId('tesoreria'), companyId()).buckets.find((b) => b.key === 'MES')!
+    expect(month()).toMatchObject({ payroll: round2(doc.total + charges(id)), payroll_items: 2 })
+    cmdPayPayrollSalaries(ctx('tesoreria'), id, bank())
+    expect(month()).toMatchObject({ payroll: charges(id), payroll_items: 1 })
+    cmdPayPayrollCharges(ctx('tesoreria'), id, bank())
+    expect(month()).toMatchObject({ payroll: 0, payroll_items: 0 })
+    const flow = cashFlow(db, userId('tesoreria'), companyId(), '2027-05-01', '2027-05-31')
+    expect(flow.concepts.map((c) => c.key)).toEqual([
+      'APERTURA',
+      'COBROS',
+      'PAGOS',
+      'SUELDOS',
+      'TRANSFERENCIAS',
+      'OTROS',
+    ])
+    expect(flow.concepts.find((c) => c.key === 'SUELDOS')).toEqual({
+      key: 'SUELDOS',
+      label: 'Sueldos y cargas sociales',
+      inflow: 0,
+      outflow: round2(doc.total + charges(id)),
+    })
+  })
+
+  it('la mano de obra del taller: la aplicada a las órdenes terminadas en el mes contra la real de la liquidación', () => {
+    const chairs = byNumber('OPR-00001')
+    cmdIssueProductionOrder(ctx('deposito'), chairs.id, {
+      lines: productionOrderLines(db, chairs.id).map((l) => ({ line_id: l.id, quantity: l.quantity_planned })),
+    })
+    cmdFinishProductionOrder(ctx('produccion'), chairs.id, 10)
+    const report = () => laborVariance(db, userId('contabilidad'), companyId(), '2027-05')
+    const applied = round2(
+      productionOrderOperations(db, chairs.id).reduce((s, o) => s + round2(o.hours_actual! * o.labor_rate), 0),
+    )
+    expect(applied).toBeGreaterThan(0)
+    // Sin liquidación, todo lo aplicado queda sin su real.
+    expect(report()).toMatchObject({ payroll: null, applied, real: 0, difference: applied })
+    expect(report().orders.map((o) => o.display_number)).toEqual(['OPR-00001'])
+    // En borrador todavía no cuenta como real.
+    const { id } = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
+    expect(report()).toMatchObject({
+      payroll: { display_number: 'LIQ-00001', status_info: { label: 'Borrador' } },
+      real: 0,
+    })
+    cmdConfirmPayroll(ctx('rrhh'), id)
+    const view = report()
+    expect(view.rows.map((r) => `${r.work_center?.code} ${r.employees}`)).toEqual([
+      'ARMADO 2',
+      'CORTE 2',
+      'TERMINACION 2',
+    ])
+    const direct = payrollLines(db, id).filter((l) => l.is_direct_labor)
+    const corte = view.rows.find((r) => r.work_center?.code === 'CORTE')!
+    expect(corte.real).toBe(
+      round2(
+        direct.filter((l) => l.work_center_id === corte.work_center!.id).reduce((s, l) => s + l.gross + l.employer, 0),
+      ),
+    )
+    expect(view.real).toBe(
+      documentDetail(db, userId('rrhh'), companyId(), 'PAYROLL', 'LIQ-00001')!.payroll!.direct_labor,
+    )
+    expect(view).toMatchObject({ applied, difference: round2(applied - view.real) })
+    // Lo ven quienes ven las liquidaciones; el mes, bien escrito.
+    expect(() => laborVariance(db, userId('produccion'), companyId(), '2027-05')).toThrow('Tu rol no tiene acceso')
+    expectBusinessError(() => laborVariance(db, userId('contabilidad'), companyId(), '2027-5'), 'DATO_INVALIDO')
+  })
+
+  it('al actualizar una base guardada (v15), cada empresa recibe las reglas de los pagos', () => {
+    cmdCreatePayroll(ctx('rrhh'), companyId(), input())
+    const stored = structuredClone(db)
+    const company = stored.companies[0].id
+    stored.postingRules = stored.postingRules.filter((r) => !r.event.startsWith('PAGO_'))
+    for (const d of stored.documents)
+      if (d.py) {
+        const {
+          salaries_paid_on: _a,
+          salaries_account_id: _b,
+          charges_paid_on: _c,
+          charges_account_id: _d,
+          ...v15
+        } = d.py
+        d.py = v15 as typeof d.py
+      }
+    const upgraded = upgradeDatabase({ ...stored, version: 15 })!
+    expect(upgraded.version).toBe(DB_VERSION)
+    expect(
+      upgraded.postingRules
+        .filter((r) => r.company_id === company && (r.event === 'PAGO_SUELDOS' || r.event === 'PAGO_CARGAS_SOCIALES'))
+        .map((r) => r.key)
+        .sort(),
+    ).toEqual(['CARGAS_SOCIALES_A_PAGAR', 'SUELDOS_A_PAGAR'])
+    expect(upgraded.documents.find((d) => d.py)!.py).toMatchObject({ salaries_paid_on: null, charges_account_id: null })
   })
 })

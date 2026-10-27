@@ -274,6 +274,17 @@ describe('personal', () => {
       await same(u, () => Q.listEmployees(mock, userId(u), company), 'employees_list', [companyPg])
     }
   })
+
+  it('la mano de obra del taller por mes: con la liquidación confirmada, en borrador, sin ella y un mes mal escrito', async () => {
+    const month = (offset: number) => {
+      const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+      d.setUTCMonth(d.getUTCMonth() + offset)
+      return d.toISOString().slice(0, 7)
+    }
+    for (const u of [...USERS, 'rrhh'])
+      for (const period of [month(-1), month(0), month(-2), '2026-1'])
+        await same(u, () => Q.laborVariance(mock, userId(u), company, period), 'labor_variance', [companyPg, period])
+  })
 })
 
 describe('cuentas corrientes de proveedores e imputación automática', () => {

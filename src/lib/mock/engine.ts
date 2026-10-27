@@ -6566,7 +6566,16 @@ export function cmdCreatePayroll(ctx: Ctx, companyId: string, input: PayrollInpu
   const rates = payrollRates(company)
   const doc = newDocument(ctx, companyId, 'PAYROLL', actor, {
     notes,
-    py: { period: input.period, payment_date: input.payment_date, rates, confirmed_at: null },
+    py: {
+      period: input.period,
+      payment_date: input.payment_date,
+      rates,
+      confirmed_at: null,
+      salaries_paid_on: null,
+      salaries_account_id: null,
+      charges_paid_on: null,
+      charges_account_id: null,
+    },
   })
   staff.forEach((e, i) => {
     const category = db.jobCategories.find((c) => c.id === e.category_id)!
@@ -6714,6 +6723,85 @@ export function cmdCancelPayroll(ctx: Ctx, docId: string, reason: string) {
     summary: `Anuló ${doc.display_number}${reversal ? `: el contraasiento ${reversal.display_number} revirtió el de sueldos` : ''} — ${comment}`,
   })
 }
+
+/** El vencimiento de las cargas sociales de un mes (aaaa-mm): el día 10 del mes siguiente (a validar). */
+export function chargesDue(period: string) {
+  const [y, m] = period.split('-').map(Number)
+  return m === 12 ? `${y + 1}-01-10` : `${y}-${String(m + 1).padStart(2, '0')}-10`
+}
+
+/** Las cargas sociales de una liquidación: los aportes retenidos más las contribuciones. */
+export const payrollCharges = (db: DB, docId: string) =>
+  round2(payrollLines(db, docId).reduce((s, l) => s + l.deductions + l.employer, 0))
+
+/** Quienes liquidaron los sueldos (SoD-6): quien preparó la liquidación y quien la confirmó. */
+export function payrollLiquidators(db: DB, doc: T.Document) {
+  const confirmer = db.audit.find((e) => e.document_id === doc.id && e.action === 'CONFIRM')?.actor_user_id
+  return [doc.created_by, confirmer].filter((id): id is string => !!id)
+}
+
+/**
+ * Tesorería paga desde una caja o un banco con saldo: primero los sueldos (los
+ * netos de todos los empleados) y después las cargas sociales (los aportes
+ * retenidos y las contribuciones). SoD-6: quien liquidó los sueldos no los paga.
+ */
+function payPayroll(ctx: Ctx, docId: string, accountId: string, salaries: boolean) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'PAYROLL')
+  requireTransition(doc, 'PAY')
+  const actor = requirePermission(ctx, doc.company_id, 'payroll.pay')
+  if (salaries && doc.status !== 'CONFIRMADA')
+    fail('TRANSICION_INVALIDA', `Los sueldos de ${doc.display_number} ya están pagados: faltan las cargas sociales.`)
+  if (!salaries && doc.status !== 'SUELDOS_PAGADOS')
+    fail('TRANSICION_INVALIDA', `Primero se pagan los sueldos de ${doc.display_number}; después, sus cargas sociales.`)
+  const company = getCompany(db, doc.company_id)
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  if (company.settings.sod_enabled && !eff.supervisor && payrollLiquidators(db, doc).includes(ctx.userId!))
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés pagar ${doc.display_number}: la liquidaste vos.`,
+      'Separación de funciones: quien liquida los sueldos no los paga. Tiene que pagarlos otro integrante de Tesorería.',
+    )
+  const account = treasuryAccount(db, doc.company_id, accountId)
+  const amount = salaries ? doc.total : payrollCharges(db, doc.id)
+  const balance = accountBalance(db, account.id)
+  const period = periodLabel(doc.py!.period)
+  if (amount > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y ${salaries ? 'los sueldos netos' : 'las cargas sociales'} de ${period} son ${money(amount)}.`,
+      'Antes de pagar hay que controlar que haya fondos: el flujo de fondos proyectado lo anticipa.',
+    )
+  transition(ctx, doc, 'PAY', {
+    actor,
+    summary: `Pagó ${salaries ? 'los sueldos' : 'las cargas sociales'} de ${period} (${doc.display_number}): ${money(amount)}${salaries ? ' netos' : ''} desde ${accountLabel(account)}`,
+  })
+  const today = businessDate(company)
+  doc.py = salaries
+    ? { ...doc.py!, salaries_paid_on: today, salaries_account_id: account.id }
+    : { ...doc.py!, charges_paid_on: today, charges_account_id: account.id }
+  const count = payrollLines(db, doc.id).length
+  if (amount > 0)
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      salaries ? 'PAGO_SUELDOS' : 'PAGO_CARGAS_SOCIALES',
+      salaries
+        ? `Pago de los sueldos de ${period} (${doc.display_number}): ${count} empleado${count > 1 ? 's' : ''}.`
+        : `Pago de las cargas sociales de ${period} (${doc.display_number}): aportes retenidos y contribuciones.`,
+      [
+        { key: salaries ? 'SUELDOS_A_PAGAR' : 'CARGAS_SOCIALES_A_PAGAR', debit: amount, credit: 0 },
+        { account_id: account.id, debit: 0, credit: amount },
+      ],
+    )
+}
+
+export const cmdPayPayrollSalaries = (ctx: Ctx, docId: string, accountId: string) =>
+  payPayroll(ctx, docId, accountId, true)
+
+export const cmdPayPayrollCharges = (ctx: Ctx, docId: string, accountId: string) =>
+  payPayroll(ctx, docId, accountId, false)
 
 // ============================================================ Tareas y notificaciones
 

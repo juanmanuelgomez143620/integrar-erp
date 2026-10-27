@@ -46,6 +46,7 @@ import { AwardDialog, ComparisonSection } from '@/features/purchasing/quotations
 import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
 import { PayrollSection, periodLabel } from '@/features/hr/payroll'
+import { PayrollPayDialog } from '@/features/hr/payroll-pay-dialog'
 import {
   FinishDialog,
   IssueDialog,
@@ -549,7 +550,12 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
       </div>
 
       {awarding && <AwardDialog detail={detail} open={awarding} onOpenChange={setAwarding} />}
-      {paying && <PayDialog detail={detail} open={paying} onOpenChange={setPaying} />}
+      {paying &&
+        (detail.payroll ? (
+          <PayrollPayDialog detail={detail} open={paying} onOpenChange={setPaying} />
+        ) : (
+          <PayDialog detail={detail} open={paying} onOpenChange={setPaying} />
+        ))}
       {issuing && <IssueDialog detail={detail} open={issuing} onOpenChange={setIssuing} />}
       {finishing && <FinishDialog detail={detail} open={finishing} onOpenChange={setFinishing} />}
       {pending && (
@@ -958,8 +964,21 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Aportes retenidos">{money(py.deductions)}</InfoRow>
         <InfoRow label="Netos a pagar">
           <span className="font-semibold">{money(py.net)}</span>
+          <span className="text-xs text-muted-foreground">
+            {py.salaries_paid_on
+              ? ` · pagados el ${date(py.salaries_paid_on)} desde ${py.salaries_account?.name}`
+              : ' · sin pagar'}
+          </span>
         </InfoRow>
         <InfoRow label="Contribuciones de la empresa">{money(py.employer)}</InfoRow>
+        <InfoRow label="Cargas sociales">
+          {money(py.charges)}
+          <span className="text-xs text-muted-foreground">
+            {py.charges_paid_on
+              ? ` · pagadas el ${date(py.charges_paid_on)} desde ${py.charges_account?.name}`
+              : ` · aportes y contribuciones, vencen el ${date(py.charges_due)}`}
+          </span>
+        </InfoRow>
         <InfoRow label="Costo para la empresa">
           {money(py.cost)}
           <span className="text-xs text-muted-foreground">

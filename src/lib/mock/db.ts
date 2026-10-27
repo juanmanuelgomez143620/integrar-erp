@@ -85,7 +85,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 15
+export const DB_VERSION = 16
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -329,6 +329,21 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
       insertBasePostingRules(ctx, company.id)
     }
+  },
+  // v15 → v16: pago de sueldos y cargas sociales (Fase 6c): las reglas de sus asientos y,
+  // en las liquidaciones que ya había, los datos de los pagos (vacíos).
+  15: (db) => {
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+    for (const doc of db.documents)
+      if (doc.py)
+        doc.py = {
+          ...doc.py,
+          salaries_paid_on: doc.py.salaries_paid_on ?? null,
+          salaries_account_id: doc.py.salaries_account_id ?? null,
+          charges_paid_on: doc.py.charges_paid_on ?? null,
+          charges_account_id: doc.py.charges_account_id ?? null,
+        }
   },
 }
 

@@ -38,7 +38,7 @@ export function CashFlowPage() {
           { label: 'Flujo de fondos' },
         ]}
         title="Flujo de fondos"
-        description="Si alcanza el dinero para lo que hay que pagar, contando lo que falta cobrar, y de dónde vino y adónde fue en un período. Sale de los vencimientos de las facturas y del libro mayor de cajas y bancos: no se carga a mano."
+        description="Si alcanza el dinero para lo que hay que pagar, contando lo que falta cobrar, y de dónde vino y adónde fue en un período. Sale de los vencimientos de las facturas y de las liquidaciones de sueldos, y del libro mayor de cajas y bancos: no se carga a mano."
       />
       <div className="flex flex-col gap-4">
         {projection.data ? <Projection data={projection.data} /> : <Loading error={projection.error} />}
@@ -69,7 +69,7 @@ function Projection({ data }: { data: CashProjection }) {
   return (
     <Section
       title="Flujo proyectado"
-      description="Desde el saldo de hoy, lo que falta cobrar de las facturas de venta y pagar de las de proveedores, según su vencimiento. Lo vencido sin cobrar puede demorarse: es lo que muestra la antigüedad de saldos."
+      description="Desde el saldo de hoy, lo que falta cobrar de las facturas de venta y pagar de las de proveedores, de los sueldos (en su fecha de pago) y de las cargas sociales (en su vencimiento). Lo vencido sin cobrar puede demorarse: es lo que muestra la antigüedad de saldos."
       bodyClassName="p-0"
     >
       <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -80,9 +80,9 @@ function Projection({ data }: { data: CashProjection }) {
           hint="Facturas de venta registradas con saldo"
         />
         <KpiCard
-          label="Falta pagar a proveedores"
-          value={money(data.buckets.reduce((s, b) => s + b.payments, 0))}
-          hint="Facturas de proveedores registradas con saldo"
+          label="Falta pagar"
+          value={money(data.buckets.reduce((s, b) => s + b.payments + b.payroll, 0))}
+          hint={`A proveedores ${money(data.buckets.reduce((s, b) => s + b.payments, 0))}; sueldos y cargas sociales ${money(data.buckets.reduce((s, b) => s + b.payroll, 0))}`}
         />
         <KpiCard
           label="Saldo después de cobrar y pagar todo"
@@ -107,12 +107,14 @@ function Projection({ data }: { data: CashProjection }) {
               <TableHead className={head}>Vencimiento</TableHead>
               <TableHead className={cn(head, 'text-right')}>A cobrar</TableHead>
               <TableHead className={cn(head, 'text-right')}>A pagar</TableHead>
+              <TableHead className={cn(head, 'text-right')}>Sueldos y cargas sociales</TableHead>
               <TableHead className={cn(head, 'text-right')}>Saldo después</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableRow>
               <TableCell className="text-sm text-muted-foreground">Disponible hoy</TableCell>
+              <TableCell />
               <TableCell />
               <TableCell />
               <TableCell className="tabular text-right font-medium">{money(data.balance)}</TableCell>
@@ -122,7 +124,7 @@ function Projection({ data }: { data: CashProjection }) {
                 <TableCell
                   className={cn(
                     'text-sm',
-                    b.key === 'VENCIDAS' && (b.payments > 0 || b.collections > 0) && 'text-red-700',
+                    b.key === 'VENCIDAS' && (b.payments > 0 || b.collections > 0 || b.payroll > 0) && 'text-red-700',
                   )}
                 >
                   {b.label}
@@ -140,6 +142,14 @@ function Projection({ data }: { data: CashProjection }) {
                   {b.invoices > 0 && (
                     <div className="text-xs text-muted-foreground">
                       {b.invoices} {b.invoices === 1 ? 'factura' : 'facturas'}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="tabular text-right">
+                  {b.payroll ? money(b.payroll) : '—'}
+                  {b.payroll_items > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      {b.payroll_items} {b.payroll_items === 1 ? 'pago' : 'pagos'}
                     </div>
                   )}
                 </TableCell>

@@ -314,6 +314,12 @@ export interface PayrollHeader {
   /** Los porcentajes con que se calculó (los de la empresa al crearla). */
   rates: PayrollRates
   confirmed_at: string | null
+  /** El pago de los netos (Fase 6c): el día y la caja o el banco. */
+  salaries_paid_on: string | null
+  salaries_account_id: string | null
+  /** El de los aportes retenidos y las contribuciones. */
+  charges_paid_on: string | null
+  charges_account_id: string | null
 }
 
 /** Lo de un empleado en una liquidación: sus novedades y los importes calculados. */

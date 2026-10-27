@@ -49,6 +49,8 @@ export type {
   JournalBook,
   JournalBookEntry,
   JournalView,
+  LaborVariance,
+  LaborVarianceRow,
   Ledger,
   LedgerRow,
   MeContext,
@@ -247,6 +249,8 @@ const mockApi = {
     query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
   employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
+  /** La mano de obra del taller de un mes (aaaa-mm), por centro: la aplicada contra la real. */
+  laborVariance: (companyId: string, period: string) => query((db, u) => Q.laborVariance(db, u, companyId, period)),
   /** Las necesidades de materiales de las órdenes planificadas (todas, o las indicadas). */
   productionNeeds: (companyId: string, documentIds: string[] | null = null) =>
     query((db, u) => Q.productionNeedsView(db, u, companyId, documentIds)),
@@ -415,6 +419,9 @@ const mockCommands = {
     command((c) => E.cmdUpdatePayrollLines(c, docId, lines)),
   confirmPayroll: (docId: string) => command((c) => E.cmdConfirmPayroll(c, docId)),
   cancelPayroll: (docId: string, reason: string) => command((c) => E.cmdCancelPayroll(c, docId, reason)),
+  payPayrollSalaries: (docId: string, accountId: string) =>
+    command((c) => E.cmdPayPayrollSalaries(c, docId, accountId)),
+  payPayrollCharges: (docId: string, accountId: string) => command((c) => E.cmdPayPayrollCharges(c, docId, accountId)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

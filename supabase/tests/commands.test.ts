@@ -3372,6 +3372,144 @@ describe('paridad de comandos', () => {
     )
   })
 
+  it('pago de sueldos y cargas sociales: fondos, separación de funciones, asientos y flujo de fondos', async () => {
+    const companyPg = pg(company)
+    const month = (offset: number) => {
+      const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+      d.setUTCMonth(d.getUTCMonth() + offset)
+      return d.toISOString().slice(0, 7)
+    }
+    const from = `${todayAR().slice(0, 7)}-01`
+    const payrolls = () => mock.documents.filter((d) => d.company_id === company && d.doc_type === 'PAYROLL')
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const reads = async (label: string) => {
+      for (const d of payrolls())
+        await sameRead(
+          `${d.display_number} ${label}`,
+          'tesoreria',
+          (b) => b.api.document(companyPg, 'PAYROLL', d.display_number),
+          (u) => Q.documentDetail(mock, u, company, 'PAYROLL', d.display_number),
+        )
+      await sameRead(
+        `liquidaciones ${label}`,
+        'contabilidad',
+        (b) => b.api.documents(companyPg, 'PAYROLL'),
+        (u) => Q.listDocuments(mock, u, company, 'PAYROLL'),
+      )
+      await sameRead(
+        `flujo proyectado ${label}`,
+        'tesoreria',
+        (b) => b.api.cashProjection(companyPg),
+        (u) => Q.cashProjection(mock, u, company),
+      )
+      await sameRead(
+        `flujo real ${label}`,
+        'tesoreria',
+        (b) => b.api.cashFlow(companyPg, from, todayAR()),
+        (u) => Q.cashFlow(mock, u, company, from, todayAR()),
+      )
+      for (const period of [month(-2), month(-1), month(0)])
+        await sameRead(
+          `mano de obra de ${period} ${label}`,
+          'contabilidad',
+          (b) => b.api.laborVariance(companyPg, period),
+          (u) => Q.laborVariance(mock, u, company, period),
+        )
+    }
+    await reads('al empezar')
+
+    // La de hace dos meses, en borrador: sólo con el empleado de menor básico, así alcanza el banco.
+    const target = payrolls().find((d) => d.status === 'BORRADOR' && d.py!.period === month(-2))!
+    const lines = E.payrollLines(mock, target.id)
+    const cheapest = lines.reduce((a, b) => (b.basic_salary < a.basic_salary ? b : a))
+    const rows = lines
+      .filter((l) => l.id !== cheapest.id)
+      .map((l) => ({ line_id: l.id, days_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 }))
+    await ok(
+      'dejar un solo empleado',
+      'rrhh',
+      (c) => E.cmdUpdatePayrollLines(c, target.id, rows),
+      (b) =>
+        b.commands.updatePayrollLines(
+          pg(target.id),
+          rows.map((r) => ({ ...r, line_id: pg(r.line_id) })),
+        ),
+    )
+    await ok(
+      'confirmarla',
+      'rrhh',
+      (c) => E.cmdConfirmPayroll(c, target.id),
+      (b) => b.commands.confirmPayroll(pg(target.id)),
+    )
+    const pay = (label: string, username: string, docId: string, accountId: string, salaries = true) =>
+      step(
+        label,
+        username,
+        (c) => (salaries ? E.cmdPayPayrollSalaries(c, docId, accountId) : E.cmdPayPayrollCharges(c, docId, accountId)),
+        (b) =>
+          salaries
+            ? b.commands.payPayrollSalaries(pg(docId), pg(accountId))
+            : b.commands.payPayrollCharges(pg(docId), pg(accountId)),
+      )
+    const bank = account('1.1.01.03')
+    const charges = (docId: string) => E.payrollCharges(mock, docId)
+    // Cada paso reemplaza los documentos del simulador: el neto se lee del vigente.
+    const net = () => mock.documents.find((d) => d.id === target.id)!.total
+    /** Una caja o un banco activo en el que no alcanza para pagar un importe. */
+    const short = (amount: number) =>
+      mock.accounts.find(
+        (a) =>
+          a.company_id === company &&
+          a.is_active &&
+          a.is_imputable &&
+          a.code.startsWith('1.1.01.') &&
+          E.accountBalance(mock, a.id) < amount,
+      )!.id
+    expect(E.accountBalance(mock, bank)).toBeGreaterThan(net() + charges(target.id))
+    expect(await pay('RRHH no paga', 'rrhh', target.id, bank)).toBeNull()
+    expect(await pay('las cargas antes que los sueldos', 'tesoreria', target.id, bank, false)).toBeNull()
+    expect(
+      await pay('desde una cuenta que no es caja ni banco', 'tesoreria', target.id, account('2.1.03.01')),
+    ).toBeNull()
+    expect(await pay('desde una cuenta sin fondos', 'tesoreria', target.id, short(net()))).toBeNull()
+    expect(await pay('pagar los sueldos', 'tesoreria', target.id, bank)).not.toBeNull()
+    expect(await pay('otra vez', 'tesoreria', target.id, bank)).toBeNull()
+    expect(
+      await step(
+        'anularla con los sueldos pagados',
+        'rrhh',
+        (c) => E.cmdCancelPayroll(c, target.id, 'Error de cálculo'),
+        (b) => b.commands.cancelPayroll(pg(target.id), 'Error de cálculo'),
+      ),
+    ).toBeNull()
+    await reads('con los sueldos pagados')
+
+    // SoD-6: con el rol de Tesorería, quien la liquidó tampoco paga sus cargas sociales.
+    const tes = mock.sectors.find((s) => s.company_id === company && s.code === 'TES')!.id
+    await ok(
+      'el docente le suma Tesorería a RRHH',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('rrhh'), 'TESORERIA', tes),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('rrhh')), 'TESORERIA', pg(tes)),
+    )
+    await sameRead(
+      'las acciones de quien la liquidó',
+      'rrhh',
+      (b) => b.api.document(companyPg, 'PAYROLL', target.display_number),
+      (u) => Q.documentDetail(mock, u, company, 'PAYROLL', target.display_number),
+    )
+    expect(await pay('las cargas de una liquidación que liquidó', 'rrhh', target.id, bank, false)).toBeNull()
+    expect(await pay('pagar las cargas sociales', 'tesoreria', target.id, bank, false)).not.toBeNull()
+    expect(await pay('las cargas otra vez', 'tesoreria', target.id, bank, false)).toBeNull()
+
+    // Las cargas sociales del mes pasado (sus sueldos los pagó el escenario), sin fondos.
+    const last = payrolls().find((d) => d.status === 'SUELDOS_PAGADOS')!
+    expect(
+      await pay('las cargas del mes pasado sin fondos', 'tesoreria', last.id, short(charges(last.id)), false),
+    ).toBeNull()
+    await reads('después de pagar')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

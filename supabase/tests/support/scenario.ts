@@ -538,7 +538,8 @@ export function buildScenario(): DB {
   const leaving = db.employees.find((e) => e.company_id === company && e.file_number === 9)!
   E.cmdTerminateEmployee(as('rrhh'), company, leaving.id, addDays(todayAR(), -3), 'Renuncia')
 
-  // Sueldos: la liquidación del mes pasado, con novedades, confirmada; la de este mes, en borrador.
+  // Sueldos: la liquidación del mes pasado, con novedades, confirmada y con los sueldos
+  // pagados desde el banco (faltan sus cargas sociales); la de este mes, en borrador.
   const month = (offset: number) => {
     const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
     d.setUTCMonth(d.getUTCMonth() + offset)
@@ -555,6 +556,11 @@ export function buildScenario(): DB {
     { line_id: lastLines[2].id, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 3.5 },
   ])
   E.cmdConfirmPayroll(as('rrhh'), lastMonth.id)
+  E.cmdPayPayrollSalaries(
+    as('tesoreria'),
+    lastMonth.id,
+    db.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id,
+  )
   E.cmdCreatePayroll(as('rrhh'), company, {
     period: month(0),
     payment_date: `${month(1)}-05`,

@@ -62,6 +62,7 @@ const ProductionNeedsPage = lazyPage(() =>
 const EmployeesPage = lazyPage(() => import('@/features/hr/employees-page').then((m) => m.EmployeesPage))
 const JobCategoriesPage = lazyPage(() => import('@/features/hr/categories-page').then((m) => m.JobCategoriesPage))
 const PayrollFormPage = lazyPage(() => import('@/features/hr/payroll').then((m) => m.PayrollFormPage))
+const LaborVariancePage = lazyPage(() => import('@/features/hr/labor-variance-page').then((m) => m.LaborVariancePage))
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -225,6 +226,7 @@ export const router = createBrowserRouter(
                 { path: 'rrhh/liquidaciones', element: <DocumentListPage key="py" docType="PAYROLL" /> },
                 { path: 'rrhh/liquidaciones/nueva', element: <PayrollFormPage /> },
                 { path: 'rrhh/liquidaciones/:number', element: <DocumentPage key="py" docType="PAYROLL" /> },
+                { path: 'contabilidad/mano-de-obra', element: <LaborVariancePage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

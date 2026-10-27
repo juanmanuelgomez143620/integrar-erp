@@ -284,6 +284,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('production_costs', { ...company(companyId), p_from: from, p_to: to }),
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
     employees: (companyId) => rpc('employees_list', company(companyId)),
+    laborVariance: (companyId, period) => rpc('labor_variance', { ...company(companyId), p_period: period }),
     productionNeeds: (companyId, documentIds = null) =>
       rpc('production_needs', { ...company(companyId), p_document_ids: documentIds }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
@@ -430,6 +431,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     updatePayrollLines: (docId, lines) => rpc('payroll_update_lines', { ...doc(docId), p_lines: lines }),
     confirmPayroll: (docId) => rpc('payroll_confirm', doc(docId)),
     cancelPayroll: (docId, reason) => rpc('payroll_cancel', { ...doc(docId), p_reason: reason }),
+    payPayrollSalaries: (docId, accountId) => rpc('payroll_pay_salaries', { ...doc(docId), p_account_id: accountId }),
+    payPayrollCharges: (docId, accountId) => rpc('payroll_pay_charges', { ...doc(docId), p_account_id: accountId }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),
