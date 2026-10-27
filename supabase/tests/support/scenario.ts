@@ -567,6 +567,20 @@ export function buildScenario(): DB {
     notes: 'Faltan las horas extra de la última semana',
   })
 
+  // Impuestos: la factura de la compra de la demo y la de venta de PV-00001 se registraron el
+  // mes pasado (se corre la fecha de sus asientos), así hay libros IVA de un mes terminado y
+  // una declaración con importes.
+  for (const invoice of [
+    db.documents.find((d) => d.company_id === company && d.display_number === 'FP-00001')!,
+    db.documents.find((d) => d.id === demoInvoice.id)!,
+  ]) {
+    const entry = db.docLinks
+      .filter((l) => l.from_document_id === invoice.id)
+      .map((l) => db.documents.find((d) => d.id === l.to_document_id)!)
+      .find((d) => d.doc_type === 'JOURNAL_ENTRY')!
+    entry.document_date = `${month(-1)}-15`
+  }
+
   // Ajustes: una rotura confirmada y un conteo en borrador.
   E.cmdCreateStockAdjustment(
     as('deposito'),

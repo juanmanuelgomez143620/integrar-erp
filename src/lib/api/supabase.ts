@@ -285,6 +285,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
     employees: (companyId) => rpc('employees_list', company(companyId)),
     laborVariance: (companyId, period) => rpc('labor_variance', { ...company(companyId), p_period: period }),
+    ivaBook: (companyId, period, sales) => rpc('iva_book', { ...company(companyId), p_period: period, p_sales: sales }),
     productionNeeds: (companyId, documentIds = null) =>
       rpc('production_needs', { ...company(companyId), p_document_ids: documentIds }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
@@ -433,6 +434,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     cancelPayroll: (docId, reason) => rpc('payroll_cancel', { ...doc(docId), p_reason: reason }),
     payPayrollSalaries: (docId, accountId) => rpc('payroll_pay_salaries', { ...doc(docId), p_account_id: accountId }),
     payPayrollCharges: (docId, accountId) => rpc('payroll_pay_charges', { ...doc(docId), p_account_id: accountId }),
+    createTaxReturn: (companyId, input) => rpc('tax_return_create', { ...company(companyId), p_input: input }),
+    presentTaxReturn: (docId) => rpc('tax_return_present', doc(docId)),
+    payTaxReturn: (docId, accountId) => rpc('tax_return_pay', { ...doc(docId), p_account_id: accountId }),
+    cancelTaxReturn: (docId, reason) => rpc('tax_return_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

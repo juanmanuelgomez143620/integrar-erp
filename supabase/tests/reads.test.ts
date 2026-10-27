@@ -55,6 +55,7 @@ const DOC_TYPES: DocType[] = [
   'SALES_QUOTE',
   'PRODUCTION_ORDER',
   'PAYROLL',
+  'TAX_RETURN',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 
@@ -273,6 +274,22 @@ describe('personal', () => {
       await same(u, () => Q.listJobCategories(mock, userId(u), company), 'job_categories_list', [companyPg])
       await same(u, () => Q.listEmployees(mock, userId(u), company), 'employees_list', [companyPg])
     }
+  })
+
+  it('los libros IVA de un mes terminado, del mes en curso y de un mes mal escrito', async () => {
+    const month = (offset: number) => {
+      const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+      d.setUTCMonth(d.getUTCMonth() + offset)
+      return d.toISOString().slice(0, 7)
+    }
+    for (const u of USERS)
+      for (const period of [month(-1), month(0), '2026-1'])
+        for (const sales of [true, false])
+          await same(u, () => Q.ivaBook(mock, userId(u), company, period, sales), 'iva_book', [
+            companyPg,
+            period,
+            sales,
+          ])
   })
 
   it('la mano de obra del taller por mes: con la liquidación confirmada, en borrador, sin ella y un mes mal escrito', async () => {

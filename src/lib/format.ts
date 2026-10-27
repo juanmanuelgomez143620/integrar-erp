@@ -84,6 +84,12 @@ export function todayAR(): string {
   )
 }
 
+/** El mes anterior (aaaa-mm) al de hoy: el último terminado, que suele estar liquidado o declarado. */
+export function lastMonthAR(): string {
+  const [y, m] = todayAR().slice(0, 7).split('-').map(Number)
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
+}
+
 export function addDays(isoDate: string, days: number): string {
   const d = new Date(`${isoDate}T12:00:00Z`)
   d.setUTCDate(d.getUTCDate() + days)

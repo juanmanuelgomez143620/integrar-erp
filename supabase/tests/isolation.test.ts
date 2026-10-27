@@ -109,6 +109,7 @@ async function snapshot(company: string) {
     'employees',
     'payrolls',
     'payroll_lines',
+    'tax_returns',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -158,7 +159,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                                     ? B.productionOrder
                                     : fn.startsWith('payroll_')
                                       ? B.payroll
-                                      : B.order
+                                      : fn.startsWith('tax_return_')
+                                        ? B.taxReturn
+                                        : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -663,6 +666,16 @@ beforeAll(async () => {
   ).id
   B.payrollLine = (
     await one(`select id from public.payroll_lines where document_id = $1 order by line_no limit 1`, [B.payroll])
+  ).id
+  // La declaración de IVA de B, del mes pasado.
+  const lastMonth = (
+    await one("select to_char(private.business_date($1) - interval '1 month', 'YYYY-MM') as id", [B.id])
+  ).id
+  B.taxReturn = (
+    await rpc<{ id: string }>('docenteB', 'tax_return_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({ tax: 'IVA', period: lastMonth, notes: '' }),
+    })
   ).id
 
   bIds = new Set(

@@ -69,7 +69,7 @@ function Projection({ data }: { data: CashProjection }) {
   return (
     <Section
       title="Flujo proyectado"
-      description="Desde el saldo de hoy, lo que falta cobrar de las facturas de venta y pagar de las de proveedores, de los sueldos (en su fecha de pago) y de las cargas sociales (en su vencimiento). Lo vencido sin cobrar puede demorarse: es lo que muestra la antigüedad de saldos."
+      description="Desde el saldo de hoy, lo que falta cobrar de las facturas de venta y pagar de las de proveedores, de los sueldos (en su fecha de pago), de las cargas sociales y de los impuestos presentados (en su vencimiento). Lo vencido sin cobrar puede demorarse: es lo que muestra la antigüedad de saldos."
       bodyClassName="p-0"
     >
       <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -81,8 +81,8 @@ function Projection({ data }: { data: CashProjection }) {
         />
         <KpiCard
           label="Falta pagar"
-          value={money(data.buckets.reduce((s, b) => s + b.payments + b.payroll, 0))}
-          hint={`A proveedores ${money(data.buckets.reduce((s, b) => s + b.payments, 0))}; sueldos y cargas sociales ${money(data.buckets.reduce((s, b) => s + b.payroll, 0))}`}
+          value={money(data.buckets.reduce((s, b) => s + b.payments + b.payroll + b.taxes, 0))}
+          hint={`A proveedores ${money(data.buckets.reduce((s, b) => s + b.payments, 0))}; sueldos y cargas sociales ${money(data.buckets.reduce((s, b) => s + b.payroll, 0))}; impuestos ${money(data.buckets.reduce((s, b) => s + b.taxes, 0))}`}
         />
         <KpiCard
           label="Saldo después de cobrar y pagar todo"
@@ -108,12 +108,14 @@ function Projection({ data }: { data: CashProjection }) {
               <TableHead className={cn(head, 'text-right')}>A cobrar</TableHead>
               <TableHead className={cn(head, 'text-right')}>A pagar</TableHead>
               <TableHead className={cn(head, 'text-right')}>Sueldos y cargas sociales</TableHead>
+              <TableHead className={cn(head, 'text-right')}>Impuestos</TableHead>
               <TableHead className={cn(head, 'text-right')}>Saldo después</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableRow>
               <TableCell className="text-sm text-muted-foreground">Disponible hoy</TableCell>
+              <TableCell />
               <TableCell />
               <TableCell />
               <TableCell />
@@ -124,7 +126,9 @@ function Projection({ data }: { data: CashProjection }) {
                 <TableCell
                   className={cn(
                     'text-sm',
-                    b.key === 'VENCIDAS' && (b.payments > 0 || b.collections > 0 || b.payroll > 0) && 'text-red-700',
+                    b.key === 'VENCIDAS' &&
+                      (b.payments > 0 || b.collections > 0 || b.payroll > 0 || b.taxes > 0) &&
+                      'text-red-700',
                   )}
                 >
                   {b.label}
@@ -150,6 +154,14 @@ function Projection({ data }: { data: CashProjection }) {
                   {b.payroll_items > 0 && (
                     <div className="text-xs text-muted-foreground">
                       {b.payroll_items} {b.payroll_items === 1 ? 'pago' : 'pagos'}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="tabular text-right">
+                  {b.taxes ? money(b.taxes) : '—'}
+                  {b.tax_items > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      {b.tax_items} {b.tax_items === 1 ? 'declaración' : 'declaraciones'}
                     </div>
                   )}
                 </TableCell>

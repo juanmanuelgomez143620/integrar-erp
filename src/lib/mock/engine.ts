@@ -6724,11 +6724,21 @@ export function cmdCancelPayroll(ctx: Ctx, docId: string, reason: string) {
   })
 }
 
-/** El vencimiento de las cargas sociales de un mes (aaaa-mm): el día 10 del mes siguiente (a validar). */
-export function chargesDue(period: string) {
+/** Un día (dd) del mes siguiente a aaaa-mm: los vencimientos de lo que se liquida por mes. */
+export function nextMonthDay(period: string, day: number) {
   const [y, m] = period.split('-').map(Number)
-  return m === 12 ? `${y + 1}-01-10` : `${y}-${String(m + 1).padStart(2, '0')}-10`
+  const dd = String(day).padStart(2, '0')
+  return m === 12 ? `${y + 1}-01-${dd}` : `${y}-${String(m + 1).padStart(2, '0')}-${dd}`
 }
+
+/** El mes anterior a aaaa-mm. */
+export function previousPeriod(period: string) {
+  const [y, m] = period.split('-').map(Number)
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
+}
+
+/** El vencimiento de las cargas sociales de un mes (aaaa-mm): el día 10 del mes siguiente (a validar). */
+export const chargesDue = (period: string) => nextMonthDay(period, 10)
 
 /** Las cargas sociales de una liquidación: los aportes retenidos más las contribuciones. */
 export const payrollCharges = (db: DB, docId: string) =>
@@ -6802,6 +6812,278 @@ export const cmdPayPayrollSalaries = (ctx: Ctx, docId: string, accountId: string
 
 export const cmdPayPayrollCharges = (ctx: Ctx, docId: string, accountId: string) =>
   payPayroll(ctx, docId, accountId, false)
+
+// ============================================================ Impuestos (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2)
+
+export const TAX_NAMES: Record<T.TaxCode, string> = { IVA: 'IVA', IIBB: 'ingresos brutos' }
+
+/** El vencimiento de la declaración de un mes: el IVA, el día 20 del mes siguiente (a validar). */
+export const taxDueDate = (tax: T.TaxCode, period: string) => nextMonthDay(period, tax === 'IVA' ? 20 : 15)
+
+/** Una factura en el libro IVA de un mes: por su asiento o, si se anuló, por el contraasiento (resta). */
+export interface IvaBookEntry {
+  entry: T.Document
+  invoice: T.Document
+  /** 1 la factura; -1 su anulación. */
+  sign: 1 | -1
+  voucher: string
+  /** Lo que va al libro, con el signo: el neto gravado, el IVA, lo exento y, en las compras con letra C, el total sin crédito fiscal. */
+  net: number
+  vat: number
+  exempt: number
+  no_credit: number
+  total: number
+  /** Neto e IVA por alícuota (sin las exentas). */
+  by_rate: { rate: number; net: number; vat: number }[]
+}
+
+/**
+ * Las facturas de venta (o de proveedores) del libro IVA de un mes: las de los asientos
+ * registrados en el mes que salen de una factura, y las anuladas en el mes, que restan.
+ */
+export function ivaBookEntries(db: DB, companyId: string, period: string, sales: boolean): IvaBookEntry[] {
+  const docType = sales ? 'SALES_INVOICE' : 'SUPPLIER_INVOICE'
+  const sourceOf = (entryId: string) =>
+    db.docLinks
+      .filter((l) => l.to_document_id === entryId)
+      .map((l) => db.documents.find((d) => d.id === l.from_document_id))
+      .find((d) => d?.doc_type === docType)
+  const rows: IvaBookEntry[] = []
+  for (const entry of db.documents) {
+    if (entry.company_id !== companyId || !isPosted(entry) || entry.document_date.slice(0, 7) !== period) continue
+    const invoice = sourceOf(entry.je!.reverses_id ?? entry.id)
+    if (!invoice) continue
+    const sign = entry.je!.reverses_id ? -1 : 1
+    type Line = { vat_rate: number; line_subtotal: number; line_tax: number; line_total: number }
+    const lines: Line[] = sales
+      ? db.fvLines.filter((l) => l.document_id === invoice.id)
+      : db.siLines.filter((l) => l.document_id === invoice.id)
+    const credit = sales || invoice.si!.letter === 'A'
+    const sum = (rows: Line[], value: (l: Line) => number) => round2(sign * rows.reduce((s, l) => s + value(l), 0))
+    const taxed = credit ? lines.filter((l) => l.vat_rate > 0) : []
+    const rates = [...new Set(taxed.map((l) => l.vat_rate))].sort((a, b) => b - a)
+    rows.push({
+      entry,
+      invoice,
+      sign,
+      voucher: sales ? salesInvoiceLabel(invoice.fv!) : invoiceLabel(invoice.si!),
+      net: sum(taxed, (l) => l.line_subtotal),
+      vat: sum(taxed, (l) => l.line_tax),
+      exempt: credit
+        ? sum(
+            lines.filter((l) => l.vat_rate === 0),
+            (l) => l.line_subtotal,
+          )
+        : 0,
+      no_credit: credit ? 0 : sum(lines, (l) => l.line_total),
+      total: round2(sign * invoice.total),
+      by_rate: rates.map((rate) => {
+        const own = taxed.filter((l) => l.vat_rate === rate)
+        return { rate, net: sum(own, (l) => l.line_subtotal), vat: sum(own, (l) => l.line_tax) }
+      }),
+    })
+  }
+  return rows.sort(
+    (a, b) =>
+      (a.entry.document_date < b.entry.document_date ? -1 : a.entry.document_date > b.entry.document_date ? 1 : 0) ||
+      a.entry.je!.entry_number! - b.entry.je!.entry_number!,
+  )
+}
+
+/** Las declaraciones de un impuesto que no están anuladas, de la más vieja a la más nueva. */
+const taxReturnsOf = (db: DB, companyId: string, tax: T.TaxCode) =>
+  db.documents
+    .filter(
+      (d) => d.company_id === companyId && d.doc_type === 'TAX_RETURN' && d.status !== 'ANULADA' && d.tr!.tax === tax,
+    )
+    .sort((a, b) => (a.tr!.period < b.tr!.period ? -1 : 1))
+
+/** La declaración posterior de su impuesto, si la hay: sólo se anula la última. */
+export const laterTaxReturn = (db: DB, doc: T.Document) =>
+  taxReturnsOf(db, doc.company_id, doc.tr!.tax).find((d) => d.tr!.period > doc.tr!.period)
+
+/** Quienes liquidaron el impuesto (SoD-10): quien preparó la declaración y quien la presentó. */
+export function taxReturnPreparers(db: DB, doc: T.Document) {
+  const presenter = db.audit.find((e) => e.document_id === doc.id && e.action === 'CONFIRM')?.actor_user_id
+  return [doc.created_by, presenter].filter((id): id is string => !!id)
+}
+
+export interface TaxReturnInput {
+  tax: T.TaxCode
+  /** El mes: aaaa-mm. */
+  period: string
+  notes: string
+}
+
+/**
+ * Impuestos prepara la declaración de un mes terminado con los libros IVA: débito fiscal
+ * menos crédito fiscal menos el saldo a favor de la declaración del mes anterior. Después
+ * de la primera, los meses van en orden y cada uno con la anterior presentada.
+ */
+export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturnInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'tax_return.create')
+  const company = getCompany(db, companyId)
+  if (input.tax !== 'IVA') fail('DATO_INVALIDO', 'Elegí el impuesto: por ahora, el IVA.')
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) fail('DATO_INVALIDO', 'El período es un mes: aaaa-mm.')
+  const month = periodLabel(input.period)
+  if (input.period >= businessDate(company).slice(0, 7))
+    fail('DATO_INVALIDO', `${month} todavía no terminó: la declaración se prepara después de que termine el mes.`)
+  if (input.period < company.start_date.slice(0, 7))
+    fail(
+      'DATO_INVALIDO',
+      `La empresa empezó sus actividades el ${fmtDate(company.start_date)}: no hay declaraciones antes.`,
+    )
+  const name = TAX_NAMES[input.tax]
+  const returns = taxReturnsOf(db, companyId, input.tax)
+  const same = returns.find((d) => d.tr!.period === input.period)
+  if (same) fail('DATO_INVALIDO', `Ya hay una declaración de ${name} de ${month}: ${same.display_number}.`)
+  const last = returns.at(-1)
+  if (last && input.period < last.tr!.period)
+    fail(
+      'DATO_INVALIDO',
+      `La última declaración de ${name} es la de ${periodLabel(last.tr!.period)} (${last.display_number}): no se vuelve a un mes anterior.`,
+    )
+  if (last && previousPeriod(input.period) !== last.tr!.period)
+    fail(
+      'DATO_INVALIDO',
+      `Falta la declaración de ${name} de ${periodLabel(previousPeriod(input.period))}: los meses van en orden.`,
+    )
+  if (last?.status === 'BORRADOR')
+    fail(
+      'DATO_INVALIDO',
+      `Primero hay que presentar ${last.display_number} (${name} de ${periodLabel(last.tr!.period)}).`,
+    )
+  const notes = input.notes.trim()
+  if (notes.length > 500) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 500 caracteres.')
+  const debit = round2(ivaBookEntries(db, companyId, input.period, true).reduce((s, r) => s + r.vat, 0))
+  const credit = round2(ivaBookEntries(db, companyId, input.period, false).reduce((s, r) => s + r.vat, 0))
+  const previous = last ? last.tr!.balance_in_favor : 0
+  const result = round2(debit - credit - previous)
+  const doc = newDocument(ctx, companyId, 'TAX_RETURN', actor, {
+    notes,
+    tr: {
+      tax: input.tax,
+      period: input.period,
+      due_date: taxDueDate(input.tax, input.period),
+      tax_amount: debit,
+      credits: credit,
+      previous_balance: previous,
+      balance_in_favor: Math.max(-result, 0),
+      presented_at: null,
+      paid_on: null,
+      paid_account_id: null,
+    },
+  })
+  doc.subtotal = debit
+  doc.total = Math.max(result, 0)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'tax_return',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Creó ${doc.display_number}: ${name} de ${month}, ${result > 0 ? `${money(result)} a pagar` : `saldo a favor de ${money(-result)}`}`,
+  })
+  openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/**
+ * Presentar: queda fijo lo declarado y se registra el asiento del impuesto. Del crédito
+ * fiscal se usa hasta el débito; lo que sobra queda en la cuenta como saldo a favor.
+ */
+export function cmdPresentTaxReturn(ctx: Ctx, docId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'TAX_RETURN')
+  requireTransition(doc, 'CONFIRM')
+  requirePermission(ctx, doc.company_id, 'tax_return.create')
+  const tr = doc.tr!
+  const name = TAX_NAMES[tr.tax]
+  const month = periodLabel(tr.period)
+  const actor = transition(ctx, doc, 'CONFIRM', {
+    to: doc.total > 0 ? 'PRESENTADA' : 'SIN_SALDO',
+    summary: `Presentó ${doc.display_number}: ${name} de ${month}, ${doc.total > 0 ? `${money(doc.total)} a pagar` : 'sin saldo a pagar'}`,
+  })
+  doc.tr = { ...tr, presented_at: ctx.now }
+  if (tr.tax_amount > 0)
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'IVA',
+      `IVA de ${month} (${doc.display_number}): débito fiscal ${money(tr.tax_amount)}, crédito fiscal ${money(tr.credits)}${tr.previous_balance ? ` y saldo a favor anterior ${money(tr.previous_balance)}` : ''}.`,
+      [
+        { key: 'IVA_DEBITO', debit: tr.tax_amount, credit: 0 },
+        { key: 'IVA_CREDITO', debit: 0, credit: Math.min(tr.tax_amount, round2(tr.credits + tr.previous_balance)) },
+        { key: 'IVA_A_PAGAR', debit: 0, credit: doc.total },
+      ],
+    )
+}
+
+/** Tesorería paga el saldo al fisco (simulado) desde una caja o un banco con saldo. SoD-10: no la paga quien la liquidó. */
+export function cmdPayTaxReturn(ctx: Ctx, docId: string, accountId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'TAX_RETURN')
+  requireTransition(doc, 'PAY')
+  const actor = requirePermission(ctx, doc.company_id, 'tax_return.pay')
+  const company = getCompany(db, doc.company_id)
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  if (company.settings.sod_enabled && !eff.supervisor && taxReturnPreparers(db, doc).includes(ctx.userId!))
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés pagar ${doc.display_number}: la liquidaste vos.`,
+      'Separación de funciones: quien liquida un impuesto no lo paga. Tiene que pagarlo otro integrante de Tesorería.',
+    )
+  const account = treasuryAccount(db, doc.company_id, accountId)
+  const balance = accountBalance(db, account.id)
+  const name = TAX_NAMES[doc.tr!.tax]
+  const month = periodLabel(doc.tr!.period)
+  if (doc.total > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y el ${name} de ${month} es ${money(doc.total)}.`,
+      'Antes de pagar hay que controlar que haya fondos: el flujo de fondos proyectado lo anticipa.',
+    )
+  transition(ctx, doc, 'PAY', {
+    actor,
+    summary: `Pagó ${doc.display_number}: ${name} de ${month}, ${money(doc.total)} desde ${accountLabel(account)}`,
+  })
+  doc.tr = { ...doc.tr!, paid_on: businessDate(company), paid_account_id: account.id }
+  postEvent(ctx, actor, doc, 'PAGO_IVA', `Pago del IVA de ${month} (${doc.display_number}).`, [
+    { key: 'IVA_A_PAGAR', debit: doc.total, credit: 0 },
+    { account_id: account.id, debit: 0, credit: doc.total },
+  ])
+}
+
+/** Anular: el borrador sin más; la presentada sin pagar, si es la última, con el contraasiento del impuesto. */
+export function cmdCancelTaxReturn(ctx: Ctx, docId: string, reason: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'TAX_RETURN')
+  if (doc.status !== 'PRESENTADA' && doc.status !== 'SIN_SALDO') {
+    transition(ctx, doc, 'CANCEL', { comment: reason })
+    return
+  }
+  const actor = requirePermission(ctx, doc.company_id, 'tax_return.cancel')
+  const comment = reason.trim()
+  if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
+  const later = laterTaxReturn(db, doc)
+  if (later)
+    fail(
+      'TRANSICION_INVALIDA',
+      `Sólo se anula la última declaración de ${TAX_NAMES[doc.tr!.tax]}: ${later.display_number} es posterior.`,
+    )
+  const entry = automaticEntryOf(db, doc.id)
+  const reversal = entry ? reverseEntry(ctx, entry, actor, `${doc.display_number} anulada: ${comment}`, true) : null
+  transition(ctx, doc, 'CANCEL', {
+    comment,
+    actor,
+    summary: `Anuló ${doc.display_number}${reversal ? `: el contraasiento ${reversal.display_number} revirtió el del impuesto` : ''} — ${comment}`,
+  })
+}
 
 // ============================================================ Tareas y notificaciones
 

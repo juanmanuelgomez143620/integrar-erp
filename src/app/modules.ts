@@ -15,6 +15,8 @@ import {
   Building2,
   CalendarRange,
   ClipboardCheck,
+  BookCheck,
+  FileCheck,
   ClipboardList,
   Coins,
   Factory,
@@ -186,6 +188,13 @@ export const NAV: NavGroup[] = [
       { label: 'Legajos', path: 'rrhh/legajos', icon: IdCard, permission: 'employee.read' },
       { label: 'Liquidaciones', path: 'rrhh/liquidaciones', icon: Coins, permission: 'payroll.read' },
       { label: 'Categorías', path: 'rrhh/categorias', icon: BriefcaseBusiness, permission: 'employee.read' },
+    ],
+  },
+  {
+    label: 'Impuestos',
+    items: [
+      { label: 'Declaraciones', path: 'impuestos/declaraciones', icon: FileCheck, permission: 'tax_return.read' },
+      { label: 'Libros IVA', path: 'impuestos/libros-iva', icon: BookCheck, permission: 'tax_return.read' },
     ],
   },
   {

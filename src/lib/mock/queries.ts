@@ -37,6 +37,8 @@ import {
   getProfile,
   INVOICED_STATUSES,
   invoiceCommitted,
+  ivaBookEntries,
+  laterTaxReturn,
   invoicedQuantity,
   invoicePaid,
   invoiceRegistrant,
@@ -80,6 +82,8 @@ import {
   salesOrderLines,
   salesQuoteLines,
   shortageText,
+  TAX_NAMES,
+  taxReturnPreparers,
   type AccountLine,
 } from './engine'
 
@@ -416,6 +420,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.prdLines.filter((l) => l.document_id === doc.id).length
     case 'PAYROLL':
       return db.pyLines.filter((l) => l.document_id === doc.id).length
+    case 'TAX_RETURN':
+      return 0
   }
 }
 
@@ -452,8 +458,9 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     // La orden se resume por lo que fabrica, no por sus materiales.
     case 'PRODUCTION_ORDER':
       return [{ product_id: doc.pd!.product_id }]
-    // La liquidación es de personas, no de productos.
+    // La liquidación es de personas, no de productos; la declaración, de los libros del mes.
     case 'PAYROLL':
+    case 'TAX_RETURN':
       return []
   }
 }
@@ -493,9 +500,11 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
           ? `${db.accounts.find((a) => a.id === doc.br!.account_id)?.name} al ${date(doc.br.statement_date)}`
           : doc.py
             ? `Sueldos de ${periodLabel(doc.py.period)}`
-            : doc.pd
-              ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
-              : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+            : doc.tr
+              ? taxReturnTitle(doc.tr)
+              : doc.pd
+                ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
+                : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -553,6 +562,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'CUSTOMER_RECEIPT',
     'PRODUCTION_ORDER',
     'PAYROLL',
+    'TAX_RETURN',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -661,6 +671,20 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
       payrollLiquidators(db, doc).includes(userId)
     ) {
       reason = 'Separación de funciones: liquidaste estos sueldos; tiene que pagarlos otro integrante de Tesorería.'
+    }
+    if (
+      doc.doc_type === 'TAX_RETURN' &&
+      tr.action === 'PAY' &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      taxReturnPreparers(db, doc).includes(userId)
+    ) {
+      reason = 'Separación de funciones: liquidaste este impuesto; tiene que pagarlo otro integrante de Tesorería.'
+    }
+    if (doc.doc_type === 'TAX_RETURN' && tr.action === 'CANCEL' && doc.status !== 'BORRADOR') {
+      const later = laterTaxReturn(db, doc)
+      if (later)
+        reason = `Sólo se anula la última declaración de ${TAX_NAMES[doc.tr!.tax]}: ${later.display_number} es posterior.`
     }
     if (doc.doc_type === 'RFQ' && tr.action === 'AWARD' && !quotesOf(db, doc.id).some((q) => quoteIsValid(db, q))) {
       reason = 'Todavía no hay cotizaciones vigentes para adjudicar.'
@@ -1067,6 +1091,16 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: 'Tesorería',
         text: `Pagar las cargas sociales antes del ${date(chargesDue(doc.py!.period))}: ${money(payrollCharges(db, doc.id))} entre los aportes retenidos a los empleados y las contribuciones de la empresa.`,
       }
+    case 'TAX_RETURN:BORRADOR':
+      return {
+        who: 'Impuestos',
+        text: 'Revisar los libros IVA del mes (el débito y el crédito fiscal) y presentar la declaración: se registra el asiento del impuesto.',
+      }
+    case 'TAX_RETURN:PRESENTADA':
+      return {
+        who: 'Tesorería',
+        text: `Pagar ${money(doc.total)} al fisco (simulado) antes del ${date(doc.tr?.due_date)}.`,
+      }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -1356,6 +1390,7 @@ export interface DocumentDetail {
   sales_quote: SalesQuoteView | null
   production_order: ProductionOrderView | null
   payroll: PayrollView | null
+  tax_return: TaxReturnView | null
   delivery: DeliveryView | null
   supplier: T.Supplier | null
   customer: T.Customer | null
@@ -1721,10 +1756,15 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                                       { label: 'Liquidó', ...firstBy(['CREATE']) },
                                       { label: 'Confirmó', ...firstBy(['CONFIRM']) },
                                     ]
-                                  : [
-                                      { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                                      { label: 'Controló', name: '', sector: '', at: '' },
-                                    ]
+                                  : doc.doc_type === 'TAX_RETURN'
+                                    ? [
+                                        { label: 'Preparó', ...firstBy(['CREATE']) },
+                                        { label: 'Presentó', ...firstBy(['CONFIRM']) },
+                                      ]
+                                    : [
+                                        { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                                        { label: 'Controló', name: '', sector: '', at: '' },
+                                      ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1739,6 +1779,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     sales_quote: doc.qt ? salesQuoteView(db, doc) : null,
     production_order: doc.pd ? productionOrderView(db, doc) : null,
     payroll: doc.py ? payrollView(db, doc) : null,
+    tax_return: doc.tr ? taxReturnView(db, doc) : null,
     delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     customer: db.customers.find((c) => c.id === doc.customer_id) ?? null,
@@ -3239,7 +3280,7 @@ export function paymentCandidates(db: DB, userId: string, companyId: string, sup
 
 // ============================================================ Flujo de fondos (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
 
-export type CashConceptKey = 'APERTURA' | 'COBROS' | 'PAGOS' | 'SUELDOS' | 'TRANSFERENCIAS' | 'OTROS'
+export type CashConceptKey = 'APERTURA' | 'COBROS' | 'PAGOS' | 'SUELDOS' | 'IMPUESTOS' | 'TRANSFERENCIAS' | 'OTROS'
 
 export interface CashFlowConcept {
   key: CashConceptKey
@@ -3272,6 +3313,7 @@ const CASH_CONCEPTS: [CashConceptKey, string][] = [
   ['COBROS', 'Cobros a clientes'],
   ['PAGOS', 'Pagos a proveedores'],
   ['SUELDOS', 'Sueldos y cargas sociales'],
+  ['IMPUESTOS', 'Impuestos'],
   ['TRANSFERENCIAS', 'Movimientos entre cajas y bancos'],
   ['OTROS', 'Otros asientos de Contabilidad'],
 ]
@@ -3294,6 +3336,7 @@ function cashConcept(db: DB, entry: T.Document): CashConceptKey {
   if (source?.doc_type === 'CUSTOMER_RECEIPT') return 'COBROS'
   if (source?.doc_type === 'PAYMENT_ORDER') return 'PAGOS'
   if (source?.doc_type === 'PAYROLL') return 'SUELDOS'
+  if (source?.doc_type === 'TAX_RETURN') return 'IMPUESTOS'
   if (source?.doc_type === 'FUNDS_TRANSFER') return 'TRANSFERENCIAS'
   return base.je?.origin === 'APERTURA' ? 'APERTURA' : 'OTROS'
 }
@@ -3362,6 +3405,9 @@ export interface CashProjectionBucket {
   /** Los sueldos sin pagar (en su fecha de pago) y las cargas sociales sin pagar (en su vencimiento). */
   payroll: number
   payroll_items: number
+  /** Los saldos de las declaraciones de impuestos presentadas sin pagar, en su vencimiento. */
+  taxes: number
+  tax_items: number
   /** Saldo de cajas y bancos que quedaría después de cobrar y pagar hasta este tramo. */
   balance: number
 }
@@ -3415,6 +3461,9 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
       .filter((d) => d.status === 'CONFIRMADA' || d.status === 'SUELDOS_PAGADOS')
       .map((d) => ({ due_date: chargesDue(d.py!.period), amount: payrollCharges(db, d.id) })),
   ].filter((p) => p.amount > 0)
+  const taxes = db.documents
+    .filter((d) => d.company_id === companyId && d.doc_type === 'TAX_RETURN' && d.status === 'PRESENTADA')
+    .map((d) => ({ due_date: d.tr!.due_date, amount: d.total }))
   let running = balance
   const buckets = CASH_BUCKETS.map(([key, label, upTo], i) => {
     const after = i === 0 ? -Infinity : CASH_BUCKETS[i - 1][2]
@@ -3429,7 +3478,9 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
     const collections = round2(toCollect.reduce((sum, inv) => sum + inv.pending, 0))
     const toPay = within(salaries)
     const payroll = round2(toPay.reduce((sum, p) => sum + p.amount, 0))
-    running = round2(running + collections - payments - payroll)
+    const dueTaxes = within(taxes)
+    const tax = round2(dueTaxes.reduce((sum, p) => sum + p.amount, 0))
+    running = round2(running + collections - payments - payroll - tax)
     return {
       key,
       label,
@@ -3439,6 +3490,8 @@ export function cashProjection(db: DB, userId: string, companyId: string): CashP
       invoices: inBucket.length,
       payroll,
       payroll_items: toPay.length,
+      taxes: tax,
+      tax_items: dueTaxes.length,
       balance: running,
     }
   })
@@ -4152,6 +4205,119 @@ export function productionCosts(
         unit_cost: doc.pd!.unit_cost ?? 0,
       }
     })
+}
+
+// ============================================================ Impuestos (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2)
+
+/** "IVA de 09/2026": el título de una declaración. */
+const taxReturnTitle = (tr: T.TaxReturnHeader) =>
+  `${tr.tax === 'IVA' ? 'IVA' : 'Ingresos brutos'} de ${periodLabel(tr.period)}`
+
+/** La declaración: lo declarado, el saldo y el pago. */
+export interface TaxReturnView {
+  tax: T.TaxCode
+  period: string
+  due_date: string
+  tax_amount: number
+  credits: number
+  previous_balance: number
+  /** El saldo a pagar (documents.total). */
+  amount_due: number
+  balance_in_favor: number
+  presented_at: string | null
+  paid_on: string | null
+  paid_account: { id: string; code: string; name: string } | null
+}
+
+function taxReturnView(db: DB, doc: T.Document): TaxReturnView {
+  const tr = doc.tr!
+  const paid = tr.paid_account_id ? db.accounts.find((a) => a.id === tr.paid_account_id) : undefined
+  return {
+    tax: tr.tax,
+    period: tr.period,
+    due_date: tr.due_date,
+    tax_amount: tr.tax_amount,
+    credits: tr.credits,
+    previous_balance: tr.previous_balance,
+    amount_due: doc.total,
+    balance_in_favor: tr.balance_in_favor,
+    presented_at: tr.presented_at,
+    paid_on: tr.paid_on,
+    paid_account: paid ? { id: paid.id, code: paid.code, name: paid.name } : null,
+  }
+}
+
+/** Una fila del libro IVA: una factura o, con signo negativo, su anulación. */
+export interface IvaBookRow {
+  /** La fecha del asiento (la de la registración o la de la anulación). */
+  entry_date: string
+  sign: 1 | -1
+  invoice: { id: string; display_number: string; path: string; document_date: string }
+  voucher: string
+  counterparty: { name: string; tax_id: string; vat_condition: T.VatCondition }
+  net: number
+  vat: number
+  exempt: number
+  no_credit: number
+  total: number
+}
+
+export interface IvaBook {
+  period: string
+  sales: boolean
+  rows: IvaBookRow[]
+  /** Neto e IVA por alícuota, de la más alta a la más baja. */
+  by_rate: { rate: number; net: number; vat: number }[]
+  net: number
+  vat: number
+  exempt: number
+  no_credit: number
+  total: number
+}
+
+/** El libro IVA ventas (o compras) de un mes, con sus totales y el resumen por alícuota. */
+export function ivaBook(db: DB, userId: string, companyId: string, period: string, sales: boolean): IvaBook {
+  assertPerm(db, userId, companyId, 'tax_return.read')
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) fail('DATO_INVALIDO', 'El período es un mes: aaaa-mm.')
+  const entries = ivaBookEntries(db, companyId, period, sales)
+  const total = (value: (e: (typeof entries)[number]) => number) => round2(entries.reduce((s, e) => s + value(e), 0))
+  const rates = [...new Set(entries.flatMap((e) => e.by_rate.map((r) => r.rate)))].sort((a, b) => b - a)
+  return {
+    period,
+    sales,
+    rows: entries.map((e) => {
+      const party = sales
+        ? db.customers.find((c) => c.id === e.invoice.customer_id)!
+        : db.suppliers.find((s) => s.id === e.invoice.supplier_id)!
+      return {
+        entry_date: e.entry.document_date,
+        sign: e.sign,
+        invoice: {
+          id: e.invoice.id,
+          display_number: e.invoice.display_number,
+          path: docPath(db, e.invoice),
+          document_date: e.invoice.document_date,
+        },
+        voucher: e.voucher,
+        counterparty: { name: party.legal_name, tax_id: party.tax_id, vat_condition: party.vat_condition },
+        net: e.net,
+        vat: e.vat,
+        exempt: e.exempt,
+        no_credit: e.no_credit,
+        total: e.total,
+      }
+    }),
+    by_rate: rates.map((rate) => ({
+      rate,
+      net: total((e) => e.by_rate.find((r) => r.rate === rate)?.net ?? 0),
+      vat: total((e) => e.by_rate.find((r) => r.rate === rate)?.vat ?? 0),
+    })),
+    net: total((e) => e.net),
+    vat: total((e) => e.vat),
+    exempt: total((e) => e.exempt),
+    no_credit: total((e) => e.no_credit),
+    total: total((e) => e.total),
+  }
 }
 
 /** La mano de obra de un centro de trabajo en un mes (docs/FASE_6_RRHH_Y_SUELDOS.md §4). */

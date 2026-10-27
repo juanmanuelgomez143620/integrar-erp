@@ -45,6 +45,8 @@ export type {
   InvoiceableOrder,
   InvoiceableSalesOrder,
   IssuedCheque,
+  IvaBook,
+  IvaBookRow,
   JobCategoryRow,
   JournalBook,
   JournalBookEntry,
@@ -64,6 +66,7 @@ export type {
   PayrollView,
   PendingRequisitionLine,
   PeriodView,
+  TaxReturnView,
   PostingRuleRow,
   PriceListDetail,
   PriceListProduct,
@@ -249,6 +252,9 @@ const mockApi = {
     query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
   employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
+  /** El libro IVA ventas (sales) o compras de un mes (aaaa-mm). */
+  ivaBook: (companyId: string, period: string, sales: boolean) =>
+    query((db, u) => Q.ivaBook(db, u, companyId, period, sales)),
   /** La mano de obra del taller de un mes (aaaa-mm), por centro: la aplicada contra la real. */
   laborVariance: (companyId: string, period: string) => query((db, u) => Q.laborVariance(db, u, companyId, period)),
   /** Las necesidades de materiales de las órdenes planificadas (todas, o las indicadas). */
@@ -422,6 +428,11 @@ const mockCommands = {
   payPayrollSalaries: (docId: string, accountId: string) =>
     command((c) => E.cmdPayPayrollSalaries(c, docId, accountId)),
   payPayrollCharges: (docId: string, accountId: string) => command((c) => E.cmdPayPayrollCharges(c, docId, accountId)),
+  createTaxReturn: (companyId: string, input: E.TaxReturnInput) =>
+    command((c) => E.cmdCreateTaxReturn(c, companyId, input)),
+  presentTaxReturn: (docId: string) => command((c) => E.cmdPresentTaxReturn(c, docId)),
+  payTaxReturn: (docId: string, accountId: string) => command((c) => E.cmdPayTaxReturn(c, docId, accountId)),
+  cancelTaxReturn: (docId: string, reason: string) => command((c) => E.cmdCancelTaxReturn(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

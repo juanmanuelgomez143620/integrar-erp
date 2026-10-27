@@ -29,6 +29,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   inventory: { name: 'Depósito y stock', lockable: true },
   production: { name: 'Producción y costos', lockable: true },
   hr: { name: 'RRHH y sueldos', lockable: true },
+  tax: { name: 'Impuestos', lockable: true },
   payables: { name: 'Pagos y tesorería', lockable: true },
   accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
@@ -61,6 +62,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   production_order: 'production',
   employee: 'hr',
   payroll: 'hr',
+  tax_return: 'tax',
   supplier_invoice: 'purchasing',
   payable: 'payables',
   payment_order: 'payables',
@@ -99,7 +101,7 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   COMPRAS: { code: 'COMPRAS', name: 'Compras', island: 2, defaultSector: 'COM', isSupervisor: false, description: 'Atiende solicitudes, gestiona proveedores y emite órdenes de compra.' },
   VENTAS: { code: 'VENTAS', name: 'Ventas', island: 3, defaultSector: 'VEN', isSupervisor: false, description: 'Administra la cartera de clientes y carga los pedidos de venta.' },
   CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Registra los asientos, lleva los libros contables y cierra los meses.' },
-  IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Consulta operaciones y libros contables (obligaciones en fases siguientes).' },
+  IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Lleva los libros IVA y prepara y presenta las declaraciones de impuestos de cada mes.' },
   TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Prepara y ejecuta los pagos a proveedores y controla los saldos de caja y bancos.' },
   RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Lleva los legajos y las categorías del personal; las liquidaciones de sueldos llegan en la Fase 6b.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
@@ -146,7 +148,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -201,7 +203,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -211,8 +213,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
-    // Paga los sueldos y las cargas sociales (Fase 6c; SoD-6: no los que liquidó).
-    'payroll.read', 'payroll.pay',
+    // Paga los sueldos y las cargas sociales (Fase 6c; SoD-6: no los que liquidó) y los impuestos (7a).
+    'payroll.read', 'payroll.pay', 'tax_return.read', 'tax_return.pay',
   ],
   // Legajos y categorías del personal (Fase 6a).
   RRHH: [
@@ -224,6 +226,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'sales_quote.read',
+    // Liquida los impuestos (Fase 7a); Tesorería los paga.
+    'tax_return.read', 'tax_return.create', 'tax_return.cancel',
   ],
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
@@ -240,7 +244,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
-    'payroll.read',
+    'payroll.read', 'tax_return.read',
   ],
   DOCENTE: [],
 }
@@ -344,6 +348,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'PAYROLL', prefix: 'LIQ', name: 'Liquidación de sueldos', plural: 'Liquidaciones de sueldos',
     resource: 'payroll', module: 'hr', path: 'rrhh/liquidaciones',
     description: 'Los sueldos de un mes: las novedades de cada empleado, lo que cobra (el remunerativo menos sus aportes) y lo que le cuesta a la empresa (más las contribuciones). Simulada: sin validez legal.',
+  },
+  TAX_RETURN: {
+    code: 'TAX_RETURN', prefix: 'DJ', name: 'Declaración de impuestos', plural: 'Declaraciones de impuestos',
+    resource: 'tax_return', module: 'tax', path: 'impuestos/declaraciones',
+    description: 'La liquidación mensual de un impuesto que la empresa le presenta al fisco simulado: lo que sale de los libros del mes y el saldo a pagar o a favor. Simulada: sin validez fiscal.',
   },
   PRODUCTION_ORDER: {
     code: 'PRODUCTION_ORDER', prefix: 'OPR', name: 'Orden de producción', plural: 'Órdenes de producción',
@@ -473,6 +482,13 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     SUELDOS_PAGADOS: { label: 'Sueldos pagados', badge: 'warning', final: false, description: 'Tesorería pagó los netos a los empleados: faltan las cargas sociales (los aportes retenidos y las contribuciones).' },
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagaron los sueldos y las cargas sociales: el ciclo de la liquidación terminó.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba confirmada, un contraasiento revirtió el de sueldos.' },
+  },
+  TAX_RETURN: {
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'Impuestos la está preparando con los libros del mes: todavía no se presentó.' },
+    PRESENTADA: { label: 'Presentada', badge: 'info', final: false, description: 'Se presentó y se registró el asiento del impuesto: Tesorería tiene que pagar el saldo.' },
+    SIN_SALDO: { label: 'Presentada sin saldo a pagar', badge: 'success', final: true, description: 'Se presentó y no hay nada que pagar: el saldo a favor, si lo hay, se descuenta en la del mes siguiente.' },
+    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se presentó y se pagó el saldo al fisco (simulado).' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba presentada, un contraasiento revirtió el del impuesto.' },
   },
   PRODUCTION_ORDER: {
     BORRADOR: { label: 'Planificada', badge: 'neutral', final: false, description: 'Producción la está planificando: todavía no reservó materiales.' },
@@ -654,6 +670,14 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('PAYROLL', 'CONFIRMADA', 'PAY', 'SUELDOS_PAGADOS', 'payroll.pay', 'Pagar los sueldos', 'Paga los netos de todos los empleados desde una caja o un banco: genera el asiento de pago.'),
   t('PAYROLL', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'Un contraasiento revierte el de sueldos.', true, 'destructive'),
   t('PAYROLL', 'SUELDOS_PAGADOS', 'PAY', 'PAGADA', 'payroll.pay', 'Pagar las cargas sociales', 'Paga los aportes retenidos y las contribuciones del mes (simulado): genera el asiento de pago.'),
+
+  // Declaración de impuestos (presentar lleva a Presentada o, sin saldo a pagar, a Presentada sin saldo)
+  t('TAX_RETURN', 'BORRADOR', 'CONFIRM', 'PRESENTADA', 'tax_return.create', 'Presentar', 'Queda fijo lo declarado y se registra el asiento del impuesto.'),
+  t('TAX_RETURN', 'BORRADOR', 'CONFIRM', 'SIN_SALDO', 'tax_return.create', 'Presentar', 'Queda fijo lo declarado y se registra el asiento del impuesto.'),
+  t('TAX_RETURN', 'BORRADOR', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'La declaración queda sin efecto.', true, 'destructive'),
+  t('TAX_RETURN', 'PRESENTADA', 'PAY', 'PAGADA', 'tax_return.pay', 'Pagar', 'Paga el saldo al fisco (simulado) desde una caja o un banco: genera el asiento de pago.'),
+  t('TAX_RETURN', 'PRESENTADA', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
+  t('TAX_RETURN', 'SIN_SALDO', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
 ]
 
 export const ACTION_VERBS: Record<string, string> = {
@@ -732,6 +756,8 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'PRODUCTION_ORDER', status: 'LIBERADA', taskType: 'ENTREGAR_MATERIALES', assignee: 'ROLE', role: 'DEPOSITO', title: 'Entregar los materiales de {number}', description: 'Preparar los materiales reservados, entregarlos a Producción y registrar lo que sale de cada uno.' },
   { docType: 'PAYROLL', status: 'BORRADOR', taskType: 'CONFIRMAR_LIQ', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar las novedades del mes de cada empleado y confirmar la liquidación.' },
   { docType: 'PAYROLL', status: 'CONFIRMADA', taskType: 'PAGAR_SUELDOS', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar los sueldos de {number} por {total}', description: 'Transferir los netos a los empleados en la fecha de pago y registrar el pago.' },
+  { docType: 'TAX_RETURN', status: 'BORRADOR', taskType: 'PRESENTAR_DJ', assignee: 'CREATOR', title: 'Presentar {number}', description: 'Revisar los libros del mes y lo que sale a pagar o a favor, y presentar la declaración.' },
+  { docType: 'TAX_RETURN', status: 'PRESENTADA', taskType: 'PAGAR_DJ', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar el saldo de la declaración al fisco (simulado) antes del vencimiento y registrar el pago.' },
   { docType: 'PAYROLL', status: 'SUELDOS_PAGADOS', taskType: 'PAGAR_CARGAS_SOCIALES', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar las cargas sociales de {number}', description: 'Pagar los aportes retenidos y las contribuciones del mes antes del vencimiento, y registrar el pago.' },
   { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },
 ]
@@ -766,6 +792,8 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CONFIRMAR_LIQ: 'Confirmar liquidación',
   PAGAR_SUELDOS: 'Pagar sueldos',
   PAGAR_CARGAS_SOCIALES: 'Pagar cargas sociales',
+  PRESENTAR_DJ: 'Presentar declaración',
+  PAGAR_DJ: 'Pagar impuesto',
   REPONER_STOCK: 'Evaluar reposición',
   CONSIGNA: 'Consigna del docente',
 }
@@ -940,6 +968,21 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     keys: {
       // La contrapartida es la caja o el banco elegido, no una regla.
       CARGAS_SOCIALES_A_PAGAR: 'Aportes retenidos y contribuciones que se pagan',
+    },
+  },
+  IVA: {
+    label: 'IVA (declaración presentada)',
+    keys: {
+      IVA_DEBITO: 'Débito fiscal del mes',
+      IVA_CREDITO: 'Crédito fiscal que se usa',
+      IVA_A_PAGAR: 'Saldo a pagar',
+    },
+  },
+  PAGO_IVA: {
+    label: 'Pago de IVA (declaración)',
+    keys: {
+      // La contrapartida es la caja o el banco elegido, no una regla.
+      IVA_A_PAGAR: 'Saldo que se paga',
     },
   },
   CONVERSION_PRODUCCION: {

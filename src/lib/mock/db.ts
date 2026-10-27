@@ -85,7 +85,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 16
+export const DB_VERSION = 17
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -344,6 +344,11 @@ const UPGRADES: Record<number, (db: DB) => void> = {
           charges_paid_on: doc.py.charges_paid_on ?? null,
           charges_account_id: doc.py.charges_account_id ?? null,
         }
+  },
+  // v16 → v17: declaraciones de impuestos (Fase 7a): las reglas de los asientos del IVA y de su pago.
+  16: (db) => {
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
   },
 }
 

@@ -206,6 +206,10 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'SUELDOS', key: 'CARGAS_SOCIALES_A_PAGAR', code: '2.1.03.02' },
   { event: 'PAGO_SUELDOS', key: 'SUELDOS_A_PAGAR', code: '2.1.03.01' },
   { event: 'PAGO_CARGAS_SOCIALES', key: 'CARGAS_SOCIALES_A_PAGAR', code: '2.1.03.02' },
+  { event: 'IVA', key: 'IVA_DEBITO', code: '2.1.04.01' },
+  { event: 'IVA', key: 'IVA_CREDITO', code: '1.1.04.01' },
+  { event: 'IVA', key: 'IVA_A_PAGAR', code: '2.1.04.02' },
+  { event: 'PAGO_IVA', key: 'IVA_A_PAGAR', code: '2.1.04.02' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */

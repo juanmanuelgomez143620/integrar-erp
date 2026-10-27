@@ -52,6 +52,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
     createPerm: 'production_order.create',
   },
   PAYROLL: { area: 'RRHH', newLabel: 'Nueva liquidación', createPerm: 'payroll.create' },
+  TAX_RETURN: { area: 'Impuestos', newLabel: 'Nueva declaración', createPerm: 'tax_return.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -375,6 +376,30 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'TAX_RETURN') {
+    columns.push(
+      { key: 'period', header: 'Impuesto y mes', sort: (d) => d.tr!.period, cell: (d) => d.summary },
+      { key: 'due', header: 'Vence', sort: (d) => d.tr!.due_date, cell: (d) => date(d.tr!.due_date) },
+      {
+        key: 'tax',
+        header: 'Débito fiscal',
+        align: 'right',
+        sort: (d) => d.subtotal,
+        cell: (d) => <span className="tabular">{money(d.subtotal)}</span>,
+      },
+      {
+        key: 'due_amount',
+        header: 'A pagar (a favor)',
+        align: 'right',
+        sort: (d) => d.total - d.tr!.balance_in_favor,
+        cell: (d) => (
+          <span className="tabular font-medium">
+            {d.total > 0 ? money(d.total) : d.tr!.balance_in_favor ? `(${money(d.tr!.balance_in_favor)})` : money(0)}
+          </span>
+        ),
+      },
+    )
+  }
   if (docType === 'PRODUCTION_ORDER') {
     columns.push(
       {
@@ -534,7 +559,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
             ? 'Buscar por número o leyenda…'
             : docType === 'PRODUCTION_ORDER'
               ? 'Buscar por número o producto…'
-              : docType === 'PAYROLL'
+              : docType === 'PAYROLL' || docType === 'TAX_RETURN'
                 ? 'Buscar por número o mes…'
                 : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
                   ? 'Buscar por número, cliente, producto…'

@@ -3510,6 +3510,157 @@ describe('paridad de comandos', () => {
     await reads('después de pagar')
   })
 
+  it('declaración de IVA: preparar, presentar con su asiento, anular, separación de funciones y pago', async () => {
+    const companyPg = pg(company)
+    const month = (offset: number) => {
+      const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+      d.setUTCMonth(d.getUTCMonth() + offset)
+      return d.toISOString().slice(0, 7)
+    }
+    const from = `${todayAR().slice(0, 7)}-01`
+    const returns = () => mock.documents.filter((d) => d.company_id === company && d.doc_type === 'TAX_RETURN')
+    const reads = async (label: string) => {
+      for (const d of returns())
+        await sameRead(
+          `${d.display_number} ${label}`,
+          'contabilidad',
+          (b) => b.api.document(companyPg, 'TAX_RETURN', d.display_number),
+          (u) => Q.documentDetail(mock, u, company, 'TAX_RETURN', d.display_number),
+        )
+      await sameRead(
+        `declaraciones ${label}`,
+        'tesoreria',
+        (b) => b.api.documents(companyPg, 'TAX_RETURN'),
+        (u) => Q.listDocuments(mock, u, company, 'TAX_RETURN'),
+      )
+      for (const period of [month(-1), month(0)])
+        for (const sales of [true, false])
+          await sameRead(
+            `libro IVA ${sales ? 'ventas' : 'compras'} de ${period} ${label}`,
+            'contabilidad',
+            (b) => b.api.ivaBook(companyPg, period, sales),
+            (u) => Q.ivaBook(mock, u, company, period, sales),
+          )
+      await sameRead(
+        `flujo proyectado ${label}`,
+        'tesoreria',
+        (b) => b.api.cashProjection(companyPg),
+        (u) => Q.cashProjection(mock, u, company),
+      )
+      await sameRead(
+        `flujo real ${label}`,
+        'tesoreria',
+        (b) => b.api.cashFlow(companyPg, from, todayAR()),
+        (u) => Q.cashFlow(mock, u, company, from, todayAR()),
+      )
+    }
+    await reads('al empezar')
+
+    // Prepararla: quién, qué mes y en qué orden.
+    const input = (over: Partial<E.TaxReturnInput> = {}): E.TaxReturnInput => ({
+      tax: 'IVA',
+      period: month(-1),
+      notes: '',
+      ...over,
+    })
+    const create = (label: string, username: string, data: E.TaxReturnInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateTaxReturn(c, company, data),
+        (b) => b.commands.createTaxReturn(companyPg, data),
+      )
+    const createdReturn = (label: string, data: E.TaxReturnInput) =>
+      created(
+        label,
+        'contabilidad',
+        (c) => E.cmdCreateTaxReturn(c, company, data),
+        (b) => b.commands.createTaxReturn(companyPg, data),
+      )
+    expect(await create('Tesorería no la prepara', 'tesoreria', input())).toBeNull()
+    for (const [label, over] of [
+      ['un mes que no terminó', { period: month(0) }],
+      ['otro impuesto', { tax: 'IIBB' }],
+      ['un mes mal escrito', { period: '2026-1' }],
+      ['antes del inicio de actividades', { period: '2015-02' }],
+    ] as [string, Partial<E.TaxReturnInput>][])
+      expect(await create(label, 'contabilidad', input(over)), label).toBeNull()
+    const draft = await createdReturn('la del mes pasado', input())
+    expect(await create('otra del mismo mes', 'contabilidad', input())).toBeNull()
+    expect(await create('un mes anterior a la última', 'contabilidad', input({ period: month(-2) }))).toBeNull()
+
+    // Anular y presentar.
+    const cancel = (label: string, username: string, docId: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCancelTaxReturn(c, docId, reason),
+        (b) => b.commands.cancelTaxReturn(pg(docId), reason),
+      )
+    const present = (label: string, username: string, docId: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdPresentTaxReturn(c, docId),
+        (b) => b.commands.presentTaxReturn(pg(docId)),
+      )
+    expect(await cancel('el borrador sin motivo', 'contabilidad', draft, '')).toBeNull()
+    expect(await cancel('el borrador', 'contabilidad', draft, 'Faltaba revisar las compras')).not.toBeNull()
+    const first = await createdReturn('otra vez la del mes pasado', input({ notes: 'Revisada con los libros' }))
+    expect(await present('Tesorería no la presenta', 'tesoreria', first)).toBeNull()
+    expect(await present('presentarla', 'contabilidad', first)).not.toBeNull()
+    expect(await present('presentarla otra vez', 'contabilidad', first)).toBeNull()
+    expect(mock.documents.find((d) => d.id === first)!.status).toBe('PRESENTADA')
+    await reads('presentada')
+    expect(await cancel('anular la presentada sin motivo', 'contabilidad', first, ' ')).toBeNull()
+    expect(
+      await cancel('anularla con su contraasiento', 'contabilidad', first, 'Se rehace con una nota de crédito'),
+    ).not.toBeNull()
+    const second = await createdReturn('la del mes pasado, por tercera vez', input())
+    expect(await present('presentar la nueva', 'contabilidad', second)).not.toBeNull()
+
+    // Pagarla: quién, desde dónde y SoD-10.
+    const pay = (label: string, username: string, accountId: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdPayTaxReturn(c, second, accountId),
+        (b) => b.commands.payTaxReturn(pg(second), pg(accountId)),
+      )
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const due = () => mock.documents.find((d) => d.id === second)!.total
+    const short = mock.accounts.find(
+      (a) =>
+        a.company_id === company &&
+        a.is_active &&
+        a.is_imputable &&
+        a.code.startsWith('1.1.01.') &&
+        E.accountBalance(mock, a.id) < due(),
+    )!.id
+    expect(E.accountBalance(mock, account('1.1.01.03'))).toBeGreaterThan(due())
+    expect(await pay('Contabilidad no paga', 'contabilidad', account('1.1.01.03'))).toBeNull()
+    expect(await pay('desde una cuenta sin fondos', 'tesoreria', short)).toBeNull()
+    const tes = mock.sectors.find((s) => s.company_id === company && s.code === 'TES')!.id
+    await ok(
+      'el docente le suma Tesorería a Contabilidad',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('contabilidad'), 'TESORERIA', tes),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('contabilidad')), 'TESORERIA', pg(tes)),
+    )
+    await sameRead(
+      'las acciones de quien la liquidó',
+      'contabilidad',
+      (b) => b.api.document(companyPg, 'TAX_RETURN', mock.documents.find((d) => d.id === second)!.display_number),
+      (u) =>
+        Q.documentDetail(mock, u, company, 'TAX_RETURN', mock.documents.find((d) => d.id === second)!.display_number),
+    )
+    expect(await pay('pagar la que liquidó', 'contabilidad', account('1.1.01.03'))).toBeNull()
+    expect(await pay('pagarla', 'tesoreria', account('1.1.01.03'))).not.toBeNull()
+    expect(await pay('pagarla otra vez', 'tesoreria', account('1.1.01.03'))).toBeNull()
+    expect(await cancel('anular la pagada', 'contabilidad', second, 'Tarde')).toBeNull()
+    await reads('pagada')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -3531,6 +3682,7 @@ describe('paridad de comandos', () => {
       'SALES_QUOTE',
       'PRODUCTION_ORDER',
       'PAYROLL',
+      'TAX_RETURN',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

@@ -47,6 +47,7 @@ import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
 import { PayrollSection, periodLabel } from '@/features/hr/payroll'
 import { PayrollPayDialog } from '@/features/hr/payroll-pay-dialog'
+import { TaxReturnPayDialog, TaxReturnSection, taxTitle } from '@/features/tax/tax-return'
 import {
   FinishDialog,
   IssueDialog,
@@ -148,6 +149,11 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.confirmPayroll(id),
     CANCEL: (id, t) => commands.cancelPayroll(id, t),
   },
+  // Pagar tiene su propio diálogo: hay que elegir la caja o el banco.
+  TAX_RETURN: {
+    CONFIRM: (id) => commands.presentTaxReturn(id),
+    CANCEL: (id, t) => commands.cancelTaxReturn(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -169,6 +175,7 @@ const AREA: Record<DocType, string> = {
   SALES_QUOTE: 'Ventas',
   PRODUCTION_ORDER: 'Producción',
   PAYROLL: 'RRHH',
+  TAX_RETURN: 'Impuestos',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -442,7 +449,13 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               <TabsTrigger value="history">Historial ({detail.history.length})</TabsTrigger>
             </TabsList>
             <TabsContent value="detail" className="mt-3 flex flex-col gap-4">
-              {detail.payroll ? <PayrollSection detail={detail} /> : <Lines detail={detail} />}
+              {detail.payroll ? (
+                <PayrollSection detail={detail} />
+              ) : detail.tax_return ? (
+                <TaxReturnSection detail={detail} />
+              ) : (
+                <Lines detail={detail} />
+              )}
               {detail.production_order && detail.production_order.operations.length > 0 && (
                 <OperationsSection view={detail.production_order} />
               )}
@@ -553,6 +566,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
       {paying &&
         (detail.payroll ? (
           <PayrollPayDialog detail={detail} open={paying} onOpenChange={setPaying} />
+        ) : detail.tax_return ? (
+          <TaxReturnPayDialog detail={detail} open={paying} onOpenChange={setPaying} />
         ) : (
           <PayDialog detail={detail} open={paying} onOpenChange={setPaying} />
         ))}
@@ -947,6 +962,29 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Referencia del cliente">{so.customer_reference || '—'}</InfoRow>
         {doc.reference_label && <InfoRow label="Presupuesto">{doc.reference_label}</InfoRow>}
         <InfoRow label="Vendió">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'TAX_RETURN' && detail.tax_return) {
+    const tr = detail.tax_return
+    return (
+      <dl className={grid}>
+        <InfoRow label="Declaración">{taxTitle(tr.tax, tr.period)}</InfoRow>
+        <InfoRow label="Vence">{date(tr.due_date)}</InfoRow>
+        <InfoRow label={tr.amount_due > 0 ? 'Saldo a pagar' : 'Saldo a favor'}>
+          <span className="font-semibold">{money(tr.amount_due > 0 ? tr.amount_due : tr.balance_in_favor)}</span>
+          {tr.amount_due > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {tr.paid_on ? ` · pagado el ${date(tr.paid_on)} desde ${tr.paid_account?.name}` : ' · sin pagar'}
+            </span>
+          )}
+          {tr.amount_due === 0 && <span className="text-xs text-muted-foreground"> · para el mes siguiente</span>}
+        </InfoRow>
+        <InfoRow label="Presentada">{tr.presented_at ? dateTime(tr.presented_at) : 'Todavía no'}</InfoRow>
+        <InfoRow label="Preparó">
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}

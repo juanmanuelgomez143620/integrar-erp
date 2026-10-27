@@ -25,6 +25,7 @@ export type ModuleCode =
   | 'inventory'
   | 'production'
   | 'hr'
+  | 'tax'
   | 'payables'
   | 'accounting'
   | 'management'
@@ -56,6 +57,7 @@ export type DocType =
   | 'SALES_QUOTE'
   | 'PRODUCTION_ORDER'
   | 'PAYROLL'
+  | 'TAX_RETURN'
 
 /** Cómo se pagó una orden de pago o se cobró un recibo. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -320,6 +322,33 @@ export interface PayrollHeader {
   /** El de los aportes retenidos y las contribuciones. */
   charges_paid_on: string | null
   charges_account_id: string | null
+}
+
+/** Los impuestos que la empresa liquida por mes (Fase 7): el IVA y, desde la 7b, ingresos brutos. */
+export type TaxCode = 'IVA' | 'IIBB'
+
+/**
+ * Declaración mensual de un impuesto (tabla tax_returns, 1 a 1 con documents), simulada:
+ * lo que se calculó de los libros del mes y el saldo que queda a pagar o a favor (que es
+ * documents.total y el saldo a favor de la del mes siguiente).
+ */
+export interface TaxReturnHeader {
+  tax: TaxCode
+  /** El mes declarado: aaaa-mm. */
+  period: string
+  due_date: string
+  /** El impuesto del mes: en el IVA, el débito fiscal. */
+  tax_amount: number
+  /** Lo que se descuenta: en el IVA, el crédito fiscal del mes. */
+  credits: number
+  /** El saldo a favor de la declaración del mes anterior. */
+  previous_balance: number
+  /** Lo que queda a favor para el mes siguiente (0 si hay saldo a pagar). */
+  balance_in_favor: number
+  presented_at: string | null
+  /** El pago (si hubo saldo a pagar): el día y la caja o el banco. */
+  paid_on: string | null
+  paid_account_id: string | null
 }
 
 /** Lo de un empleado en una liquidación: sus novedades y los importes calculados. */
@@ -722,6 +751,7 @@ export interface Document extends Audited {
   qt?: SalesQuoteHeader
   pd?: ProductionOrderHeader
   py?: PayrollHeader
+  tr?: TaxReturnHeader
 }
 
 export interface RequisitionLine {

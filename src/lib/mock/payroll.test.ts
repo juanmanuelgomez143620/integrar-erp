@@ -385,6 +385,7 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
       'COBROS',
       'PAGOS',
       'SUELDOS',
+      'IMPUESTOS',
       'TRANSFERENCIAS',
       'OTROS',
     ])

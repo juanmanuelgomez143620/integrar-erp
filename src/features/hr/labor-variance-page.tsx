@@ -8,18 +8,12 @@ import { Field, KpiCard, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { DocStatus } from '@/components/common/status-badge'
 import { api, type LaborVariance } from '@/lib/api'
-import { money, qty, todayAR } from '@/lib/format'
+import { lastMonthAR, money, qty, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
 import { periodLabel } from './payroll'
 
 const head = 'h-9 text-xs font-semibold text-slate-600'
-
-/** El mes anterior a hoy (aaaa-mm): el último que suele estar liquidado. */
-function lastMonth() {
-  const [y, m] = todayAR().slice(0, 7).split('-').map(Number)
-  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
-}
 
 /** "sobreaplicada" o "subaplicada": la mano de obra que se cargó de más o de menos al costo. */
 const variance = (difference: number) =>
@@ -31,7 +25,7 @@ const variance = (difference: number) =>
  */
 export function LaborVariancePage() {
   const company = useCompany()
-  const [period, setPeriod] = useState(lastMonth())
+  const [period, setPeriod] = useState(lastMonthAR())
   const valid = /^\d{4}-(0[1-9]|1[0-2])$/.test(period)
   const { data, error } = useQuery({
     queryKey: ['labor-variance', company.companyId, period],
