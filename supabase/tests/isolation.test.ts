@@ -105,6 +105,7 @@ async function snapshot(company: string) {
     'work_centers',
     'bom_operations',
     'production_order_operations',
+    'labor_agreements',
     'job_categories',
     'employees',
     'payrolls',
@@ -241,6 +242,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     last_name: 'Externo',
     hire_date: '2027-03-01',
     category_id: B.jobCategory,
+    agreement_id: B.agreement,
     sector_id: B.sector,
     work_center_id: B.workCenter,
   }
@@ -295,6 +297,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_work_center_id: B.workCenter,
     p_hours: JSON.stringify([{ operation_id: B.productionOperation, hours: 1 }]),
     p_job_category_id: B.jobCategory,
+    p_agreement_id: B.agreement,
     p_employee_id: B.employee,
     p_date: '2027-05-01',
     p_lines: JSON.stringify([
@@ -652,6 +655,9 @@ beforeAll(async () => {
     ])
   ).id
 
+  B.agreement = (
+    await one(`select id from public.labor_agreements where company_id = $1 and code = 'MADERA'`, [B.id])
+  ).id
   B.jobCategory = (
     await one(`select id from public.job_categories where company_id = $1 and code = 'OFICIAL'`, [B.id])
   ).id
@@ -717,6 +723,7 @@ beforeAll(async () => {
          union select id::text from public.work_centers where company_id = $1
          union select id::text from public.bom_operations where company_id = $1
          union select id::text from public.production_order_operations where company_id = $1
+         union select id::text from public.labor_agreements where company_id = $1
          union select id::text from public.job_categories where company_id = $1
          union select id::text from public.employees where company_id = $1
          union select id::text from public.payroll_lines where company_id = $1

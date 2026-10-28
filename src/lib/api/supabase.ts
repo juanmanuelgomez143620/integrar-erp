@@ -282,6 +282,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     workCenters: (companyId) => rpc('work_centers_list', company(companyId)),
     productionCosts: (companyId, from, to) =>
       rpc('production_costs', { ...company(companyId), p_from: from, p_to: to }),
+    laborAgreements: (companyId) => rpc('labor_agreements_list', company(companyId)),
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
     employees: (companyId) => rpc('employees_list', company(companyId)),
     laborVariance: (companyId, period) => rpc('labor_variance', { ...company(companyId), p_period: period }),
@@ -422,6 +423,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     cancelProductionOrder: (docId, reason) => rpc('opr_cancel', { ...doc(docId), p_reason: reason }),
     requestProductionMaterials: (companyId, documentIds) =>
       rpc('opr_request_materials', { ...company(companyId), p_document_ids: documentIds }),
+    saveLaborAgreement: (companyId, input) => rpc('labor_agreement_save', { ...company(companyId), p_input: input }),
+    setLaborAgreementActive: (companyId, agreementId, active) =>
+      rpc('labor_agreement_set_active', { ...company(companyId), p_agreement_id: agreementId, p_active: active }),
     saveJobCategory: (companyId, input) => rpc('job_category_save', { ...company(companyId), p_input: input }),
     setJobCategoryActive: (companyId, categoryId, active) =>
       rpc('job_category_set_active', { ...company(companyId), p_job_category_id: categoryId, p_active: active }),

@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 7a).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 6d).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261026120200_demo_template_iva.sql'
+const target = process.argv[2] ?? '20261028120200_demo_template_convenios.sql'
 
 const server = await createServer({
   root,
@@ -40,7 +40,10 @@ try {
   const { buildSeed } = await server.ssrLoadModule('/src/lib/mock/seed.ts')
   const chart = await server.ssrLoadModule('/src/lib/domain/chart-of-accounts.ts')
   const { DEMO_BOMS, DEMO_BOM_OPERATIONS, DEMO_WORK_CENTERS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
-  const { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES } = await server.ssrLoadModule('/src/lib/domain/employees.ts')
+  const { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } =
+    await server.ssrLoadModule('/src/lib/domain/employees.ts')
+  const driver = DEMO_EMPLOYEES.find((e) => e.category === 'CHOFER')
+  if (!driver) throw new Error('El personal de la demo no tiene chofer')
   const bomOperationRows = DEMO_BOM_OPERATIONS.flatMap((b) =>
     b.operations.map(([center, hours], i) => ({ product: b.product, line_no: i + 1, center, hours })),
   )
@@ -306,28 +309,69 @@ end;
 $$;
 
 -- ------------------------------------------------------------------ El personal de la demo (a validar)
-create or replace function private.demo_job_category_rows()
-returns table (code text, name text, basic_salary numeric, is_direct_labor boolean)
+-- Las horas de un mes completo de quien cobra por hora (MONTH_HOURS).
+create or replace function private.month_hours()
+returns numeric
+language sql
+immutable
+set search_path = ''
+as $$ select ${MONTH_HOURS}::numeric $$;
+
+create or replace function private.demo_labor_agreement_rows()
+returns table (code text, name text, union_name text, pay_basis text, seniority_pct numeric, attendance_pct numeric,
+               union_pct numeric, union_employer_pct numeric)
 language sql
 immutable
 set search_path = ''
 as $$
-  select c.code::text, c.name::text, c.basic_salary::numeric, c.is_direct_labor::boolean
+  select a.code::text, a.name::text, a.union_name::text, a.pay_basis::text, a.seniority_pct::numeric,
+         a.attendance_pct::numeric, a.union_pct::numeric, a.union_employer_pct::numeric
     from (values
-${values(DEMO_JOB_CATEGORIES, ['code', 'name', 'basic_salary', 'is_direct_labor'])}
-    ) as c (code, name, basic_salary, is_direct_labor)
+${values(DEMO_LABOR_AGREEMENTS, ['code', 'name', 'union_name', 'pay_basis', 'seniority_pct', 'attendance_pct', 'union_pct', 'union_employer_pct'])}
+    ) as a (code, name, union_name, pay_basis, seniority_pct, attendance_pct, union_pct, union_employer_pct)
 $$;
 
--- Las categorías de la demo que la empresa todavía no tiene, por código (insertJobCategories).
+-- Los convenios de la demo que la empresa todavía no tiene, por código (insertLaborAgreements).
+create or replace function private.insert_demo_labor_agreements(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.labor_agreements (company_id, code, name, union_name, pay_basis, seniority_pct, attendance_pct,
+                                       union_pct, union_employer_pct)
+  select p_company, r.code, r.name, r.union_name, r.pay_basis, r.seniority_pct, r.attendance_pct, r.union_pct,
+         r.union_employer_pct
+    from private.demo_labor_agreement_rows() r
+   where not exists (select 1 from public.labor_agreements a where a.company_id = p_company and a.code = r.code)
+$$;
+
+-- Ahora cada categoría trae su convenio: cambia lo que devuelve, así que se vuelve a crear.
+drop function if exists private.demo_job_category_rows();
+create or replace function private.demo_job_category_rows()
+returns table (code text, name text, agreement text, basic_salary numeric, is_direct_labor boolean)
+language sql
+immutable
+set search_path = ''
+as $$
+  select c.code::text, c.name::text, c.agreement::text, c.basic_salary::numeric, c.is_direct_labor::boolean
+    from (values
+${values(DEMO_JOB_CATEGORIES, ['code', 'name', 'agreement', 'basic_salary', 'is_direct_labor'])}
+    ) as c (code, name, agreement, basic_salary, is_direct_labor)
+$$;
+
+-- Las categorías de la demo que la empresa todavía no tiene, por código, cada una en su
+-- convenio; si la empresa no tiene ese convenio, esa no (insertJobCategories).
 create or replace function private.insert_demo_job_categories(p_company uuid)
 returns void
 language sql
 security definer
 set search_path = ''
 as $$
-  insert into public.job_categories (company_id, code, name, basic_salary, is_direct_labor)
-  select p_company, r.code, r.name, r.basic_salary, r.is_direct_labor
+  insert into public.job_categories (company_id, code, name, agreement_id, basic_salary, is_direct_labor)
+  select p_company, r.code, r.name, a.id, r.basic_salary, r.is_direct_labor
     from private.demo_job_category_rows() r
+    join public.labor_agreements a on a.company_id = p_company and a.code = r.agreement
    where not exists (select 1 from public.job_categories c where c.company_id = p_company and c.code = r.code)
 $$;
 
@@ -363,6 +407,25 @@ as $$
     left join public.work_centers w on w.company_id = p_company and w.code = r.work_center
    where not exists (select 1 from public.employees x where x.company_id = p_company)
      and (r.work_center is null or w.id is not null)
+$$;
+
+-- El chofer de la demo (Fase 6d) en una empresa que ya tiene personal pero ningún chofer:
+-- con el número de legajo siguiente (insertDriver).
+create or replace function private.insert_demo_driver(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.employees (company_id, file_number, first_name, last_name, hire_date, category_id, sector_id)
+  select p_company, (select max(x.file_number) + 1 from public.employees x where x.company_id = p_company),
+         r.first_name, r.last_name, r.hire_date, c.id, s.id
+    from private.demo_employee_rows() r
+    join public.job_categories c on c.company_id = p_company and c.code = r.category
+    join public.sectors s on s.company_id = p_company and s.code = r.sector
+   where r.category = ${sql(driver.category)}
+     and exists (select 1 from public.employees x where x.company_id = p_company)
+     and not exists (select 1 from public.employees x where x.category_id = c.id)
 $$;
 
 -- ------------------------------------------------------------------ Empresa plantilla
@@ -453,7 +516,8 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
   perform private.insert_demo_work_centers(v_id);
   perform private.insert_demo_boms(v_id);
   perform private.insert_demo_bom_operations(v_id);
-  -- El personal: categorías y legajos (a validar).
+  -- El personal: convenios, categorías y legajos (a validar).
+  perform private.insert_demo_labor_agreements(v_id);
   perform private.insert_demo_job_categories(v_id);
   perform private.insert_demo_employees(v_id);
 
@@ -471,7 +535,7 @@ $$;
   console.log(
     `${file}\n${sectors.length} sectores · ${warehouses.length} depósitos · ${suppliers.length} proveedores · ` +
       `${of(db.customers).length} clientes · ${products.length} productos · ${initial.length} ajustes de inventario inicial · ` +
-      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales · ${DEMO_WORK_CENTERS.length} centros de trabajo · ${DEMO_JOB_CATEGORIES.length} categorías · ${DEMO_EMPLOYEES.length} legajos`,
+      `${accounts.length} cuentas · ${DEMO_BOMS.length} listas de materiales · ${DEMO_WORK_CENTERS.length} centros de trabajo · ${DEMO_LABOR_AGREEMENTS.length} convenios · ${DEMO_JOB_CATEGORIES.length} categorías · ${DEMO_EMPLOYEES.length} legajos`,
   )
 } finally {
   await server.close()

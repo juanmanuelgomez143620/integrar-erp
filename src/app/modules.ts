@@ -188,6 +188,7 @@ export const NAV: NavGroup[] = [
       { label: 'Legajos', path: 'rrhh/legajos', icon: IdCard, permission: 'employee.read' },
       { label: 'Liquidaciones', path: 'rrhh/liquidaciones', icon: Coins, permission: 'payroll.read' },
       { label: 'Categorías', path: 'rrhh/categorias', icon: BriefcaseBusiness, permission: 'employee.read' },
+      { label: 'Convenios', path: 'rrhh/convenios', icon: Handshake, permission: 'employee.read' },
     ],
   },
   {

@@ -522,7 +522,8 @@ export function buildScenario(): DB {
     id: '',
     code: 'LUSTRADOR',
     name: 'Lustrador',
-    basic_salary: 1150000,
+    agreement_id: inCompany(db.laborAgreements, 'MADERA').id,
+    basic_salary: 6500,
     is_direct_labor: true,
   })
   E.cmdSetJobCategoryActive(as('rrhh'), company, inCompany(db.jobCategories, 'OPERARIO').id, false)
@@ -551,9 +552,11 @@ export function buildScenario(): DB {
     notes: '',
   })
   const lastLines = E.payrollLines(db, lastMonth.id)
+  // Dos del taller (por hora) y una administrativa (por mes).
   E.cmdUpdatePayrollLines(as('rrhh'), lastMonth.id, [
-    { line_id: lastLines[1].id, days_worked: 28, absence_days: 2, overtime_50: 4, overtime_100: 0 },
-    { line_id: lastLines[2].id, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 3.5 },
+    { line_id: lastLines[1].id, days_worked: 0, hours_worked: 160, absence_days: 2, overtime_50: 4, overtime_100: 0 },
+    { line_id: lastLines[2].id, days_worked: 0, hours_worked: 176, absence_days: 0, overtime_50: 0, overtime_100: 3.5 },
+    { line_id: lastLines[3].id, days_worked: 28, hours_worked: 0, absence_days: 2, overtime_50: 2, overtime_100: 0 },
   ])
   E.cmdConfirmPayroll(as('rrhh'), lastMonth.id)
   E.cmdPayPayrollSalaries(

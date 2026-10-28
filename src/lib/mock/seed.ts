@@ -5,7 +5,7 @@
 // demo usan la contraseña DEMO_PASSWORD.
 
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
-import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES } from '../domain/employees'
+import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS } from '../domain/employees'
 import type * as T from '../domain/types'
 import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
@@ -30,6 +30,7 @@ import {
   insertBoms,
   insertEmployees,
   insertJobCategories,
+  insertLaborAgreements,
   insertWorkCenters,
   scanStockAlerts,
   startAccounting,
@@ -107,6 +108,7 @@ export function buildSeed(): DB {
     workCenters: [],
     bomOperations: [],
     prdOperations: [],
+    laborAgreements: [],
     jobCategories: [],
     employees: [],
     pyLines: [],
@@ -441,7 +443,8 @@ export function buildSeed(): DB {
   insertBoms(ctx(null, 289), companyId, DEMO_BOMS)
   insertBomOperations(ctx(null, 289), companyId, DEMO_BOM_OPERATIONS)
 
-  // ------------------------------------------------------------ El personal: categorías y legajos (a validar)
+  // ------------------------------------------------------------ El personal: convenios, categorías y legajos (a validar)
+  insertLaborAgreements(ctx(null, 289), companyId, DEMO_LABOR_AGREEMENTS)
   insertJobCategories(ctx(null, 289), companyId, DEMO_JOB_CATEGORIES)
   insertEmployees(ctx(null, 289), companyId, DEMO_EMPLOYEES)
 

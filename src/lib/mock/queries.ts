@@ -1079,7 +1079,7 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
     case 'PAYROLL:BORRADOR':
       return {
         who: 'RRHH',
-        text: 'Cargar las novedades del mes de cada empleado (días trabajados, ausencias sin aviso y horas extra), revisar los recibos y confirmar la liquidación: se registra el asiento de sueldos.',
+        text: 'Cargar las novedades del mes de cada empleado (los días o las horas trabajadas, las ausencias sin aviso y las horas extra), revisar los recibos y confirmar la liquidación: se registra el asiento de sueldos.',
       }
     case 'PAYROLL:CONFIRMADA':
       return {
@@ -1089,7 +1089,7 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
     case 'PAYROLL:SUELDOS_PAGADOS':
       return {
         who: 'Tesorería',
-        text: `Pagar las cargas sociales antes del ${date(chargesDue(doc.py!.period))}: ${money(payrollCharges(db, doc.id))} entre los aportes retenidos a los empleados y las contribuciones de la empresa.`,
+        text: `Pagar las cargas sociales antes del ${date(chargesDue(doc.py!.period))}: ${money(payrollCharges(db, doc.id))} entre los aportes retenidos a los empleados, las contribuciones de la empresa y lo de los sindicatos.`,
       }
     case 'TAX_RETURN:BORRADOR':
       return {
@@ -1809,10 +1809,18 @@ export interface PayrollLineView {
   category: { id: string; code: string; name: string }
   sector: { id: string; code: string; name: string }
   work_center: { id: string; code: string; name: string } | null
+  /** El convenio que copió la línea (null en las liquidaciones de antes de la Fase 6d). */
+  agreement: { id: string; code: string; name: string; union_name: string } | null
+  pay_basis: T.PayBasis
+  seniority_pct: number
+  attendance_pct: number
+  union_pct: number
+  union_employer_pct: number
   basic_salary: number
   seniority_years: number
   is_direct_labor: boolean
   days_worked: number
+  hours_worked: number
   absence_days: number
   overtime_50: number
   overtime_100: number
@@ -1824,9 +1832,11 @@ export interface PayrollLineView {
   retirement: number
   pami: number
   health: number
+  union_dues: number
   deductions: number
   net: number
   employer: number
+  union_contribution: number
 }
 
 /** La liquidación: el mes, los porcentajes, los totales y lo de cada empleado. */
@@ -1839,7 +1849,10 @@ export interface PayrollView {
   deductions: number
   net: number
   employer: number
-  /** Lo que le cuesta a la empresa: el remunerativo más las contribuciones. */
+  /** Los aportes sindicales retenidos y las contribuciones de los convenios. */
+  union_dues: number
+  union_contribution: number
+  /** Lo que le cuesta a la empresa: el remunerativo más las contribuciones (las patronales y las de los convenios). */
   cost: number
   /** La parte del taller: la mano de obra directa real. */
   direct_labor: number
@@ -1871,12 +1884,14 @@ function payrollView(db: DB, doc: T.Document): PayrollView {
     deductions: sum((l) => l.deductions),
     net: sum((l) => l.net),
     employer: sum((l) => l.employer),
-    cost: sum((l) => l.gross + l.employer),
+    union_dues: sum((l) => l.union_dues),
+    union_contribution: sum((l) => l.union_contribution),
+    cost: sum((l) => l.gross + l.employer + l.union_contribution),
     direct_labor: sum(
-      (l) => l.gross + l.employer,
+      (l) => l.gross + l.employer + l.union_contribution,
       lines.filter((l) => l.is_direct_labor),
     ),
-    charges: sum((l) => l.deductions + l.employer),
+    charges: sum((l) => l.deductions + l.employer + l.union_contribution),
     charges_due: chargesDue(doc.py!.period),
     salaries_paid_on: doc.py!.salaries_paid_on,
     salaries_account: account(doc.py!.salaries_account_id),
@@ -1887,6 +1902,7 @@ function payrollView(db: DB, doc: T.Document): PayrollView {
       const c = db.jobCategories.find((x) => x.id === l.category_id)!
       const s = db.sectors.find((x) => x.id === e.sector_id)!
       const w = l.work_center_id ? db.workCenters.find((x) => x.id === l.work_center_id)! : null
+      const a = l.agreement_id ? db.laborAgreements.find((x) => x.id === l.agreement_id) : undefined
       return {
         id: l.id,
         line_no: l.line_no,
@@ -1900,10 +1916,17 @@ function payrollView(db: DB, doc: T.Document): PayrollView {
         category: { id: c.id, code: c.code, name: c.name },
         sector: { id: s.id, code: s.code, name: s.name },
         work_center: w ? { id: w.id, code: w.code, name: w.name } : null,
+        agreement: a ? { id: a.id, code: a.code, name: a.name, union_name: a.union_name } : null,
+        pay_basis: l.pay_basis,
+        seniority_pct: l.seniority_pct,
+        attendance_pct: l.attendance_pct,
+        union_pct: l.union_pct,
+        union_employer_pct: l.union_employer_pct,
         basic_salary: l.basic_salary,
         seniority_years: l.seniority_years,
         is_direct_labor: l.is_direct_labor,
         days_worked: l.days_worked,
+        hours_worked: l.hours_worked,
         absence_days: l.absence_days,
         overtime_50: l.overtime_50,
         overtime_100: l.overtime_100,
@@ -1915,9 +1938,11 @@ function payrollView(db: DB, doc: T.Document): PayrollView {
         retirement: l.retirement,
         pami: l.pami,
         health: l.health,
+        union_dues: l.union_dues,
         deductions: l.deductions,
         net: l.net,
         employer: l.employer,
+        union_contribution: l.union_contribution,
       }
     }),
   }
@@ -4328,7 +4353,7 @@ export interface LaborVarianceRow {
   hours: number
   /** Lo aplicado a esas órdenes: las horas por la tarifa que copió cada una. */
   applied: number
-  /** Lo real: el remunerativo más las contribuciones del personal del centro en la liquidación del mes. */
+  /** Lo real: el remunerativo más las contribuciones (las patronales y las del convenio) del personal del centro en la liquidación del mes. */
   real: number
   employees: number
   /** Aplicada menos real: si es positiva, sobreaplicada; si es negativa, subaplicada. */
@@ -4378,7 +4403,7 @@ export function laborVariance(db: DB, userId: string, companyId: string, period:
       const ops = operations.filter((o) => o.work_center_id === id)
       const staff = lines.filter((l) => l.work_center_id === id)
       const applied = round2(ops.reduce((s, o) => s + round2(hoursOf(o) * o.labor_rate), 0))
-      const real = round2(staff.reduce((s, l) => s + l.gross + l.employer, 0))
+      const real = round2(staff.reduce((s, l) => s + l.gross + l.employer + l.union_contribution, 0))
       return {
         work_center: w ? { id: w.id, code: w.code, name: w.name, labor_rate: w.labor_rate } : null,
         hours: round3(ops.reduce((s, o) => s + hoursOf(o), 0)),
@@ -4470,10 +4495,34 @@ export function productionNeedsView(
   }))
 }
 
+export interface LaborAgreementRow extends T.LaborAgreement {
+  /** Categorías del convenio y su personal activo. */
+  categories: number
+  employees: number
+}
+
+/** Los convenios colectivos de la empresa, por código (docs/FASE_6D_CONVENIOS.md). */
+export function listLaborAgreements(db: DB, userId: string, companyId: string): LaborAgreementRow[] {
+  assertPerm(db, userId, companyId, 'employee.read')
+  return db.laborAgreements
+    .filter((a) => a.company_id === companyId)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((a) => {
+      const categories = db.jobCategories.filter((c) => c.agreement_id === a.id).map((c) => c.id)
+      return {
+        ...a,
+        categories: categories.length,
+        employees: db.employees.filter((e) => categories.includes(e.category_id) && e.status === 'ACTIVO').length,
+      }
+    })
+}
+
 export interface JobCategoryRow {
   id: string
   code: string
   name: string
+  agreement: { id: string; code: string; name: string; pay_basis: T.PayBasis }
+  /** Básico mensual o, en un convenio por hora, valor hora. */
   basic_salary: number
   is_direct_labor: boolean
   is_active: boolean
@@ -4481,21 +4530,25 @@ export interface JobCategoryRow {
   employees: number
 }
 
-/** Las categorías del personal, con cuánta gente activa tiene cada una (docs/FASE_6_RRHH_Y_SUELDOS.md §2). */
+/** Las categorías del personal, con su convenio y cuánta gente activa tiene cada una (docs/FASE_6_RRHH_Y_SUELDOS.md §2). */
 export function listJobCategories(db: DB, userId: string, companyId: string): JobCategoryRow[] {
   assertPerm(db, userId, companyId, 'employee.read')
   return db.jobCategories
     .filter((c) => c.company_id === companyId)
     .sort((a, b) => compareCodes(a.code, b.code))
-    .map((c) => ({
-      id: c.id,
-      code: c.code,
-      name: c.name,
-      basic_salary: c.basic_salary,
-      is_direct_labor: c.is_direct_labor,
-      is_active: c.is_active,
-      employees: db.employees.filter((e) => e.category_id === c.id && e.status === 'ACTIVO').length,
-    }))
+    .map((c) => {
+      const a = db.laborAgreements.find((x) => x.id === c.agreement_id)!
+      return {
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        agreement: { id: a.id, code: a.code, name: a.name, pay_basis: a.pay_basis },
+        basic_salary: c.basic_salary,
+        is_direct_labor: c.is_direct_labor,
+        is_active: c.is_active,
+        employees: db.employees.filter((e) => e.category_id === c.id && e.status === 'ACTIVO').length,
+      }
+    })
 }
 
 export interface EmployeeRow {
@@ -4509,7 +4562,16 @@ export interface EmployeeRow {
   status: T.EmployeeStatus
   termination_date: string | null
   termination_reason: string
-  category: { id: string; code: string; name: string; basic_salary: number; is_direct_labor: boolean }
+  category: {
+    id: string
+    code: string
+    name: string
+    basic_salary: number
+    is_direct_labor: boolean
+    /** El convenio de la categoría: su código y cómo paga. */
+    agreement_code: string
+    pay_basis: T.PayBasis
+  }
   sector: { id: string; code: string; name: string }
   work_center: { id: string; code: string; name: string } | null
 }
@@ -4523,6 +4585,7 @@ export function listEmployees(db: DB, userId: string, companyId: string): Employ
     .sort((a, b) => a.file_number - b.file_number)
     .map((e) => {
       const c = db.jobCategories.find((x) => x.id === e.category_id)!
+      const a = db.laborAgreements.find((x) => x.id === c.agreement_id)!
       const s = db.sectors.find((x) => x.id === e.sector_id)!
       const w = e.work_center_id ? db.workCenters.find((x) => x.id === e.work_center_id)! : null
       return {
@@ -4541,6 +4604,8 @@ export function listEmployees(db: DB, userId: string, companyId: string): Employ
           name: c.name,
           basic_salary: c.basic_salary,
           is_direct_labor: c.is_direct_labor,
+          agreement_code: a.code,
+          pay_basis: a.pay_basis,
         },
         sector: { id: s.id, code: s.code, name: s.name },
         work_center: w ? { id: w.id, code: w.code, name: w.name } : null,

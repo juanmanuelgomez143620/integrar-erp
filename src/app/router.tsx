@@ -61,6 +61,7 @@ const ProductionNeedsPage = lazyPage(() =>
 )
 const EmployeesPage = lazyPage(() => import('@/features/hr/employees-page').then((m) => m.EmployeesPage))
 const JobCategoriesPage = lazyPage(() => import('@/features/hr/categories-page').then((m) => m.JobCategoriesPage))
+const LaborAgreementsPage = lazyPage(() => import('@/features/hr/agreements-page').then((m) => m.LaborAgreementsPage))
 const PayrollFormPage = lazyPage(() => import('@/features/hr/payroll').then((m) => m.PayrollFormPage))
 const LaborVariancePage = lazyPage(() => import('@/features/hr/labor-variance-page').then((m) => m.LaborVariancePage))
 const TaxReturnFormPage = lazyPage(() => import('@/features/tax/tax-return').then((m) => m.TaxReturnFormPage))
@@ -225,6 +226,7 @@ export const router = createBrowserRouter(
                 { path: 'produccion/necesidades', element: <ProductionNeedsPage /> },
                 { path: 'rrhh/legajos', element: <EmployeesPage /> },
                 { path: 'rrhh/categorias', element: <JobCategoriesPage /> },
+                { path: 'rrhh/convenios', element: <LaborAgreementsPage /> },
                 { path: 'rrhh/liquidaciones', element: <DocumentListPage key="py" docType="PAYROLL" /> },
                 { path: 'rrhh/liquidaciones/nueva', element: <PayrollFormPage /> },
                 { path: 'rrhh/liquidaciones/:number', element: <DocumentPage key="py" docType="PAYROLL" /> },

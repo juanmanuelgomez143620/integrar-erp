@@ -15,13 +15,14 @@ import { Input } from '@/components/ui/input'
 import { DataTable } from '@/components/common/data-table'
 import { Field, Mono } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
+import { SimpleSelect } from '@/components/common/pickers'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, commands, type JobCategoryRow } from '@/lib/api'
+import { api, commands, type JobCategoryRow, type LaborAgreementRow } from '@/lib/api'
 import { money, parseAmount } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 
-/** Las categorías del personal, con su sueldo básico mensual (docs/FASE_6_RRHH_Y_SUELDOS.md §2). */
+/** Las categorías del personal, cada una en un convenio, con su básico o su valor hora (docs/FASE_6D_CONVENIOS.md). */
 export function JobCategoriesPage() {
   const company = useCompany()
   const [editing, setEditing] = useState<JobCategoryRow | 'new' | null>(null)
@@ -33,13 +34,17 @@ export function JobCategoriesPage() {
     queryKey: ['job-categories', company.companyId],
     queryFn: () => api.jobCategories(company.companyId),
   })
+  const agreements = useQuery({
+    queryKey: ['labor-agreements', company.companyId],
+    queryFn: () => api.laborAgreements(company.companyId),
+  })
   const canEdit = company.can('employee.update')
   return (
     <>
       <PageHeader
         crumbs={[{ label: 'Inicio', to: company.to() }, { label: 'RRHH' }, { label: 'Categorías' }]}
         title="Categorías del personal"
-        description="Un convenio simplificado: el sueldo básico mensual de cada categoría. Las del taller son mano de obra directa: su gente trabaja en un centro de trabajo."
+        description="Cada categoría es de un convenio: en uno por mes tiene sueldo básico mensual; en uno por hora (jornalizados), valor hora. Las del taller son mano de obra directa: su gente trabaja en un centro de trabajo."
         actions={
           canEdit ? (
             <Button onClick={() => setEditing('new')}>
@@ -53,7 +58,7 @@ export function JobCategoriesPage() {
         loading={isLoading}
         error={error}
         rowKey={(r) => r.id}
-        search={(r) => `${r.code} ${r.name}`}
+        search={(r) => `${r.code} ${r.name} ${r.agreement.code}`}
         searchPlaceholder="Buscar categoría…"
         onRowClick={canEdit ? (r) => setEditing(r) : undefined}
         empty="Todavía no hay categorías: sin ellas no se dan de alta legajos."
@@ -61,11 +66,24 @@ export function JobCategoriesPage() {
           { key: 'code', header: 'Código', sort: (r) => r.code, cell: (r) => <Mono>{r.code}</Mono> },
           { key: 'name', header: 'Categoría', sort: (r) => r.name, cell: (r) => r.name },
           {
+            key: 'agreement',
+            header: 'Convenio',
+            sort: (r) => r.agreement.code,
+            cell: (r) => <span className="text-xs">{r.agreement.name}</span>,
+          },
+          {
             key: 'salary',
-            header: 'Sueldo básico',
+            header: 'Básico o valor hora',
             align: 'right',
             sort: (r) => r.basic_salary,
-            cell: (r) => <span className="tabular">{money(r.basic_salary)}</span>,
+            cell: (r) => (
+              <span className="tabular">
+                {money(r.basic_salary)}
+                <span className="text-xs text-muted-foreground">
+                  {r.agreement.pay_basis === 'HOURLY' ? ' por hora' : ' por mes'}
+                </span>
+              </span>
+            ),
           },
           {
             key: 'direct',
@@ -88,6 +106,7 @@ export function JobCategoriesPage() {
       />
       {editing && (
         <CategoryDialog
+          agreements={agreements.data ?? []}
           category={editing === 'new' ? null : editing}
           open={!!editing}
           onOpenChange={(o) => !o && setEditing(null)}
@@ -98,10 +117,12 @@ export function JobCategoriesPage() {
 }
 
 function CategoryDialog({
+  agreements,
   category,
   open,
   onOpenChange,
 }: {
+  agreements: LaborAgreementRow[]
   category: JobCategoryRow | null
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -111,6 +132,9 @@ function CategoryDialog({
   const [name, setName] = useState(category?.name ?? '')
   const [salary, setSalary] = useState(category ? String(category.basic_salary).replace('.', ',') : '')
   const [direct, setDirect] = useState(category?.is_direct_labor ?? false)
+  const [agreementId, setAgreementId] = useState(category?.agreement.id ?? '')
+  const agreement = agreements.find((a) => a.id === agreementId)
+  const hourly = agreement?.pay_basis === 'HOURLY'
   const basicSalary = parseAmount(salary)
   const save = useCommand(
     () =>
@@ -118,6 +142,7 @@ function CategoryDialog({
         id: category?.id ?? '',
         code,
         name,
+        agreement_id: agreementId,
         basic_salary: basicSalary,
         is_direct_labor: direct,
       }),
@@ -127,14 +152,15 @@ function CategoryDialog({
     (active: boolean) => commands.setJobCategoryActive(company.companyId, category!.id, active),
     { success: 'Listo. El cambio quedó registrado en la auditoría.', onSuccess: () => onOpenChange(false) },
   )
-  const valid = !!code.trim() && name.trim().length >= 2 && basicSalary > 0
+  const valid = !!code.trim() && name.trim().length >= 2 && !!agreementId && basicSalary > 0
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{category ? `Categoría ${category.code}` : 'Nueva categoría'}</DialogTitle>
           <DialogDescription>
-            El sueldo básico es mensual y de un convenio simplificado (a validar): con él se liquidan los sueldos.
+            El convenio dice cómo cobra su gente: por mes, con un sueldo básico, o por hora, con un valor hora. Las
+            escalas son ficticias (a validar).
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
@@ -144,10 +170,28 @@ function CategoryDialog({
           <Field label="Nombre" required>
             <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
           </Field>
+          <Field label="Convenio" required className="sm:col-span-2">
+            <SimpleSelect
+              value={agreementId}
+              onChange={setAgreementId}
+              placeholder="Elegí el convenio"
+              options={agreements
+                .filter((a) => a.is_active || a.id === category?.agreement.id)
+                .map((a) => ({
+                  value: a.id,
+                  label: `${a.name} (${a.pay_basis === 'HOURLY' ? 'por hora' : 'por mes'})`,
+                }))}
+              aria-label="Convenio"
+            />
+          </Field>
           <Field
-            label="Sueldo básico mensual"
+            label={hourly ? 'Valor hora' : 'Sueldo básico mensual'}
             className="sm:col-span-2"
-            error={salary && !(basicSalary > 0) ? 'Escribí un importe, por ejemplo 1.250.000.' : undefined}
+            error={
+              salary && !(basicSalary > 0)
+                ? `Escribí un importe, por ejemplo ${hourly ? '7.100' : '1.250.000'}.`
+                : undefined
+            }
           >
             <Input inputMode="decimal" value={salary} onChange={(e) => setSalary(e.target.value)} />
           </Field>

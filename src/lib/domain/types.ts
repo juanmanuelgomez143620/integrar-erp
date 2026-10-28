@@ -358,13 +358,22 @@ export interface PayrollLine {
   document_id: string
   line_no: number
   employee_id: string
-  /** Copias al crearla: la categoría con su básico, la antigüedad al fin del mes y si es del taller. */
+  /** Copias al crearla: la categoría con su básico (o su valor hora), la antigüedad al fin del mes y si es del taller. */
   category_id: string
   basic_salary: number
   seniority_years: number
   is_direct_labor: boolean
   work_center_id: string | null
+  /** El convenio y sus porcentajes, copiados al crearla (Fase 6d; null en las de antes). */
+  agreement_id: string | null
+  pay_basis: PayBasis
+  seniority_pct: number
+  attendance_pct: number
+  union_pct: number
+  union_employer_pct: number
+  /** Novedades: por mes, los días trabajados; por hora, las horas trabajadas. */
   days_worked: number
+  hours_worked: number
   absence_days: number
   overtime_50: number
   overtime_100: number
@@ -377,19 +386,48 @@ export interface PayrollLine {
   retirement: number
   pami: number
   health: number
+  /** Aporte sindical retenido. */
+  union_dues: number
+  /** Todo lo retenido: los aportes legales y el sindical. */
   deductions: number
   net: number
-  /** Contribuciones de la empresa. */
+  /** Contribuciones patronales de la empresa. */
   employer: number
+  /** Lo que el convenio pone a cargo de la empresa (seguro de vida, fondo social). */
+  union_contribution: number
 }
 
-/** Categoría del personal (un convenio simplificado, Fase 6a): su sueldo básico mensual. */
+/** Cómo cobra el personal de un convenio: por mes (básico mensual) o por hora (jornalizado). */
+export type PayBasis = 'MONTHLY' | 'HOURLY'
+
+/** Convenio colectivo de trabajo (Fase 6d): su forma de pago, sus adicionales y sus aportes (a validar). */
+export interface LaborAgreement extends Audited {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  /** El sindicato (vacío fuera de convenio). */
+  union_name: string
+  pay_basis: PayBasis
+  /** Antigüedad: por ciento del básico por año cumplido. */
+  seniority_pct: number
+  /** Presentismo: por ciento del básico más la antigüedad, sin ausencias sin aviso. */
+  attendance_pct: number
+  /** Aporte sindical: por ciento del remunerativo que se le retiene al empleado. */
+  union_pct: number
+  /** Contribución de la empresa al convenio: por ciento del remunerativo. */
+  union_employer_pct: number
+  is_active: boolean
+}
+
+/** Categoría del personal (Fase 6a), dentro de un convenio (6d). */
 export interface JobCategory extends Audited {
   id: string
   company_id: string
   code: string
   name: string
-  /** Sueldo básico mensual. */
+  agreement_id: string
+  /** Básico mensual o, en un convenio por hora, valor hora. */
   basic_salary: number
   /** Si es del taller: su sueldo es mano de obra directa y el empleado trabaja en un centro de trabajo. */
   is_direct_labor: boolean

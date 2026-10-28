@@ -23,21 +23,22 @@ export const rate = (value: number) => `${rateFmt.format(value)} %`
 /** "05/2027": el mes liquidado. */
 export const periodLabel = (period: string) => `${period.slice(5, 7)}/${period.slice(0, 4)}`
 
-/** Los porcentajes con que se calculó la liquidación, en una línea. */
+/** Los porcentajes legales con que se calculó la liquidación, en una línea; los adicionales son de cada convenio. */
 export function RatesLine({ rates }: { rates: PayrollView['rates'] }) {
   return (
     <p className="text-xs text-muted-foreground">
-      Antigüedad {rate(rates.seniority_pct)} del básico por año · presentismo {rate(rates.attendance_pct)} · jubilación{' '}
-      {rate(rates.retirement_pct)}, ley 19.032 {rate(rates.pami_pct)} y obra social {rate(rates.health_pct)} (aportes) ·
-      contribuciones {rate(rates.employer_pct)}. Simulados: sin pretensión de exactitud legal.
+      Aportes: jubilación {rate(rates.retirement_pct)}, ley 19.032 {rate(rates.pami_pct)} y obra social{' '}
+      {rate(rates.health_pct)} · contribuciones patronales {rate(rates.employer_pct)}. La antigüedad, el presentismo y
+      lo sindical son los del convenio de cada empleado. Simulados: sin pretensión de exactitud legal.
     </p>
   )
 }
 
-const NOVELTIES = ['days_worked', 'absence_days', 'overtime_50', 'overtime_100'] as const
+const NOVELTIES = ['days_worked', 'hours_worked', 'absence_days', 'overtime_50', 'overtime_100'] as const
 type Draft = Record<(typeof NOVELTIES)[number], string>
 const draftOf = (l: PayrollLineView): Draft => ({
   days_worked: String(l.days_worked),
+  hours_worked: String(l.hours_worked).replace('.', ','),
   absence_days: String(l.absence_days),
   overtime_50: String(l.overtime_50).replace('.', ','),
   overtime_100: String(l.overtime_100).replace('.', ','),
@@ -67,6 +68,7 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
         changed.map((l) => ({
           line_id: l.id,
           days_worked: numberOf(drafts[l.id].days_worked),
+          hours_worked: numberOf(drafts[l.id].hours_worked),
           absence_days: numberOf(drafts[l.id].absence_days),
           overtime_50: numberOf(drafts[l.id].overtime_50),
           overtime_100: numberOf(drafts[l.id].overtime_100),
@@ -93,7 +95,7 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
       title="Empleados y recibos"
       description={
         editable
-          ? 'Cargá las novedades del mes: días trabajados (las licencias pagas cuentan como trabajadas), ausencias sin aviso (pierden el presentismo) y horas extra. Al guardar se recalculan los recibos.'
+          ? 'Cargá las novedades del mes: los días trabajados de quienes cobran por mes o las horas de los jornalizados (las licencias pagas cuentan como trabajadas), las ausencias sin aviso (pierden el presentismo) y las horas extra. Al guardar se recalculan los recibos.'
           : 'Las novedades del mes de cada empleado y su recibo: lo que cobra (el remunerativo menos los aportes) y lo que le cuesta a la empresa.'
       }
       actions={
@@ -110,7 +112,7 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50">
               <TableHead className={head}>Empleado</TableHead>
-              <TableHead className={cn(head, 'text-right')}>Días</TableHead>
+              <TableHead className={cn(head, 'text-right')}>Días u horas</TableHead>
               <TableHead className={cn(head, 'text-right')}>Ausencias</TableHead>
               <TableHead className={cn(head, 'text-right')}>HE 50 %</TableHead>
               <TableHead className={cn(head, 'text-right')}>HE 100 %</TableHead>
@@ -130,10 +132,16 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
                   </span>
                   <div className="text-xs text-muted-foreground">
                     {l.category.name}
+                    {l.agreement ? ` · ${l.agreement.code}` : ''}
                     {l.work_center ? ` · ${l.work_center.code}` : ''} · {l.seniority_years} años
                   </div>
                 </TableCell>
-                <TableCell className="text-right">{cell(l, 'days_worked', 'Días trabajados')}</TableCell>
+                <TableCell className="text-right">
+                  {l.pay_basis === 'HOURLY'
+                    ? cell(l, 'hours_worked', 'Horas trabajadas')
+                    : cell(l, 'days_worked', 'Días trabajados')}
+                  <div className="text-xs text-muted-foreground">{l.pay_basis === 'HOURLY' ? 'horas' : 'días'}</div>
+                </TableCell>
                 <TableCell className="text-right">{cell(l, 'absence_days', 'Ausencias sin aviso')}</TableCell>
                 <TableCell className="text-right">{cell(l, 'overtime_50', 'Horas extra al 50 %')}</TableCell>
                 <TableCell className="text-right">{cell(l, 'overtime_100', 'Horas extra al 100 %')}</TableCell>
@@ -148,7 +156,7 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
                 </TableCell>
                 <TableCell className="tabular text-right">{money(l.deductions)}</TableCell>
                 <TableCell className="tabular text-right font-medium">{money(l.net)}</TableCell>
-                <TableCell className="tabular text-right">{money(l.employer)}</TableCell>
+                <TableCell className="tabular text-right">{money(l.employer + l.union_contribution)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -160,7 +168,9 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
               <TableCell className="tabular text-right font-semibold">{money(view.gross)}</TableCell>
               <TableCell className="tabular text-right font-semibold">{money(view.deductions)}</TableCell>
               <TableCell className="tabular text-right font-semibold">{money(view.net)}</TableCell>
-              <TableCell className="tabular text-right font-semibold">{money(view.employer)}</TableCell>
+              <TableCell className="tabular text-right font-semibold">
+                {money(view.employer + view.union_contribution)}
+              </TableCell>
             </TableRow>
           </TableFooter>
         </Table>
@@ -208,7 +218,7 @@ export function PayrollFormPage() {
           { label: 'Nueva' },
         ]}
         title="Nueva liquidación de sueldos"
-        description="Entra todo el personal activo que ingresó hasta el fin del mes, con el básico de su categoría, su antigüedad y los porcentajes de la empresa. Después se cargan las novedades de cada uno."
+        description="Entra todo el personal activo que ingresó hasta el fin del mes, con el básico (o el valor hora) de su categoría, su antigüedad y los porcentajes de su convenio y de la empresa. Después se cargan las novedades de cada uno."
       />
       <Section className="max-w-xl">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -243,9 +253,8 @@ export function PayrollFormPage() {
   )
 }
 
+// La antigüedad y el presentismo son de cada convenio (RRHH → Convenios, Fase 6d).
 const RATE_FIELDS: [keyof PayrollView['rates'], string, string][] = [
-  ['seniority_pct', 'Antigüedad', 'Del básico, por año cumplido.'],
-  ['attendance_pct', 'Presentismo', 'Del básico más la antigüedad, si no faltó sin aviso.'],
   ['retirement_pct', 'Jubilación', 'Aporte del empleado.'],
   ['pami_pct', 'Ley 19.032', 'Aporte del empleado.'],
   ['health_pct', 'Obra social', 'Aporte del empleado.'],
@@ -268,7 +277,7 @@ export function PayrollRatesSection() {
   return (
     <Section
       title="Sueldos"
-      description="Los porcentajes con que RRHH liquida (a validar: simulados, sin pretensión de exactitud legal). Cada liquidación guarda los suyos: cambiarlos no altera las ya hechas."
+      description="Los porcentajes legales con que RRHH liquida: los aportes del empleado y las contribuciones patronales (a validar: simulados, sin pretensión de exactitud legal). La antigüedad, el presentismo y lo sindical son de cada convenio (RRHH → Convenios). Cada liquidación guarda los suyos: cambiarlos no altera las ya hechas."
     >
       <div className="grid gap-3 sm:grid-cols-2">
         {RATE_FIELDS.map(([key, label, hint]) => (

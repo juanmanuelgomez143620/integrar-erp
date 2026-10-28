@@ -10,6 +10,7 @@ import type {
   JournalEntryOrigin,
   ModuleCode,
   MovementType,
+  PayBasis,
   PaymentMethod,
   PayrollRates,
   Priority,
@@ -479,7 +480,7 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
   PAYROLL: {
     BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'RRHH carga las novedades del mes de cada empleado.' },
     CONFIRMADA: { label: 'Confirmada', badge: 'info', final: false, description: 'Los recibos están calculados y el asiento de sueldos, registrado: Tesorería tiene que pagar los sueldos.' },
-    SUELDOS_PAGADOS: { label: 'Sueldos pagados', badge: 'warning', final: false, description: 'Tesorería pagó los netos a los empleados: faltan las cargas sociales (los aportes retenidos y las contribuciones).' },
+    SUELDOS_PAGADOS: { label: 'Sueldos pagados', badge: 'warning', final: false, description: 'Tesorería pagó los netos a los empleados: faltan las cargas sociales (los aportes retenidos y las contribuciones) y lo de los sindicatos.' },
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagaron los sueldos y las cargas sociales: el ciclo de la liquidación terminó.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba confirmada, un contraasiento revirtió el de sueldos.' },
   },
@@ -954,6 +955,7 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       MANO_DE_OBRA_DIRECTA: 'Remuneraciones y contribuciones del personal del taller',
       SUELDOS_A_PAGAR: 'Netos a pagar',
       CARGAS_SOCIALES_A_PAGAR: 'Aportes retenidos y contribuciones a pagar',
+      SINDICATOS_A_PAGAR: 'Aportes sindicales retenidos y contribuciones de los convenios a pagar',
     },
   },
   PAGO_SUELDOS: {
@@ -964,10 +966,11 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     },
   },
   PAGO_CARGAS_SOCIALES: {
-    label: 'Pago de cargas sociales (liquidación)',
+    label: 'Pago de cargas sociales y sindicatos (liquidación)',
     keys: {
       // La contrapartida es la caja o el banco elegido, no una regla.
       CARGAS_SOCIALES_A_PAGAR: 'Aportes retenidos y contribuciones que se pagan',
+      SINDICATOS_A_PAGAR: 'Lo que se deposita a los sindicatos',
     },
   },
   IVA: {
@@ -1009,7 +1012,17 @@ export const JOURNAL_ORIGINS: Record<JournalEntryOrigin, string> = {
   AUTOMATICO: 'Automático',
 }
 
-/** Porcentajes por defecto de la liquidación de sueldos (docs/FASE_6_RRHH_Y_SUELDOS.md §3, a validar). */
+/** Cómo cobra el personal de un convenio (Fase 6d). */
+export const PAY_BASES: Record<PayBasis, string> = {
+  MONTHLY: 'Por mes',
+  HOURLY: 'Por hora (jornalizado)',
+}
+
+/**
+ * Porcentajes por defecto de la liquidación de sueldos (docs/FASE_6_RRHH_Y_SUELDOS.md §3, a validar).
+ * Desde la Fase 6d, la antigüedad y el presentismo son de cada convenio: los de acá quedan para
+ * las liquidaciones de antes.
+ */
 export const PAYROLL_DEFAULT_RATES: PayrollRates = {
   seniority_pct: 1,
   attendance_pct: 8.33,

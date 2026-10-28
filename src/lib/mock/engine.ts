@@ -39,6 +39,7 @@ import {
   normalSideOf,
   parentCode,
 } from '../domain/chart-of-accounts'
+import { MONTH_HOURS } from '../domain/employees'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
 import { addDays, date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
@@ -6134,6 +6135,148 @@ export function cmdRequestProductionMaterials(ctx: Ctx, companyId: string, docum
   return { id: doc.id, display_number: doc.display_number }
 }
 
+// ============================================================ Convenios colectivos (docs/FASE_6D_CONVENIOS.md)
+
+export interface LaborAgreementInput {
+  /** Vacío para uno nuevo. */
+  id: string
+  code: string
+  name: string
+  union_name: string
+  pay_basis: T.PayBasis
+  seniority_pct: number
+  attendance_pct: number
+  union_pct: number
+  union_employer_pct: number
+}
+
+export const laborAgreementLabel = (a: T.LaborAgreement) => `${a.code} ${a.name}`
+
+const AGREEMENT_RATES = ['seniority_pct', 'attendance_pct', 'union_pct', 'union_employer_pct'] as const
+
+/** RRHH crea o modifica un convenio: su forma de pago y sus porcentajes (a validar). */
+export function cmdSaveLaborAgreement(ctx: Ctx, companyId: string, input: LaborAgreementInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'employee.update')
+  const existing = input.id
+    ? db.laborAgreements.find((a) => a.id === input.id && a.company_id === companyId)
+    : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'El convenio no existe.')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código del convenio tiene de 1 a 12 letras, números o guiones.')
+  if (db.laborAgreements.some((a) => a.company_id === companyId && a.code === code && a.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe un convenio con el código ${code}.`)
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 80) fail('DATO_INVALIDO', 'El nombre del convenio tiene de 2 a 80 caracteres.')
+  const unionName = input.union_name.trim()
+  if (unionName.length > 60) fail('DATO_INVALIDO', 'El nombre del sindicato tiene hasta 60 caracteres.')
+  if (input.pay_basis !== 'MONTHLY' && input.pay_basis !== 'HOURLY')
+    fail('DATO_INVALIDO', 'Elegí si el convenio paga por mes o por hora.')
+  for (const key of AGREEMENT_RATES) {
+    const value = input[key]
+    if (!Number.isFinite(value) || value < 0 || value > 100 || round2(value) !== value)
+      fail('DATO_INVALIDO', 'Los porcentajes del convenio van de 0 a 100, con hasta 2 decimales.')
+  }
+  const fields = {
+    code,
+    name,
+    union_name: unionName,
+    pay_basis: input.pay_basis,
+    seniority_pct: input.seniority_pct,
+    attendance_pct: input.attendance_pct,
+    union_pct: input.union_pct,
+    union_employer_pct: input.union_employer_pct,
+  }
+  if (existing) {
+    if (existing.pay_basis !== input.pay_basis && db.jobCategories.some((c) => c.agreement_id === existing.id))
+      fail(
+        'DATO_INVALIDO',
+        `${laborAgreementLabel(existing)} tiene categorías: no se cambia su forma de pago.`,
+        'Sus categorías guardan un básico mensual o un valor hora según el convenio: creá otro convenio.',
+      )
+    const changes = diff(existing, { ...existing, ...fields }, Object.keys(fields) as (keyof typeof fields)[])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, fields, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'labor_agreement',
+      entity_id: existing.id,
+      entity_label: laborAgreementLabel(existing),
+      summary: `Modificó el convenio ${laborAgreementLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const agreement: T.LaborAgreement = {
+    id: uid(),
+    company_id: companyId,
+    ...fields,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.laborAgreements.push(agreement)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'labor_agreement',
+    entity_id: agreement.id,
+    entity_label: laborAgreementLabel(agreement),
+    summary: `Creó el convenio ${laborAgreementLabel(agreement)} (${agreement.pay_basis === 'HOURLY' ? 'por hora' : 'por mes'})`,
+  })
+  return { id: agreement.id }
+}
+
+/** Un convenio desactivado no se asigna a categorías nuevas; las que ya lo tienen lo conservan. */
+export function cmdSetLaborAgreementActive(ctx: Ctx, companyId: string, agreementId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'employee.update')
+  const agreement = db.laborAgreements.find((a) => a.id === agreementId && a.company_id === companyId)
+  if (!agreement) fail('DATO_INVALIDO', 'El convenio no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si el convenio está activo.')
+  if (agreement.is_active === active) return
+  Object.assign(agreement, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'labor_agreement',
+    entity_id: agreement.id,
+    entity_label: laborAgreementLabel(agreement),
+    summary: `${active ? 'Activó' : 'Desactivó'} el convenio ${laborAgreementLabel(agreement)}`,
+  })
+}
+
+/** Carga los convenios de la demo que la empresa todavía no tiene (por código). */
+export function insertLaborAgreements(
+  ctx: Ctx,
+  companyId: string,
+  rows: Omit<
+    T.LaborAgreement,
+    'id' | 'company_id' | 'is_active' | 'created_at' | 'created_by' | 'updated_at' | 'updated_by'
+  >[],
+) {
+  for (const row of rows) {
+    if (ctx.db.laborAgreements.some((a) => a.company_id === companyId && a.code === row.code)) continue
+    ctx.db.laborAgreements.push({
+      id: uid(),
+      company_id: companyId,
+      ...row,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
 // ============================================================ Categorías y legajos del personal (docs/FASE_6_RRHH_Y_SUELDOS.md §2)
 
 export interface JobCategoryInput {
@@ -6141,6 +6284,8 @@ export interface JobCategoryInput {
   id: string
   code: string
   name: string
+  agreement_id: string
+  /** Básico mensual o, en un convenio por hora, valor hora. */
   basic_salary: number
   is_direct_labor: boolean
 }
@@ -6148,7 +6293,7 @@ export interface JobCategoryInput {
 export const jobCategoryLabel = (c: T.JobCategory) => `${c.code} ${c.name}`
 export const employeeLabel = (e: T.Employee) => `${e.last_name}, ${e.first_name} (legajo ${e.file_number})`
 
-/** Crea o modifica una categoría del personal, con su sueldo básico mensual. */
+/** Crea o modifica una categoría del personal, en un convenio, con su básico mensual o su valor hora. */
 export function cmdSaveJobCategory(ctx: Ctx, companyId: string, input: JobCategoryInput) {
   const { db } = ctx
   const actor = requirePermission(ctx, companyId, 'employee.update')
@@ -6162,9 +6307,17 @@ export function cmdSaveJobCategory(ctx: Ctx, companyId: string, input: JobCatego
   const name = input.name.trim()
   if (name.length < 2 || name.length > 60)
     fail('DATO_INVALIDO', 'El nombre de la categoría tiene de 2 a 60 caracteres.')
+  const agreement = db.laborAgreements.find((a) => a.id === input.agreement_id && a.company_id === companyId)
+  if (!agreement) fail('DATO_INVALIDO', 'Elegí el convenio de la categoría.')
+  if (!agreement.is_active && agreement.id !== existing?.agreement_id)
+    fail('DATO_INVALIDO', `El convenio ${laborAgreementLabel(agreement)} está inactivo.`)
+  const hourly = agreement.pay_basis === 'HOURLY'
   const salary = input.basic_salary
   if (!Number.isFinite(salary) || !(salary > 0) || round2(salary) !== salary || salary >= 1e9)
-    fail('DATO_INVALIDO', 'El sueldo básico debe ser un importe mayor que cero, con hasta 2 decimales.')
+    fail(
+      'DATO_INVALIDO',
+      `${hourly ? 'El valor hora' : 'El sueldo básico'} debe ser un importe mayor que cero, con hasta 2 decimales.`,
+    )
   if (typeof input.is_direct_labor !== 'boolean') fail('DATO_INVALIDO', 'Indicá si la categoría es del taller.')
   if (existing) {
     if (
@@ -6176,8 +6329,15 @@ export function cmdSaveJobCategory(ctx: Ctx, companyId: string, input: JobCatego
         `${jobCategoryLabel(existing)} tiene personal activo: no se puede cambiar si es del taller.`,
         'Pasá antes a ese personal a otra categoría.',
       )
-    const after = { ...existing, code, name, basic_salary: salary, is_direct_labor: input.is_direct_labor }
-    const changes = diff(existing, after, ['code', 'name', 'basic_salary', 'is_direct_labor'])
+    const after = {
+      ...existing,
+      code,
+      name,
+      agreement_id: agreement.id,
+      basic_salary: salary,
+      is_direct_labor: input.is_direct_labor,
+    }
+    const changes = diff(existing, after, ['code', 'name', 'agreement_id', 'basic_salary', 'is_direct_labor'])
     if (!Object.keys(changes).length) return { id: existing.id }
     Object.assign(existing, after, { updated_at: ctx.now, updated_by: ctx.userId })
     logAudit(ctx, {
@@ -6197,6 +6357,7 @@ export function cmdSaveJobCategory(ctx: Ctx, companyId: string, input: JobCatego
     company_id: companyId,
     code,
     name,
+    agreement_id: agreement.id,
     basic_salary: salary,
     is_direct_labor: input.is_direct_labor,
     is_active: true,
@@ -6213,7 +6374,7 @@ export function cmdSaveJobCategory(ctx: Ctx, companyId: string, input: JobCatego
     entity_type: 'job_category',
     entity_id: category.id,
     entity_label: jobCategoryLabel(category),
-    summary: `Creó la categoría ${jobCategoryLabel(category)}: sueldo básico de ${money(salary)}${category.is_direct_labor ? ', del taller' : ''}`,
+    summary: `Creó la categoría ${jobCategoryLabel(category)} (${agreement.code}): ${hourly ? 'valor hora' : 'sueldo básico'} de ${money(salary)}${category.is_direct_labor ? ', del taller' : ''}`,
   })
   return { id: category.id }
 }
@@ -6387,18 +6548,21 @@ export function cmdTerminateEmployee(
   })
 }
 
-/** Carga las categorías de la demo que la empresa todavía no tiene (por código). */
+/** Carga las categorías de la demo que la empresa todavía no tiene (por código), cada una en su convenio. */
 export function insertJobCategories(
   ctx: Ctx,
   companyId: string,
-  rows: { code: string; name: string; basic_salary: number; is_direct_labor: boolean }[],
+  rows: { code: string; name: string; agreement: string; basic_salary: number; is_direct_labor: boolean }[],
 ) {
-  for (const row of rows) {
+  for (const { agreement: agreementCode, ...row } of rows) {
     if (ctx.db.jobCategories.some((c) => c.company_id === companyId && c.code === row.code)) continue
+    const agreement = ctx.db.laborAgreements.find((a) => a.company_id === companyId && a.code === agreementCode)
+    if (!agreement) continue
     ctx.db.jobCategories.push({
       id: uid(),
       company_id: companyId,
       ...row,
+      agreement_id: agreement.id,
       is_active: true,
       created_at: ctx.now,
       created_by: ctx.userId,
@@ -6406,6 +6570,40 @@ export function insertJobCategories(
       updated_by: ctx.userId,
     })
   }
+}
+
+/**
+ * El chofer de la demo (Fase 6d) en una empresa que ya tiene personal pero ningún chofer:
+ * con el número de legajo siguiente.
+ */
+export function insertDriver(
+  ctx: Ctx,
+  companyId: string,
+  row: { first_name: string; last_name: string; hire_date: string; category: string; sector: string },
+) {
+  const { db } = ctx
+  const staff = db.employees.filter((e) => e.company_id === companyId)
+  const category = db.jobCategories.find((c) => c.company_id === companyId && c.code === row.category)
+  const sector = db.sectors.find((s) => s.company_id === companyId && s.code === row.sector)
+  if (!staff.length || !category || !sector || staff.some((e) => e.category_id === category.id)) return
+  db.employees.push({
+    id: uid(),
+    company_id: companyId,
+    file_number: Math.max(...staff.map((e) => e.file_number)) + 1,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    hire_date: row.hire_date,
+    category_id: category.id,
+    sector_id: sector.id,
+    work_center_id: null,
+    status: 'ACTIVO',
+    termination_date: null,
+    termination_reason: '',
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  })
 }
 
 /**
@@ -6479,29 +6677,54 @@ export function periodEnd(period: string) {
 export const periodLabel = (period: string) => `${period.slice(5, 7)}/${period.slice(0, 4)}`
 
 export interface PayrollNovelties {
+  /** Por mes: los días trabajados (mes comercial de 30). */
   days_worked: number
+  /** Por hora: las horas trabajadas. */
+  hours_worked: number
   absence_days: number
   overtime_50: number
   overtime_100: number
 }
 
+/** Los porcentajes de un recibo: los legales de la empresa y los del convenio del empleado. */
+export type PayrollLineRates = T.PayrollRates & { union_pct: number; union_employer_pct: number }
+
+/** Los porcentajes de una línea ya creada: los legales de su liquidación y los del convenio que copió. */
+export const payrollLineRates = (rates: T.PayrollRates, line: T.PayrollLine): PayrollLineRates => ({
+  ...rates,
+  seniority_pct: line.seniority_pct,
+  attendance_pct: line.attendance_pct,
+  union_pct: line.union_pct,
+  union_employer_pct: line.union_employer_pct,
+})
+
 /**
- * Los importes de un empleado, cada concepto redondeado a centavos: básico
- * proporcional a los días (mes de 30), antigüedad, presentismo (si no faltó sin
- * aviso), horas extra (valor hora: básico más antigüedad del mes entero, sobre
- * 200), aportes y contribuciones.
+ * Los importes de un empleado, cada concepto redondeado a centavos: el básico (por mes,
+ * proporcional a los días de un mes de 30; por hora, el valor hora por las horas), la
+ * antigüedad y el presentismo del convenio (si no faltó sin aviso), las horas extra (valor
+ * hora con la antigüedad: por mes, el básico más la antigüedad sobre 200), los aportes
+ * legales y el sindical, las contribuciones patronales y la del convenio.
  */
-export function payrollAmounts(rates: T.PayrollRates, basicSalary: number, years: number, n: PayrollNovelties) {
-  const basic = round2((basicSalary * n.days_worked) / 30)
+export function payrollAmounts(
+  rates: PayrollLineRates,
+  basis: T.PayBasis,
+  basicSalary: number,
+  years: number,
+  n: PayrollNovelties,
+) {
+  const monthly = basis === 'MONTHLY'
+  const basic = round2(monthly ? (basicSalary * n.days_worked) / 30 : basicSalary * n.hours_worked)
   const seniority = round2((basic * rates.seniority_pct * years) / 100)
   const attendance = n.absence_days === 0 ? round2(((basic + seniority) * rates.attendance_pct) / 100) : 0
-  const hourly = round2((basicSalary + round2((basicSalary * rates.seniority_pct * years) / 100)) / 200)
+  const full = basicSalary + round2((basicSalary * rates.seniority_pct * years) / 100)
+  const hourly = round2(monthly ? full / 200 : full)
   const overtime = round2(round2(hourly * 1.5 * n.overtime_50) + round2(hourly * 2 * n.overtime_100))
   const gross = round2(basic + seniority + attendance + overtime)
   const retirement = round2((gross * rates.retirement_pct) / 100)
   const pami = round2((gross * rates.pami_pct) / 100)
   const health = round2((gross * rates.health_pct) / 100)
-  const deductions = round2(retirement + pami + health)
+  const unionDues = round2((gross * rates.union_pct) / 100)
+  const deductions = round2(retirement + pami + health + unionDues)
   return {
     basic,
     seniority,
@@ -6511,9 +6734,11 @@ export function payrollAmounts(rates: T.PayrollRates, basicSalary: number, years
     retirement,
     pami,
     health,
+    union_dues: unionDues,
     deductions,
     net: round2(gross - deductions),
     employer: round2((gross * rates.employer_pct) / 100),
+    union_contribution: round2((gross * rates.union_employer_pct) / 100),
   }
 }
 
@@ -6579,10 +6804,25 @@ export function cmdCreatePayroll(ctx: Ctx, companyId: string, input: PayrollInpu
   })
   staff.forEach((e, i) => {
     const category = db.jobCategories.find((c) => c.id === e.category_id)!
+    const agreement = db.laborAgreements.find((a) => a.id === category.agreement_id)!
     const years = fullYears(e.hire_date, end)
-    // Quien ingresó en el mes cobra desde su ingreso (mes comercial de 30 días).
+    // Quien ingresó en el mes cobra desde su ingreso (mes comercial de 30 días); por hora,
+    // la parte de un mes completo de horas.
     const days = e.hire_date.slice(0, 7) === input.period ? 31 - Math.min(Number(e.hire_date.slice(8, 10)), 30) : 30
-    const novelties = { days_worked: days, absence_days: 0, overtime_50: 0, overtime_100: 0 }
+    const hourly = agreement.pay_basis === 'HOURLY'
+    const novelties = {
+      days_worked: hourly ? 0 : days,
+      hours_worked: hourly ? round2((MONTH_HOURS * days) / 30) : 0,
+      absence_days: 0,
+      overtime_50: 0,
+      overtime_100: 0,
+    }
+    const own = {
+      seniority_pct: agreement.seniority_pct,
+      attendance_pct: agreement.attendance_pct,
+      union_pct: agreement.union_pct,
+      union_employer_pct: agreement.union_employer_pct,
+    }
     db.pyLines.push({
       id: uid(),
       company_id: companyId,
@@ -6594,8 +6834,11 @@ export function cmdCreatePayroll(ctx: Ctx, companyId: string, input: PayrollInpu
       seniority_years: years,
       is_direct_labor: category.is_direct_labor,
       work_center_id: e.work_center_id,
+      agreement_id: agreement.id,
+      pay_basis: agreement.pay_basis,
+      ...own,
       ...novelties,
-      ...payrollAmounts(rates, category.basic_salary, years, novelties),
+      ...payrollAmounts({ ...rates, ...own }, agreement.pay_basis, category.basic_salary, years, novelties),
     })
   })
   setPayrollTotals(db, doc)
@@ -6630,6 +6873,7 @@ export function cmdUpdatePayrollLines(ctx: Ctx, docId: string, lines: PayrollLin
   const seen = new Set<string>()
   const days = (n: number) => Number.isInteger(n) && n >= 0 && n <= 30
   const hours = (h: number) => Number.isFinite(h) && h >= 0 && h <= 200 && round2(h) === h
+  const worked = (h: number) => Number.isFinite(h) && h >= 0 && h <= 300 && round2(h) === h
   for (const input of lines) {
     const line = own.find((l) => l.id === input.line_id)
     if (!line) fail('DATO_INVALIDO', 'Uno de los empleados no es de la liquidación.')
@@ -6637,20 +6881,36 @@ export function cmdUpdatePayrollLines(ctx: Ctx, docId: string, lines: PayrollLin
     seen.add(line.id)
     const employee = db.employees.find((e) => e.id === line.employee_id)!
     const who = `${employee.last_name}, ${employee.first_name}`
-    if (!days(input.days_worked) || !days(input.absence_days) || input.days_worked + input.absence_days > 30)
+    if (line.pay_basis === 'HOURLY') {
+      if (!worked(input.hours_worked))
+        fail('DATO_INVALIDO', `Las horas trabajadas de ${who} van de 0 a 300, con hasta 2 decimales.`)
+      if (!days(input.absence_days)) fail('DATO_INVALIDO', `Las ausencias sin aviso de ${who} son un entero de 0 a 30.`)
+    } else if (!days(input.days_worked) || !days(input.absence_days) || input.days_worked + input.absence_days > 30)
       fail('DATO_INVALIDO', `Los días trabajados y las ausencias de ${who} son enteros que juntos no pasan de 30.`)
     if (!hours(input.overtime_50) || !hours(input.overtime_100))
       fail('DATO_INVALIDO', `Las horas extra de ${who} van de 0 a 200, con hasta 2 decimales.`)
   }
   for (const input of lines) {
     const line = own.find((l) => l.id === input.line_id)!
+    const hourly = line.pay_basis === 'HOURLY'
     const novelties = {
-      days_worked: input.days_worked,
+      days_worked: hourly ? 0 : input.days_worked,
+      hours_worked: hourly ? input.hours_worked : 0,
       absence_days: input.absence_days,
       overtime_50: input.overtime_50,
       overtime_100: input.overtime_100,
     }
-    Object.assign(line, novelties, payrollAmounts(doc.py!.rates, line.basic_salary, line.seniority_years, novelties))
+    Object.assign(
+      line,
+      novelties,
+      payrollAmounts(
+        payrollLineRates(doc.py!.rates, line),
+        line.pay_basis,
+        line.basic_salary,
+        line.seniority_years,
+        novelties,
+      ),
+    )
   }
   setPayrollTotals(db, doc)
   doc.updated_at = ctx.now
@@ -6696,10 +6956,15 @@ export function cmdConfirmPayroll(ctx: Ctx, docId: string) {
     `Sueldos de ${period} (${doc.display_number}): ${lines.length} empleado${lines.length > 1 ? 's' : ''}.`,
     [
       { key: 'REMUNERACIONES', debit: sum(others, (l) => l.gross), credit: 0 },
-      { key: 'CONTRIBUCIONES', debit: sum(others, (l) => l.employer), credit: 0 },
-      { key: 'MANO_DE_OBRA_DIRECTA', debit: sum(direct, (l) => l.gross + l.employer), credit: 0 },
+      { key: 'CONTRIBUCIONES', debit: sum(others, (l) => l.employer + l.union_contribution), credit: 0 },
+      {
+        key: 'MANO_DE_OBRA_DIRECTA',
+        debit: sum(direct, (l) => l.gross + l.employer + l.union_contribution),
+        credit: 0,
+      },
       { key: 'SUELDOS_A_PAGAR', debit: 0, credit: sum(lines, (l) => l.net) },
-      { key: 'CARGAS_SOCIALES_A_PAGAR', debit: 0, credit: sum(lines, (l) => l.deductions + l.employer) },
+      { key: 'CARGAS_SOCIALES_A_PAGAR', debit: 0, credit: sum(lines, legalCharges) },
+      { key: 'SINDICATOS_A_PAGAR', debit: 0, credit: sum(lines, unionCharges) },
     ],
   )
 }
@@ -6740,9 +7005,18 @@ export function previousPeriod(period: string) {
 /** El vencimiento de las cargas sociales de un mes (aaaa-mm): el día 10 del mes siguiente (a validar). */
 export const chargesDue = (period: string) => nextMonthDay(period, 10)
 
-/** Las cargas sociales de una liquidación: los aportes retenidos más las contribuciones. */
+/** Lo que va a la seguridad social: los aportes legales retenidos y las contribuciones patronales. */
+const legalCharges = (l: T.PayrollLine) => l.deductions - l.union_dues + l.employer
+
+/** Lo que va al sindicato: el aporte sindical retenido y la contribución del convenio. */
+const unionCharges = (l: T.PayrollLine) => l.union_dues + l.union_contribution
+
+/** Las cargas sociales de una liquidación: lo de la seguridad social más lo de los sindicatos. */
 export const payrollCharges = (db: DB, docId: string) =>
-  round2(payrollLines(db, docId).reduce((s, l) => s + l.deductions + l.employer, 0))
+  round2(payrollLines(db, docId).reduce((s, l) => s + l.deductions + l.employer + l.union_contribution, 0))
+
+const sumLines = (lines: T.PayrollLine[], value: (l: T.PayrollLine) => number) =>
+  round2(lines.reduce((s, l) => s + value(l), 0))
 
 /** Quienes liquidaron los sueldos (SoD-6): quien preparó la liquidación y quien la confirmó. */
 export function payrollLiquidators(db: DB, doc: T.Document) {
@@ -6790,7 +7064,8 @@ function payPayroll(ctx: Ctx, docId: string, accountId: string, salaries: boolea
   doc.py = salaries
     ? { ...doc.py!, salaries_paid_on: today, salaries_account_id: account.id }
     : { ...doc.py!, charges_paid_on: today, charges_account_id: account.id }
-  const count = payrollLines(db, doc.id).length
+  const lines = payrollLines(db, doc.id)
+  const count = lines.length
   if (amount > 0)
     postEvent(
       ctx,
@@ -6800,10 +7075,16 @@ function payPayroll(ctx: Ctx, docId: string, accountId: string, salaries: boolea
       salaries
         ? `Pago de los sueldos de ${period} (${doc.display_number}): ${count} empleado${count > 1 ? 's' : ''}.`
         : `Pago de las cargas sociales de ${period} (${doc.display_number}): aportes retenidos y contribuciones.`,
-      [
-        { key: salaries ? 'SUELDOS_A_PAGAR' : 'CARGAS_SOCIALES_A_PAGAR', debit: amount, credit: 0 },
-        { account_id: account.id, debit: 0, credit: amount },
-      ],
+      salaries
+        ? [
+            { key: 'SUELDOS_A_PAGAR', debit: amount, credit: 0 },
+            { account_id: account.id, debit: 0, credit: amount },
+          ]
+        : [
+            { key: 'CARGAS_SOCIALES_A_PAGAR', debit: sumLines(lines, legalCharges), credit: 0 },
+            { key: 'SINDICATOS_A_PAGAR', debit: sumLines(lines, unionCharges), credit: 0 },
+            { account_id: account.id, debit: 0, credit: amount },
+          ],
     )
 }
 
@@ -7642,8 +7923,9 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   const bomIds = copy(db.boms, (b) => ({ ...audited, product_id: productIds.get(b.product_id)! }))
   copy(db.bomLines, (l) => ({ bom_id: bomIds.get(l.bom_id)!, component_id: productIds.get(l.component_id)! }))
   copy(db.bomOperations, (o) => ({ bom_id: bomIds.get(o.bom_id)!, work_center_id: centerIds.get(o.work_center_id)! }))
-  // El personal: categorías y legajos, con los sectores y los centros de trabajo de la empresa nueva.
-  const categoryIds = copy(db.jobCategories, () => audited)
+  // El personal: convenios, categorías y legajos, con los sectores y los centros de trabajo de la empresa nueva.
+  const agreementIds = copy(db.laborAgreements, () => audited)
+  const categoryIds = copy(db.jobCategories, (c) => ({ ...audited, agreement_id: agreementIds.get(c.agreement_id)! }))
   copy(db.employees, (e) => ({
     ...audited,
     category_id: categoryIds.get(e.category_id)!,

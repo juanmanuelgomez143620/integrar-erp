@@ -999,7 +999,12 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Fecha de pago">{date(py.payment_date)}</InfoRow>
         <InfoRow label="Empleados">{py.lines.length}</InfoRow>
         <InfoRow label="Remunerativo">{money(py.gross)}</InfoRow>
-        <InfoRow label="Aportes retenidos">{money(py.deductions)}</InfoRow>
+        <InfoRow label="Aportes retenidos">
+          {money(py.deductions)}
+          {py.union_dues > 0 && (
+            <span className="text-xs text-muted-foreground"> · con {money(py.union_dues)} del aporte sindical</span>
+          )}
+        </InfoRow>
         <InfoRow label="Netos a pagar">
           <span className="font-semibold">{money(py.net)}</span>
           <span className="text-xs text-muted-foreground">
@@ -1008,13 +1013,21 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
               : ' · sin pagar'}
           </span>
         </InfoRow>
-        <InfoRow label="Contribuciones de la empresa">{money(py.employer)}</InfoRow>
+        <InfoRow label="Contribuciones de la empresa">
+          {money(py.employer + py.union_contribution)}
+          {py.union_contribution > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {' '}
+              · patronales {money(py.employer)} y de los convenios {money(py.union_contribution)}
+            </span>
+          )}
+        </InfoRow>
         <InfoRow label="Cargas sociales">
           {money(py.charges)}
           <span className="text-xs text-muted-foreground">
             {py.charges_paid_on
               ? ` · pagadas el ${date(py.charges_paid_on)} desde ${py.charges_account?.name}`
-              : ` · aportes y contribuciones, vencen el ${date(py.charges_due)}`}
+              : ` · ${py.union_dues + py.union_contribution > 0 ? 'aportes, contribuciones y sindicatos' : 'aportes y contribuciones'}, vencen el ${date(py.charges_due)}`}
           </span>
         </InfoRow>
         <InfoRow label="Costo para la empresa">

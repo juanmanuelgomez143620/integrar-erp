@@ -1,4 +1,5 @@
-// Pruebas de la liquidación de sueldos y de sus pagos (docs/FASE_6_RRHH_Y_SUELDOS.md §3 y §4) sobre buildSeed() y los cmd*.
+// Pruebas de la liquidación de sueldos y de sus pagos (docs/FASE_6_RRHH_Y_SUELDOS.md §3 y §4, con los
+// convenios de docs/FASE_6D_CONVENIOS.md) sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PAYROLL_DEFAULT_RATES } from '../domain/catalog'
@@ -15,6 +16,7 @@ import {
   cmdPayPayrollCharges,
   cmdPayPayrollSalaries,
   cmdSaveEmployee,
+  cmdSaveLaborAgreement,
   cmdUpdateCompanySettings,
   cmdUpdatePayrollLines,
   payrollAmounts,
@@ -46,6 +48,7 @@ const companyId = () => db.companies[0].id
 const byNumber = (number: string) => db.documents.find((d) => d.display_number === number)!
 const employee = (n: number) => db.employees.find((e) => e.company_id === companyId() && e.file_number === n)!
 const lineOf = (docId: string, n: number) => payrollLines(db, docId).find((l) => l.employee_id === employee(n).id)!
+const agreement = (code: string) => db.laborAgreements.find((a) => a.company_id === companyId() && a.code === code)!
 
 function expectBusinessError(fn: () => void, code: string) {
   try {
@@ -78,10 +81,13 @@ const entriesOf = (docId: string) =>
     )
 
 describe('el cálculo de un recibo', () => {
-  it('básico, antigüedad, presentismo, horas extra, aportes y contribuciones, cada uno a centavos', () => {
-    const full = { days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 0 }
-    // Un oficial con 12 años: 1.250.000 de básico, 12 % de antigüedad y 8,33 % de presentismo.
-    expect(payrollAmounts(PAYROLL_DEFAULT_RATES, 1250000, 12, full)).toEqual({
+  const full = { days_worked: 30, hours_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 }
+
+  it('por mes: básico, antigüedad, presentismo, horas extra, aportes (con el sindical) y contribuciones, a centavos', () => {
+    // Un empleado de Comercio con 12 años: 1.250.000 de básico, 12 % de antigüedad, 8,33 % de
+    // presentismo, 2,5 % de aporte sindical y 1 % de contribución del convenio.
+    const rates = { ...PAYROLL_DEFAULT_RATES, union_pct: 2.5, union_employer_pct: 1 }
+    expect(payrollAmounts(rates, 'MONTHLY', 1250000, 12, full)).toEqual({
       basic: 1250000,
       seniority: 150000,
       attendance: 116620,
@@ -90,24 +96,59 @@ describe('el cálculo de un recibo', () => {
       retirement: 166828.2,
       pami: 45498.6,
       health: 45498.6,
-      deductions: 257825.4,
-      net: 1258794.6,
+      union_dues: 37915.5,
+      deductions: 295740.9,
+      net: 1220879.1,
       employer: 363988.8,
+      union_contribution: 15166.2,
     })
     // Cuatro horas al 50 % y dos al 100 %: el valor hora es (1.250.000 + 150.000) / 200 = 7.000.
-    expect(
-      payrollAmounts(PAYROLL_DEFAULT_RATES, 1250000, 12, { ...full, overtime_50: 4, overtime_100: 2 }).overtime,
-    ).toBe(70000)
+    expect(payrollAmounts(rates, 'MONTHLY', 1250000, 12, { ...full, overtime_50: 4, overtime_100: 2 }).overtime).toBe(
+      70000,
+    )
     // Dos días sin aviso: cobra 28 días y pierde el presentismo.
+    expect(payrollAmounts(rates, 'MONTHLY', 1250000, 12, { ...full, days_worked: 28, absence_days: 2 })).toMatchObject({
+      basic: 1166666.67,
+      seniority: 140000,
+      attendance: 0,
+      gross: 1306666.67,
+    })
+  })
+
+  it('por hora (jornalizado): el valor hora por las horas trabajadas; las extra, sobre el valor hora con la antigüedad', () => {
+    // Un oficial de Madera con 12 años: 7.100 la hora, 176 horas en el mes, 10 % de asistencia,
+    // 2 % de aporte sindical y 1 % de contribución del convenio.
+    const rates = { ...PAYROLL_DEFAULT_RATES, attendance_pct: 10, union_pct: 2, union_employer_pct: 1 }
+    const month = { ...full, days_worked: 0, hours_worked: 176 }
+    expect(payrollAmounts(rates, 'HOURLY', 7100, 12, month)).toEqual({
+      basic: 1249600,
+      seniority: 149952,
+      attendance: 139955.2,
+      overtime: 0,
+      gross: 1539507.2,
+      retirement: 169345.79,
+      pami: 46185.22,
+      health: 46185.22,
+      union_dues: 30790.14,
+      deductions: 292506.37,
+      net: 1247000.83,
+      employer: 369481.73,
+      union_contribution: 15395.07,
+    })
+    // El valor hora con la antigüedad es 7.100 + 852 = 7.952: 4 h al 50 % y 2 h al 100 %.
+    expect(payrollAmounts(rates, 'HOURLY', 7100, 12, { ...month, overtime_50: 4, overtime_100: 2 }).overtime).toBe(
+      79520,
+    )
+    // Los días no cuentan: cobra las horas que trabajó y, si faltó sin aviso, pierde la asistencia.
     expect(
-      payrollAmounts(PAYROLL_DEFAULT_RATES, 1250000, 12, { ...full, days_worked: 28, absence_days: 2 }),
-    ).toMatchObject({ basic: 1166666.67, seniority: 140000, attendance: 0, gross: 1306666.67 })
+      payrollAmounts(rates, 'HOURLY', 7100, 12, { ...month, days_worked: 30, hours_worked: 160, absence_days: 2 }),
+    ).toMatchObject({ basic: 1136000, seniority: 136320, attendance: 0, gross: 1272320 })
   })
 })
 
 describe('liquidación de sueldos', () => {
-  it('crear: el personal activo, los días desde el ingreso y los porcentajes de la empresa', () => {
-    // Un ayudante que ingresó el 10 de mayo: cobra 21 días del mes.
+  it('crear: el personal activo, los días (u horas) desde el ingreso y los porcentajes de la empresa y del convenio', () => {
+    // Un ayudante del taller que ingresó el 10 de mayo: cobra las horas de 21 días del mes.
     const sector = db.sectors.find((s) => s.company_id === companyId() && s.code === 'PRO')!
     const category = db.jobCategories.find((c) => c.company_id === companyId() && c.code === 'AYUDANTE')!
     const center = db.workCenters.find((w) => w.company_id === companyId() && w.code === 'ARMADO')!
@@ -125,16 +166,44 @@ describe('liquidación de sueldos', () => {
     const doc = byNumber('LIQ-00001')
     expect(doc).toMatchObject({ status: 'BORRADOR', py: { period: '2027-05', rates: PAYROLL_DEFAULT_RATES } })
     const lines = payrollLines(db, doc.id)
-    expect(lines).toHaveLength(11)
-    expect(lineOf(doc.id, 2)).toMatchObject({ seniority_years: 12, days_worked: 30, gross: 1516620, net: 1258794.6 })
-    expect(lineOf(doc.id, 11)).toMatchObject({ days_worked: 21, seniority_years: 0, basic: 665000 })
+    expect(lines).toHaveLength(12)
+    // El oficial, de Madera: por hora, con los porcentajes de su convenio.
+    expect(lineOf(doc.id, 2)).toMatchObject({
+      agreement_id: agreement('MADERA').id,
+      pay_basis: 'HOURLY',
+      seniority_years: 12,
+      days_worked: 0,
+      hours_worked: 176,
+      attendance_pct: 10,
+      union_pct: 2,
+      gross: 1539507.2,
+      net: 1247000.83,
+    })
+    // El chofer, de Camioneros: por mes, sin presentismo y con el 3 % para el sindicato.
+    expect(lineOf(doc.id, 11)).toMatchObject({
+      pay_basis: 'MONTHLY',
+      days_worked: 30,
+      seniority: 69000,
+      attendance: 0,
+      gross: 1219000,
+      union_dues: 36570,
+      union_contribution: 24380,
+    })
+    // La encargada, fuera de convenio: el sueldo pactado, sin adicionales ni sindicato.
+    expect(lineOf(doc.id, 1)).toMatchObject({
+      agreement_id: agreement('FUERA').id,
+      gross: 1500000,
+      union_dues: 0,
+      union_contribution: 0,
+    })
+    expect(lineOf(doc.id, 12)).toMatchObject({ days_worked: 0, hours_worked: 123.2, seniority_years: 0, basic: 665280 })
     expect(doc.subtotal).toBe(Math.round(lines.reduce((s, l) => s + l.gross, 0) * 100) / 100)
     expect(doc.total).toBe(Math.round(lines.reduce((s, l) => s + l.net, 0) * 100) / 100)
-    expect(db.audit.at(-1)!.summary).toBe('Creó LIQ-00001: sueldos de 05/2027 (11 empleados)')
+    expect(db.audit.at(-1)!.summary).toBe('Creó LIQ-00001: sueldos de 05/2027 (12 empleados)')
     expect(db.tasks.filter((t) => t.document_id === doc.id).map((t) => t.title)).toEqual(['Confirmar LIQ-00001'])
     expect(listDocuments(db, userId('tesoreria'), companyId(), 'PAYROLL')[0]).toMatchObject({
       summary: 'Sueldos de 05/2027',
-      line_count: 11,
+      line_count: 12,
     })
   })
 
@@ -156,22 +225,48 @@ describe('liquidación de sueldos', () => {
   it('novedades: se recalculan los importes; validaciones', () => {
     const { id } = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
     const ortiz = lineOf(id, 2)
+    const nunez = lineOf(id, 4)
+    const none = { days_worked: 0, hours_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 }
     cmdUpdatePayrollLines(ctx('rrhh'), id, [
-      { line_id: ortiz.id, days_worked: 28, absence_days: 2, overtime_50: 4, overtime_100: 0 },
+      { ...none, line_id: ortiz.id, hours_worked: 160, absence_days: 2, overtime_50: 4 },
+      { ...none, line_id: nunez.id, days_worked: 28, absence_days: 2, overtime_50: 4 },
     ])
-    // 28 días sin presentismo y 4 horas al 50 % (7.000 × 1,5 × 4 = 42.000).
-    expect(lineOf(id, 2)).toMatchObject({ basic: 1166666.67, attendance: 0, overtime: 42000, gross: 1348666.67 })
+    // Por hora: 160 horas sin asistencia y 4 horas al 50 % (7.952 × 1,5 × 4 = 47.712).
+    expect(lineOf(id, 2)).toMatchObject({
+      hours_worked: 160,
+      basic: 1136000,
+      attendance: 0,
+      overtime: 47712,
+      gross: 1320032,
+    })
+    // Por mes: 28 días sin presentismo y 4 horas al 50 % ((1.050.000 + 94.500) / 200 × 1,5 × 4 = 34.335).
+    expect(lineOf(id, 4)).toMatchObject({
+      days_worked: 28,
+      basic: 980000,
+      attendance: 0,
+      overtime: 34335,
+      gross: 1102535,
+    })
     expect(byNumber('LIQ-00001').subtotal).toBe(
       Math.round(payrollLines(db, id).reduce((s, l) => s + l.gross, 0) * 100) / 100,
     )
     const update = (lines: Parameters<typeof cmdUpdatePayrollLines>[2]) =>
       expectBusinessError(() => cmdUpdatePayrollLines(ctx('rrhh'), id, lines), 'DATO_INVALIDO')
-    const base = { line_id: ortiz.id, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 0 }
-    expect(update([{ ...base, days_worked: 29, absence_days: 2 }])).toBe(
-      'Los días trabajados y las ausencias de Ortiz, Ramón son enteros que juntos no pasan de 30.',
+    const monthly = { ...none, line_id: nunez.id, days_worked: 30 }
+    expect(update([{ ...monthly, days_worked: 29, absence_days: 2 }])).toBe(
+      'Los días trabajados y las ausencias de Núñez, Patricia son enteros que juntos no pasan de 30.',
     )
-    update([{ ...base, days_worked: 31 }])
-    update([{ ...base, days_worked: 29.5 }])
+    update([{ ...monthly, days_worked: 31 }])
+    update([{ ...monthly, days_worked: 29.5 }])
+    const base = { ...none, line_id: ortiz.id, hours_worked: 176 }
+    expect(update([{ ...base, hours_worked: 301 }])).toBe(
+      'Las horas trabajadas de Ortiz, Ramón van de 0 a 300, con hasta 2 decimales.',
+    )
+    update([{ ...base, hours_worked: 160.555 }])
+    expect(update([{ ...base, absence_days: 31 }])).toBe(
+      'Las ausencias sin aviso de Ortiz, Ramón son un entero de 0 a 30.',
+    )
+    update([{ ...base, absence_days: 1.5 }])
     expect(update([{ ...base, overtime_50: 250 }])).toBe(
       'Las horas extra de Ortiz, Ramón van de 0 a 200, con hasta 2 decimales.',
     )
@@ -193,31 +288,38 @@ describe('liquidación de sueldos', () => {
     const direct = lines.filter((l) => l.is_direct_labor)
     const others = lines.filter((l) => !l.is_direct_labor)
     expect(direct).toHaveLength(6)
+    // Las contribuciones incluyen la del convenio; lo retenido y lo contribuido al sindicato, en su cuenta.
     expect(entriesOf(id)).toEqual([
       [
         `5.2.01.01 ${sum(others, (l) => l.gross)} 0`,
-        `5.2.01.02 ${sum(others, (l) => l.employer)} 0`,
-        `5.1.03.01 ${sum(direct, (l) => l.gross + l.employer)} 0`,
+        `5.2.01.02 ${sum(others, (l) => l.employer + l.union_contribution)} 0`,
+        `5.1.03.01 ${sum(direct, (l) => l.gross + l.employer + l.union_contribution)} 0`,
         `2.1.03.01 0 ${sum(lines, (l) => l.net)}`,
-        `2.1.03.02 0 ${sum(lines, (l) => l.deductions + l.employer)}`,
+        `2.1.03.02 0 ${sum(lines, (l) => l.deductions - l.union_dues + l.employer)}`,
+        `2.1.03.03 0 ${sum(lines, (l) => l.union_dues + l.union_contribution)}`,
       ],
     ])
     const view = documentDetail(db, userId('contabilidad'), companyId(), 'PAYROLL', 'LIQ-00001')!.payroll!
     expect(view).toMatchObject({
       period: '2027-05',
       net: doc.total,
-      cost: sum(lines, (l) => l.gross + l.employer),
-      direct_labor: sum(direct, (l) => l.gross + l.employer),
+      cost: sum(lines, (l) => l.gross + l.employer + l.union_contribution),
+      direct_labor: sum(direct, (l) => l.gross + l.employer + l.union_contribution),
+      union_dues: sum(lines, (l) => l.union_dues),
+      union_contribution: sum(lines, (l) => l.union_contribution),
     })
     expect(view.lines[1]).toMatchObject({
       employee: { file_number: 2, last_name: 'Ortiz' },
       work_center: { code: 'CORTE' },
+      agreement: { code: 'MADERA', union_name: 'UOMA' },
+      pay_basis: 'HOURLY',
+      hours_worked: 176,
     })
     // Confirmada, ya no se cambian las novedades.
     expectBusinessError(
       () =>
         cmdUpdatePayrollLines(ctx('rrhh'), id, [
-          { line_id: lines[0].id, days_worked: 30, absence_days: 0, overtime_50: 0, overtime_100: 0 },
+          { line_id: lines[0].id, days_worked: 30, hours_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 },
         ]),
       'TRANSICION_INVALIDA',
     )
@@ -240,8 +342,9 @@ describe('liquidación de sueldos', () => {
     expect(cmdCreatePayroll(ctx('rrhh'), companyId(), input()).display_number).toBe('LIQ-00003')
   })
 
-  it('los porcentajes los cambia el docente; la liquidación conserva los suyos', () => {
+  it('los porcentajes legales los cambia el docente y los del convenio, RRHH; la liquidación conserva los suyos', () => {
     const before = cmdCreatePayroll(ctx('rrhh'), companyId(), input({ period: '2027-04', payment_date: '2027-05-05' }))
+    cmdSaveLaborAgreement(ctx('rrhh'), companyId(), { ...agreement('MADERA'), union_pct: 3 })
     expectBusinessError(
       () => cmdUpdateCompanySettings(ctx('rrhh'), companyId(), { payroll: { employer_pct: 20 } }),
       'SIN_PERMISO',
@@ -254,8 +357,9 @@ describe('liquidación de sueldos', () => {
     expect(db.audit.at(-1)!.summary).toBe('Cambió los porcentajes de la liquidación de sueldos')
     const after = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
     expect(byNumber(after.display_number).py!.rates.employer_pct).toBe(20)
-    expect(lineOf(after.id, 2).employer).toBe(303324)
+    expect(lineOf(after.id, 2)).toMatchObject({ employer: 307901.44, union_pct: 3, union_dues: 46185.22 })
     expect(byNumber(before.display_number).py!.rates.employer_pct).toBe(24)
+    expect(lineOf(before.id, 2).union_pct).toBe(2)
     // El resto de la configuración no cambia.
     expect(db.companies[0].settings).toMatchObject({ payroll: { employer_pct: 20 } })
   })
@@ -269,7 +373,39 @@ describe('liquidación de sueldos', () => {
     const upgraded = upgradeDatabase({ ...v14, version: 14 } as DB)!
     expect(upgraded.version).toBe(DB_VERSION)
     expect(upgraded.accounts.some((a) => a.company_id === company && a.code === '5.1.03.01')).toBe(true)
-    expect(upgraded.postingRules.filter((r) => r.company_id === company && r.event === 'SUELDOS')).toHaveLength(5)
+    expect(upgraded.postingRules.filter((r) => r.company_id === company && r.event === 'SUELDOS')).toHaveLength(6)
+  })
+
+  it('al actualizar una base guardada (v17), las liquidaciones de antes quedan por mes, con sus porcentajes y sin sindicato', () => {
+    cmdCreatePayroll(ctx('rrhh'), companyId(), input())
+    const stored = structuredClone(db)
+    stored.pyLines = stored.pyLines.map(
+      ({
+        agreement_id: _a,
+        pay_basis: _b,
+        seniority_pct: _c,
+        attendance_pct: _d,
+        union_pct: _e,
+        union_employer_pct: _f,
+        hours_worked: _g,
+        union_dues: _h,
+        union_contribution: _i,
+        ...line
+      }) => line as DB['pyLines'][number],
+    )
+    const upgraded = upgradeDatabase({ ...stored, version: 17 })!
+    expect(upgraded.version).toBe(DB_VERSION)
+    expect(upgraded.pyLines[0]).toMatchObject({
+      agreement_id: null,
+      pay_basis: 'MONTHLY',
+      seniority_pct: 1,
+      attendance_pct: 8.33,
+      union_pct: 0,
+      union_employer_pct: 0,
+      hours_worked: 0,
+      union_dues: 0,
+      union_contribution: 0,
+    })
   })
 })
 
@@ -278,7 +414,10 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
   const bank = () => account('1.1.01.03')
   const pending = (docId: string) =>
     db.tasks.filter((t) => t.document_id === docId && t.status === 'PENDIENTE').map((t) => t.title)
-  const charges = (docId: string) => round2(payrollLines(db, docId).reduce((s, l) => s + l.deductions + l.employer, 0))
+  const total = (docId: string, value: (l: ReturnType<typeof payrollLines>[number]) => number) =>
+    round2(payrollLines(db, docId).reduce((s, l) => s + value(l), 0))
+  /** Las cargas sociales: lo de la seguridad social y lo de los sindicatos. */
+  const charges = (docId: string) => total(docId, (l) => l.deductions + l.employer + l.union_contribution)
 
   /** Una liquidación de mayo confirmada con dos empleados (los demás, sin días): alcanza el banco de la demo. */
   function confirmed(username = 'rrhh') {
@@ -288,7 +427,14 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
       id,
       payrollLines(db, id)
         .slice(2)
-        .map((l) => ({ line_id: l.id, days_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 })),
+        .map((l) => ({
+          line_id: l.id,
+          days_worked: 0,
+          hours_worked: 0,
+          absence_days: 0,
+          overtime_50: 0,
+          overtime_100: 0,
+        })),
     )
     cmdConfirmPayroll(ctx(username), id)
     return id
@@ -327,10 +473,14 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
     cmdPayPayrollCharges(ctx('tesoreria'), id, bank())
     expect(doc).toMatchObject({ status: 'PAGADA', py: { charges_paid_on: '2027-05-14', charges_account_id: bank() } })
     expect(pending(id)).toEqual([])
-    // El de sueldos y, después, los dos pagos: cada deuda contra el banco.
+    // El de sueldos y, después, los dos pagos: cada deuda contra el banco (las cargas, con lo de los sindicatos).
     expect(entriesOf(id).slice(1)).toEqual([
       [`2.1.03.01 ${doc.total} 0`, `1.1.01.03 0 ${doc.total}`],
-      [`2.1.03.02 ${charges(id)} 0`, `1.1.01.03 0 ${charges(id)}`],
+      [
+        `2.1.03.02 ${total(id, (l) => l.deductions - l.union_dues + l.employer)} 0`,
+        `2.1.03.03 ${total(id, (l) => l.union_dues + l.union_contribution)} 0`,
+        `1.1.01.03 0 ${charges(id)}`,
+      ],
     ])
     expect(documentDetail(db, userId('tesoreria'), companyId(), 'PAYROLL', 'LIQ-00001')!.payroll).toMatchObject({
       charges: charges(id),
@@ -428,7 +578,9 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
     const corte = view.rows.find((r) => r.work_center?.code === 'CORTE')!
     expect(corte.real).toBe(
       round2(
-        direct.filter((l) => l.work_center_id === corte.work_center!.id).reduce((s, l) => s + l.gross + l.employer, 0),
+        direct
+          .filter((l) => l.work_center_id === corte.work_center!.id)
+          .reduce((s, l) => s + l.gross + l.employer + l.union_contribution, 0),
       ),
     )
     expect(view.real).toBe(
@@ -463,7 +615,7 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
         .filter((r) => r.company_id === company && (r.event === 'PAGO_SUELDOS' || r.event === 'PAGO_CARGAS_SOCIALES'))
         .map((r) => r.key)
         .sort(),
-    ).toEqual(['CARGAS_SOCIALES_A_PAGAR', 'SUELDOS_A_PAGAR'])
+    ).toEqual(['CARGAS_SOCIALES_A_PAGAR', 'SINDICATOS_A_PAGAR', 'SUELDOS_A_PAGAR'])
     expect(upgraded.documents.find((d) => d.py)!.py).toMatchObject({ salaries_paid_on: null, charges_account_id: null })
   })
 })

@@ -34,13 +34,22 @@ export function PayrollReceipts({ detail, company }: { detail: DocumentDetail; c
       </div>
       {view.lines.map((l) => {
         const rows: { concept: string; amount: string; earning?: number; deduction?: number }[] = [
-          { concept: 'Sueldo básico', amount: `${l.days_worked} días`, earning: l.basic },
-          { concept: 'Antigüedad', amount: `${l.seniority_years} años`, earning: l.seniority },
-          {
-            concept: 'Presentismo',
-            amount: l.absence_days ? `${l.absence_days} ausencias` : '',
-            earning: l.attendance,
-          },
+          l.pay_basis === 'HOURLY'
+            ? { concept: 'Jornal', amount: `${qty(l.hours_worked)} h × ${money(l.basic_salary)}`, earning: l.basic }
+            : { concept: 'Sueldo básico', amount: `${l.days_worked} días`, earning: l.basic },
+          // Los adicionales que el convenio no tiene (por ejemplo, fuera de convenio) no van.
+          ...(l.seniority_pct
+            ? [{ concept: 'Antigüedad', amount: `${l.seniority_years} años`, earning: l.seniority }]
+            : []),
+          ...(l.attendance_pct
+            ? [
+                {
+                  concept: 'Presentismo',
+                  amount: l.absence_days ? `${l.absence_days} ausencias` : '',
+                  earning: l.attendance,
+                },
+              ]
+            : []),
           ...(l.overtime_50 || l.overtime_100
             ? [
                 {
@@ -58,6 +67,15 @@ export function PayrollReceipts({ detail, company }: { detail: DocumentDetail; c
           { concept: 'Jubilación', amount: rate(view.rates.retirement_pct), deduction: l.retirement },
           { concept: 'Ley 19.032', amount: rate(view.rates.pami_pct), deduction: l.pami },
           { concept: 'Obra social', amount: rate(view.rates.health_pct), deduction: l.health },
+          ...(l.union_dues
+            ? [
+                {
+                  concept: `Aporte sindical${l.agreement?.union_name ? ` (${l.agreement.union_name})` : ''}`,
+                  amount: rate(l.union_pct),
+                  deduction: l.union_dues,
+                },
+              ]
+            : []),
         ]
         return (
           <article
@@ -92,10 +110,14 @@ export function PayrollReceipts({ detail, company }: { detail: DocumentDetail; c
                 <b>Legajo:</b> {l.employee.file_number}
               </div>
               <div>
-                <b>Categoría:</b> {l.category.name} (básico {money(l.basic_salary)})
+                <b>Categoría:</b> {l.category.name} ({l.pay_basis === 'HOURLY' ? 'valor hora' : 'básico'}{' '}
+                {money(l.basic_salary)})
               </div>
               <div>
                 <b>Ingreso:</b> {date(l.employee.hire_date)} ({l.seniority_years} años)
+              </div>
+              <div>
+                <b>Convenio:</b> {l.agreement?.name ?? '—'}
               </div>
               <div>
                 <b>Sector:</b> {l.sector.name}
@@ -138,7 +160,7 @@ export function PayrollReceipts({ detail, company }: { detail: DocumentDetail; c
               </div>
               <div className="mt-1 flex justify-between text-[11px] text-slate-600">
                 <span>Contribuciones de la empresa (informativo)</span>
-                <span>{money(l.employer)}</span>
+                <span>{money(l.employer + l.union_contribution)}</span>
               </div>
             </div>
             <section className="mt-16 grid grid-cols-2 gap-10">

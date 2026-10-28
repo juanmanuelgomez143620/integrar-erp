@@ -1,5 +1,5 @@
-// Pruebas de las categorías y los legajos del personal (docs/FASE_6_RRHH_Y_SUELDOS.md §2)
-// sobre buildSeed() y los cmd*.
+// Pruebas de los convenios, las categorías y los legajos del personal (docs/FASE_6_RRHH_Y_SUELDOS.md §2
+// y docs/FASE_6D_CONVENIOS.md) sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
@@ -9,15 +9,18 @@ import {
   cmdCreateCourse,
   cmdSaveEmployee,
   cmdSaveJobCategory,
+  cmdSaveLaborAgreement,
   cmdSaveWorkCenter,
   cmdSetJobCategoryActive,
+  cmdSetLaborAgreementActive,
   cmdSetWorkCenterActive,
   cmdTerminateEmployee,
   type Ctx,
   type EmployeeInput,
   type JobCategoryInput,
+  type LaborAgreementInput,
 } from './engine'
-import { listEmployees, listJobCategories } from './queries'
+import { listEmployees, listJobCategories, listLaborAgreements } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -36,6 +39,7 @@ const userId = (username: string) => db.profiles.find((p) => p.username === user
 const ctx = (username: string): Ctx => ({ db, userId: userId(username), now: new Date().toISOString() })
 const companyId = () => db.companies[0].id
 const category = (code: string) => db.jobCategories.find((c) => c.company_id === companyId() && c.code === code)!
+const agreement = (code: string) => db.laborAgreements.find((a) => a.company_id === companyId() && a.code === code)!
 const sector = (code: string) => db.sectors.find((s) => s.company_id === companyId() && s.code === code)!
 const center = (code: string) => db.workCenters.find((w) => w.company_id === companyId() && w.code === code)!
 const byFile = (n: number) => db.employees.find((e) => e.company_id === companyId() && e.file_number === n)!
@@ -55,8 +59,22 @@ const categoryInput = (over: Partial<JobCategoryInput> = {}): JobCategoryInput =
   id: '',
   code: 'LUSTRADOR',
   name: 'Lustrador',
-  basic_salary: 1150000,
+  agreement_id: agreement('MADERA').id,
+  basic_salary: 6500,
   is_direct_labor: true,
+  ...over,
+})
+
+const agreementInput = (over: Partial<LaborAgreementInput> = {}): LaborAgreementInput => ({
+  id: '',
+  code: 'METAL',
+  name: 'Industria metalúrgica',
+  union_name: 'UOM',
+  pay_basis: 'HOURLY',
+  seniority_pct: 1,
+  attendance_pct: 10,
+  union_pct: 2.5,
+  union_employer_pct: 1.5,
   ...over,
 })
 
@@ -72,26 +90,41 @@ const employeeInput = (over: Partial<EmployeeInput> = {}): EmployeeInput => ({
 })
 
 describe('la demo', () => {
-  it('trae las categorías y el personal: seis en el taller, cada uno en su centro', () => {
+  it('trae los convenios, las categorías y el personal: seis en el taller, cada uno en su centro', () => {
+    expect(
+      listLaborAgreements(db, userId('rrhh'), companyId()).map((a) => [a.code, a.pay_basis, a.categories, a.employees]),
+    ).toEqual([
+      ['CAMIONEROS', 'MONTHLY', 1, 1],
+      ['COMERCIO', 'MONTHLY', 2, 2],
+      ['FUERA', 'MONTHLY', 1, 1],
+      ['MADERA', 'HOURLY', 4, 7],
+    ])
     expect(
       listJobCategories(db, userId('rrhh'), companyId()).map((c) => [
         c.code,
+        c.agreement.code,
         c.basic_salary,
         c.is_direct_labor,
         c.employees,
       ]),
     ).toEqual([
-      ['ADMIN', 1050000, false, 1],
-      ['AYUDANTE', 950000, true, 1],
-      ['ENCARGADO', 1500000, false, 1],
-      ['MEDIO-OF', 1100000, true, 3],
-      ['OFICIAL', 1250000, true, 2],
-      ['OPERARIO', 980000, false, 1],
-      ['VENDEDOR', 1000000, false, 1],
+      ['ADMIN', 'COMERCIO', 1050000, false, 1],
+      ['AYUDANTE', 'MADERA', 5400, true, 1],
+      ['CHOFER', 'CAMIONEROS', 1150000, false, 1],
+      ['ENCARGADO', 'FUERA', 1500000, false, 1],
+      ['MEDIO-OF', 'MADERA', 6250, true, 3],
+      ['OFICIAL', 'MADERA', 7100, true, 2],
+      ['OPERARIO', 'MADERA', 5570, false, 1],
+      ['VENDEDOR', 'COMERCIO', 1000000, false, 1],
     ])
     const staff = listEmployees(db, userId('rrhh'), companyId())
-    expect(staff).toHaveLength(10)
-    expect(staff.map((e) => e.file_number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(staff).toHaveLength(11)
+    expect(staff.map((e) => e.file_number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    expect(staff.find((e) => e.file_number === 11)).toMatchObject({
+      last_name: 'Aguirre',
+      category: { code: 'CHOFER', agreement_code: 'CAMIONEROS', pay_basis: 'MONTHLY' },
+      sector: { code: 'LOG' },
+    })
     // La antigüedad son los años cumplidos al día de hoy (14/05/2027).
     expect(staff.find((e) => e.file_number === 2)).toMatchObject({
       last_name: 'Ortiz',
@@ -108,25 +141,100 @@ describe('la demo', () => {
   it('la empresa nueva de un curso copia el personal de la plantilla, con sus sectores y centros', () => {
     const course = cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º B', orientation: 'Gestión' })
     const { id } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
-    expect(db.jobCategories.filter((c) => c.company_id === id)).toHaveLength(7)
+    expect(db.laborAgreements.filter((a) => a.company_id === id)).toHaveLength(4)
+    expect(db.jobCategories.filter((c) => c.company_id === id)).toHaveLength(8)
     const staff = db.employees.filter((e) => e.company_id === id)
-    expect(staff).toHaveLength(10)
+    expect(staff).toHaveLength(11)
     for (const e of staff) {
-      expect(db.jobCategories.find((c) => c.id === e.category_id)!.company_id).toBe(id)
+      const own = db.jobCategories.find((c) => c.id === e.category_id)!
+      expect(own.company_id).toBe(id)
+      expect(db.laborAgreements.find((a) => a.id === own.agreement_id)!.company_id).toBe(id)
       expect(db.sectors.find((s) => s.id === e.sector_id)!.company_id).toBe(id)
       if (e.work_center_id) expect(db.workCenters.find((w) => w.id === e.work_center_id)!.company_id).toBe(id)
     }
   })
 
   it('al actualizar una base guardada (v13), cada empresa recibe el personal de la demo', () => {
-    const { jobCategories: _categories, employees: _employees, ...v13 } = structuredClone(db)
+    const {
+      jobCategories: _categories,
+      employees: _employees,
+      laborAgreements: _agreements,
+      ...v13
+    } = structuredClone(db)
     const stored = { ...v13, version: 13 } as DB
     const upgraded = upgradeDatabase(stored)!
     expect(upgraded.version).toBe(DB_VERSION)
-    expect(upgraded.jobCategories).toHaveLength(7)
-    expect(upgraded.employees).toHaveLength(10)
+    expect(upgraded.laborAgreements).toHaveLength(4)
+    expect(upgraded.jobCategories).toHaveLength(8)
+    expect(upgraded.employees).toHaveLength(11)
     // Una segunda vez no duplica nada.
-    expect(upgradeDatabase({ ...upgraded, version: 13 })!.employees).toHaveLength(10)
+    expect(upgradeDatabase({ ...upgraded, version: 13 })!.employees).toHaveLength(11)
+  })
+
+  it('al actualizar una base guardada (v17), cada categoría pasa a su convenio y se suma el chofer', () => {
+    const stored = structuredClone(db)
+    const company = companyId()
+    stored.laborAgreements = []
+    stored.jobCategories = stored.jobCategories.filter((c) => c.code !== 'CHOFER')
+    stored.employees = stored.employees.filter((e) => e.file_number !== 11)
+    // Como antes de los convenios: básicos mensuales y sin convenio.
+    for (const c of stored.jobCategories) {
+      ;(c as { agreement_id: string | null }).agreement_id = null
+      if (c.code === 'OFICIAL') c.basic_salary = 1250000
+    }
+    const upgraded = upgradeDatabase({ ...stored, version: 17 })!
+    const own = (code: string) => upgraded.jobCategories.find((c) => c.company_id === company && c.code === code)!
+    const agreementOf = (code: string) => upgraded.laborAgreements.find((a) => a.id === own(code).agreement_id)!.code
+    expect(agreementOf('OFICIAL')).toBe('MADERA')
+    expect(own('OFICIAL').basic_salary).toBe(7102.27)
+    expect(agreementOf('ENCARGADO')).toBe('FUERA')
+    expect(agreementOf('VENDEDOR')).toBe('COMERCIO')
+    expect(agreementOf('CHOFER')).toBe('CAMIONEROS')
+    expect(upgraded.employees.find((e) => e.company_id === company && e.file_number === 11)).toMatchObject({
+      last_name: 'Aguirre',
+    })
+    expect(upgraded.accounts.some((a) => a.company_id === company && a.code === '2.1.03.03')).toBe(true)
+  })
+})
+
+describe('convenios', () => {
+  it('alta, cambios, validaciones, la forma de pago fija con categorías y desactivación', () => {
+    const { id } = cmdSaveLaborAgreement(ctx('rrhh'), companyId(), agreementInput({ code: ' metal ' }))
+    expect(db.laborAgreements.find((a) => a.id === id)).toMatchObject({
+      code: 'METAL',
+      pay_basis: 'HOURLY',
+      union_pct: 2.5,
+      is_active: true,
+    })
+    expect(db.audit.at(-1)!.summary).toBe('Creó el convenio METAL Industria metalúrgica (por hora)')
+    cmdSaveLaborAgreement(ctx('rrhh'), companyId(), agreementInput({ id, union_pct: 3 }))
+    expect(db.audit.at(-1)).toMatchObject({ action: 'UPDATE', changes: { union_pct: { from: 2.5, to: 3 } } })
+    const save = (input: LaborAgreementInput) =>
+      expectBusinessError(() => cmdSaveLaborAgreement(ctx('rrhh'), companyId(), input), 'DATO_INVALIDO')
+    expect(save(agreementInput({ code: 'MADERA' }))).toBe('Ya existe un convenio con el código MADERA.')
+    save(agreementInput({ code: 'TEXTIL', name: 'U' }))
+    expect(save(agreementInput({ code: 'TEXTIL', pay_basis: 'SEMANAL' as never }))).toBe(
+      'Elegí si el convenio paga por mes o por hora.',
+    )
+    expect(save(agreementInput({ code: 'TEXTIL', union_pct: 120 }))).toBe(
+      'Los porcentajes del convenio van de 0 a 100, con hasta 2 decimales.',
+    )
+    save(agreementInput({ code: 'TEXTIL', attendance_pct: 8.333 }))
+    // Con categorías, la forma de pago no cambia (sus importes son por mes o por hora).
+    const madera = agreement('MADERA')
+    expect(save(agreementInput({ id: madera.id, code: 'MADERA', name: madera.name, pay_basis: 'MONTHLY' }))).toContain(
+      'no se cambia su forma de pago',
+    )
+    for (const username of ['produccion', 'gerencia'])
+      expectBusinessError(() => cmdSaveLaborAgreement(ctx(username), companyId(), agreementInput()), 'SIN_PERMISO')
+    // Desactivado, no se asigna a categorías nuevas.
+    cmdSetLaborAgreementActive(ctx('rrhh'), companyId(), id, false)
+    expect(
+      expectBusinessError(
+        () => cmdSaveJobCategory(ctx('rrhh'), companyId(), categoryInput({ agreement_id: id })),
+        'DATO_INVALIDO',
+      ),
+    ).toBe('El convenio METAL Industria metalúrgica está inactivo.')
   })
 })
 
@@ -134,25 +242,28 @@ describe('categorías', () => {
   it('alta, cambios con auditoría, validaciones y desactivación', () => {
     const { id } = cmdSaveJobCategory(ctx('rrhh'), companyId(), categoryInput({ code: ' lustrador ' }))
     const created = db.jobCategories.find((c) => c.id === id)!
-    expect(created).toMatchObject({ code: 'LUSTRADOR', basic_salary: 1150000, is_direct_labor: true, is_active: true })
+    expect(created).toMatchObject({ code: 'LUSTRADOR', basic_salary: 6500, is_direct_labor: true, is_active: true })
     expect(db.audit.at(-1)!.summary).toMatch(
-      /^Creó la categoría LUSTRADOR Lustrador: sueldo básico de \$\s1\.150\.000,00, del taller$/,
+      /^Creó la categoría LUSTRADOR Lustrador \(MADERA\): valor hora de \$\s6\.500,00, del taller$/,
     )
     // Sin cambios no se registra nada; con cambios, la auditoría guarda el antes y el después.
     const audits = db.audit.length
     cmdSaveJobCategory(ctx('rrhh'), companyId(), categoryInput({ id }))
     expect(db.audit).toHaveLength(audits)
-    cmdSaveJobCategory(ctx('rrhh'), companyId(), categoryInput({ id, basic_salary: 1200000 }))
+    cmdSaveJobCategory(ctx('rrhh'), companyId(), categoryInput({ id, basic_salary: 6800 }))
     expect(db.audit.at(-1)).toMatchObject({
       action: 'UPDATE',
-      changes: { basic_salary: { from: 1150000, to: 1200000 } },
+      changes: { basic_salary: { from: 6500, to: 6800 } },
     })
     const save = (input: JobCategoryInput, username = 'rrhh') =>
       expectBusinessError(() => cmdSaveJobCategory(ctx(username), companyId(), input), 'DATO_INVALIDO')
     expect(save(categoryInput({ code: 'OFICIAL' }))).toBe('Ya existe una categoría con el código OFICIAL.')
     save(categoryInput({ code: 'con espacios' }))
     save(categoryInput({ name: 'L' }))
-    save(categoryInput({ basic_salary: 0 }))
+    expect(save(categoryInput({ code: 'PULIDOR', basic_salary: 0 }))).toBe(
+      'El valor hora debe ser un importe mayor que cero, con hasta 2 decimales.',
+    )
+    expect(save(categoryInput({ code: 'PULIDOR', agreement_id: '' }))).toBe('Elegí el convenio de la categoría.')
     save(categoryInput({ basic_salary: 1000.555 }))
     save(categoryInput({ id: 'no-existe' }))
     save(categoryInput({ is_direct_labor: 'sí' as unknown as boolean }))
@@ -178,15 +289,15 @@ describe('legajos', () => {
   it('alta con el número siguiente, cambios, validaciones y baja', () => {
     const { id } = cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput())
     const employee = db.employees.find((e) => e.id === id)!
-    expect(employee).toMatchObject({ file_number: 11, last_name: 'Acuña', status: 'ACTIVO' })
-    expect(db.audit.at(-1)!.summary).toBe('Dio de alta el legajo 11: Acuña, Rubén (Ayudante de taller)')
+    expect(employee).toMatchObject({ file_number: 12, last_name: 'Acuña', status: 'ACTIVO' })
+    expect(db.audit.at(-1)!.summary).toBe('Dio de alta el legajo 12: Acuña, Rubén (Ayudante de taller)')
     // Pasa a Medio oficial en Terminación.
     cmdSaveEmployee(
       ctx('rrhh'),
       companyId(),
       employeeInput({ id, category_id: category('MEDIO-OF').id, work_center_id: center('TERMINACION').id }),
     )
-    expect(db.audit.at(-1)).toMatchObject({ action: 'UPDATE', summary: 'Modificó el legajo 11 (Acuña, Rubén)' })
+    expect(db.audit.at(-1)).toMatchObject({ action: 'UPDATE', summary: 'Modificó el legajo 12 (Acuña, Rubén)' })
     expect(Object.keys(db.audit.at(-1)!.changes!)).toEqual(['category_id', 'work_center_id'])
 
     const save = (input: EmployeeInput) =>
@@ -246,13 +357,13 @@ describe('legajos', () => {
     )
     terminate('2027-05-10', 'Renuncia')
     expect(employee).toMatchObject({ status: 'BAJA', termination_date: '2027-05-10', termination_reason: 'Renuncia' })
-    expect(db.audit.at(-1)!.summary).toBe('Dio de baja el legajo 11 (Acuña, Rubén Darío) el 10/05/2027 — Renuncia')
+    expect(db.audit.at(-1)!.summary).toBe('Dio de baja el legajo 12 (Acuña, Rubén Darío) el 10/05/2027 — Renuncia')
     expectBusinessError(() => terminate('2027-05-12', 'Otra vez'), 'TRANSICION_INVALIDA')
     expectBusinessError(() => cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput({ id })), 'TRANSICION_INVALIDA')
     // Ya no cuenta como personal activo de su categoría.
     expect(listJobCategories(db, userId('rrhh'), companyId()).find((c) => c.code === 'MEDIO-OF')!.employees).toBe(3)
     // La antigüedad de un legajo dado de baja es la del día de la baja.
-    expect(listEmployees(db, userId('gerencia'), companyId()).find((e) => e.file_number === 11)).toMatchObject({
+    expect(listEmployees(db, userId('gerencia'), companyId()).find((e) => e.file_number === 12)).toMatchObject({
       status: 'BAJA',
       seniority_years: 0,
       termination_date: '2027-05-10',
@@ -261,13 +372,13 @@ describe('legajos', () => {
 
   it('permisos: RRHH da de alta; Gerencia, Contabilidad y Auditoría consultan; los demás no ven los legajos', () => {
     for (const username of ['gerencia', 'contabilidad', 'auditor'])
-      expect(listEmployees(db, userId(username), companyId())).toHaveLength(10)
+      expect(listEmployees(db, userId(username), companyId())).toHaveLength(11)
     for (const username of ['produccion', 'ventas', 'compras1'])
       expect(() => listEmployees(db, userId(username), companyId())).toThrow()
     for (const username of ['gerencia', 'produccion'])
       expectBusinessError(() => cmdSaveEmployee(ctx(username), companyId(), employeeInput()), 'SIN_PERMISO')
     // El número de legajo sigue al último aunque haya bajas.
-    cmdTerminateEmployee(ctx('rrhh'), companyId(), byFile(10).id, '2027-05-14', 'Fin del contrato')
-    expect(cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput()).id).toBe(byFile(11).id)
+    cmdTerminateEmployee(ctx('rrhh'), companyId(), byFile(11).id, '2027-05-14', 'Fin del contrato')
+    expect(cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput()).id).toBe(byFile(12).id)
   })
 })

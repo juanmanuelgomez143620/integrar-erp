@@ -48,6 +48,7 @@ export type {
   IvaBook,
   IvaBookRow,
   JobCategoryRow,
+  LaborAgreementRow,
   JournalBook,
   JournalBookEntry,
   JournalView,
@@ -250,6 +251,7 @@ const mockApi = {
   workCenters: (companyId: string) => query((db, u) => Q.listWorkCenters(db, u, companyId)),
   productionCosts: (companyId: string, from: string, to: string) =>
     query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
+  laborAgreements: (companyId: string) => query((db, u) => Q.listLaborAgreements(db, u, companyId)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
   employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
   /** El libro IVA ventas (sales) o compras de un mes (aaaa-mm). */
@@ -413,6 +415,10 @@ const mockCommands = {
   requestProductionMaterials: (companyId: string, documentIds: string[]) =>
     command((c) => E.cmdRequestProductionMaterials(c, companyId, documentIds)),
 
+  saveLaborAgreement: (companyId: string, input: E.LaborAgreementInput) =>
+    command((c) => E.cmdSaveLaborAgreement(c, companyId, input)),
+  setLaborAgreementActive: (companyId: string, agreementId: string, active: boolean) =>
+    command((c) => E.cmdSetLaborAgreementActive(c, companyId, agreementId, active)),
   saveJobCategory: (companyId: string, input: E.JobCategoryInput) =>
     command((c) => E.cmdSaveJobCategory(c, companyId, input)),
   setJobCategoryActive: (companyId: string, categoryId: string, active: boolean) =>

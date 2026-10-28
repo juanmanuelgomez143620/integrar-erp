@@ -84,11 +84,21 @@ const mockOperations = ofTemplate(seed.boms)
   )
   .sort()
 
-/** El personal de la demo: "categoría básico taller" y "legajo apellido categoría sector centro ingreso". */
+/**
+ * El personal de la demo: "convenio forma porcentajes sindicato", "categoría convenio básico
+ * taller" y "legajo apellido categoría sector centro ingreso".
+ */
+const mockAgreementCode = Object.fromEntries(ofTemplate(seed.laborAgreements).map((a) => [a.id, a.code]))
+const mockAgreements = ofTemplate(seed.laborAgreements)
+  .map(
+    (a) =>
+      `${a.code} ${a.pay_basis} ${a.seniority_pct} ${a.attendance_pct} ${a.union_pct} ${a.union_employer_pct} ${a.union_name}`,
+  )
+  .sort()
 const mockCategoryCode = Object.fromEntries(ofTemplate(seed.jobCategories).map((c) => [c.id, c.code]))
 const mockSectorCode = Object.fromEntries(ofTemplate(seed.sectors).map((x) => [x.id, x.code]))
 const mockCategories = ofTemplate(seed.jobCategories)
-  .map((c) => `${c.code} ${c.basic_salary} ${c.is_direct_labor}`)
+  .map((c) => `${c.code} ${mockAgreementCode[c.agreement_id]} ${c.basic_salary} ${c.is_direct_labor}`)
   .sort()
 const mockStaff = ofTemplate(seed.employees)
   .map(
@@ -198,11 +208,24 @@ const operations = async (company: string) =>
     .map((r) => r.line)
     .sort()
 
+const agreements = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select code || ' ' || pay_basis || ' ' || (seniority_pct::float8)::text || ' ' || (attendance_pct::float8)::text
+              || ' ' || (union_pct::float8)::text || ' ' || (union_employer_pct::float8)::text || ' ' || union_name as line
+         from public.labor_agreements where company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
 const categories = async (company: string) =>
   (
     await db.admin<{ line: string }>(
-      `select code || ' ' || (basic_salary::float8)::text || ' ' || is_direct_labor::text as line
-         from public.job_categories where company_id = $1`,
+      `select c.code || ' ' || a.code || ' ' || (c.basic_salary::float8)::text || ' ' || c.is_direct_labor::text as line
+         from public.job_categories c join public.labor_agreements a on a.id = c.agreement_id
+        where c.company_id = $1`,
       [company],
     )
   )
@@ -410,10 +433,12 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await operations(template)).toEqual(mockOperations)
   })
 
-  it('tiene las mismas categorías y el mismo personal que la demo', async () => {
-    expect(mockCategories).toHaveLength(7)
+  it('tiene los mismos convenios, categorías y personal que la demo', async () => {
+    expect(mockAgreements).toHaveLength(4)
+    expect(await agreements(template)).toEqual(mockAgreements)
+    expect(mockCategories).toHaveLength(8)
     expect(await categories(template)).toEqual(mockCategories)
-    expect(mockStaff).toHaveLength(10)
+    expect(mockStaff).toHaveLength(11)
     expect(await staff(template)).toEqual(mockStaff)
   })
 
@@ -482,6 +507,7 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await boms(created.id)).toEqual(mockBoms)
     expect(await centers(created.id)).toEqual(mockCenters)
     expect(await operations(created.id)).toEqual(mockOperations)
+    expect(await agreements(created.id)).toEqual(mockAgreements)
     expect(await categories(created.id)).toEqual(mockCategories)
     expect(await staff(created.id)).toEqual(mockStaff)
   })

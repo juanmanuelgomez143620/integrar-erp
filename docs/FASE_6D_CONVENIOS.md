@@ -40,5 +40,12 @@ Borrador → **Pendiente de autorización** (envió RRHH) → Confirmada (autori
 
 | Paso | Qué | Estado |
 |---|---|---|
-| 6d.1 | Convenios, categorías por convenio (mensual o por hora), el chofer de la demo, el cálculo con los conceptos de cada convenio, la cuenta Sindicatos a pagar y el recibo | Pendiente |
+| 6d.1 | Convenios, categorías por convenio (mensual o por hora), el chofer de la demo, el cálculo con los conceptos de cada convenio, la cuenta Sindicatos a pagar y el recibo | Hecho (28/10) |
 | 6d.2 | Envío y autorización de Gerencia (o devolución con motivo) antes del asiento y del pago | Pendiente |
+
+### Notas de la 6d.1
+
+- Pantalla nueva **RRHH → Convenios** (permiso `employee.read` para verla y `employee.update` para cambiarla, como las categorías). Un convenio con categorías no cambia su forma de pago: sus importes son mensuales o por hora (se crea otro convenio).
+- Base de datos: migraciones 62 a 65 (`20261028120000_convenios.sql`, catálogos, plantilla y empresas existentes). Tabla `labor_agreements`; `job_categories.agreement_id` (obligatoria) y, en `payroll_lines`, el convenio copiado con sus porcentajes, las horas trabajadas, el aporte sindical y la contribución del convenio.
+- Las empresas que ya existían (y las bases guardadas del simulador, versión 18) reciben los cuatro convenios; sus categorías pasan al suyo (taller y depósito a Madera, con el valor hora = básico ÷ 176; la encargada, fuera de convenio; las demás, a Comercio), se suma el chofer con el legajo siguiente y las liquidaciones de antes quedan por mes, sin convenio y sin sindicato.
+- El recibo no muestra los adicionales que el convenio no tiene (por ejemplo, fuera de convenio no hay antigüedad ni presentismo).

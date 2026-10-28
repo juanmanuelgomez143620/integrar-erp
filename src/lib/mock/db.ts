@@ -6,15 +6,18 @@
 
 import type * as T from '../domain/types'
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
-import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES } from '../domain/employees'
+import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } from '../domain/employees'
 import {
   insertBaseChart,
   insertBasePostingRules,
   insertBomOperations,
   insertBoms,
+  insertDriver,
   insertEmployees,
   insertJobCategories,
+  insertLaborAgreements,
   insertWorkCenters,
+  round2,
   startAccounting,
 } from './engine'
 import { buildSeed } from './seed'
@@ -68,6 +71,7 @@ export interface DB {
   workCenters: T.WorkCenter[]
   bomOperations: T.BomOperation[]
   prdOperations: T.ProductionOrderOperation[]
+  laborAgreements: T.LaborAgreement[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -85,7 +89,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 17
+export const DB_VERSION = 18
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -141,6 +145,7 @@ const COLLECTIONS = [
   'workCenters',
   'bomOperations',
   'prdOperations',
+  'laborAgreements',
   'jobCategories',
   'employees',
   'pyLines',
@@ -314,8 +319,11 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   13: (db) => {
     db.jobCategories ??= []
     db.employees ??= []
+    // Las categorías de la demo ya vienen en un convenio (Fase 6d).
+    db.laborAgreements ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) {
+      insertLaborAgreements(ctx, company.id, DEMO_LABOR_AGREEMENTS)
       insertJobCategories(ctx, company.id, DEMO_JOB_CATEGORIES)
       insertEmployees(ctx, company.id, DEMO_EMPLOYEES)
     }
@@ -349,6 +357,53 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   16: (db) => {
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+  },
+  // v17 → v18: convenios colectivos (Fase 6d): los de la demo en cada empresa; cada categoría
+  // que no tiene convenio pasa al suyo (las del taller y la del depósito, a Madera y por hora: lo
+  // que cobraban en un mes completo; la de encargado, fuera de convenio; las demás, a Comercio);
+  // la categoría y el legajo del chofer si faltan; la cuenta Sindicatos a pagar con sus reglas; y
+  // en las liquidaciones que ya había, sin convenio y con los porcentajes de su liquidación.
+  17: (db) => {
+    db.laborAgreements ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
+      insertBasePostingRules(ctx, company.id)
+      insertLaborAgreements(ctx, company.id, DEMO_LABOR_AGREEMENTS)
+      const agreement = (code: string) =>
+        db.laborAgreements.find((a) => a.company_id === company.id && a.code === code)!
+      for (const category of db.jobCategories.filter((c) => c.company_id === company.id && !c.agreement_id)) {
+        const own = agreement(
+          category.code === 'ENCARGADO'
+            ? 'FUERA'
+            : category.is_direct_labor || category.code === 'OPERARIO'
+              ? 'MADERA'
+              : 'COMERCIO',
+        )
+        category.agreement_id = own.id
+        if (own.pay_basis === 'HOURLY') category.basic_salary = round2(category.basic_salary / MONTH_HOURS)
+      }
+      insertJobCategories(ctx, company.id, DEMO_JOB_CATEGORIES)
+      insertDriver(
+        ctx,
+        company.id,
+        DEMO_EMPLOYEES.find((e) => e.category === 'CHOFER')!,
+      )
+    }
+    for (const line of db.pyLines) {
+      const rates = db.documents.find((d) => d.id === line.document_id)?.py?.rates
+      Object.assign(line, {
+        agreement_id: line.agreement_id ?? null,
+        pay_basis: line.pay_basis ?? 'MONTHLY',
+        seniority_pct: line.seniority_pct ?? rates?.seniority_pct ?? 0,
+        attendance_pct: line.attendance_pct ?? rates?.attendance_pct ?? 0,
+        union_pct: line.union_pct ?? 0,
+        union_employer_pct: line.union_employer_pct ?? 0,
+        hours_worked: line.hours_worked ?? 0,
+        union_dues: line.union_dues ?? 0,
+        union_contribution: line.union_contribution ?? 0,
+      })
+    }
   },
 }
 

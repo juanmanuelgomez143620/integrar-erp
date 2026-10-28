@@ -3057,10 +3057,20 @@ describe('paridad de comandos', () => {
       rows.find((r) => r.company_id === company && r.code === code)!
     /** El id de la base si el registro existe; si no (vacío o inventado), tal cual. */
     const known = (id: string | null) =>
-      id && [...mock.jobCategories, ...mock.sectors, ...mock.workCenters, ...mock.employees].some((x) => x.id === id)
+      id &&
+      [...mock.laborAgreements, ...mock.jobCategories, ...mock.sectors, ...mock.workCenters, ...mock.employees].some(
+        (x) => x.id === id,
+      )
         ? pg(id)
         : id
     const reads = async (label: string) => {
+      for (const username of ['rrhh', 'gerencia'])
+        await sameRead(
+          `convenios ${label} (${username})`,
+          username,
+          (b) => b.api.laborAgreements(companyPg),
+          (u) => Q.listLaborAgreements(mock, u, company),
+        )
       for (const username of ['rrhh', 'gerencia'])
         await sameRead(
           `categorías ${label} (${username})`,
@@ -3078,12 +3088,65 @@ describe('paridad de comandos', () => {
     }
     await reads('al empezar')
 
-    // Categorías.
+    // Convenios.
+    const agreementInput = (over: Partial<E.LaborAgreementInput> = {}): E.LaborAgreementInput => ({
+      id: '',
+      code: 'METAL',
+      name: 'Industria metalúrgica',
+      union_name: 'UOM',
+      pay_basis: 'HOURLY',
+      seniority_pct: 1,
+      attendance_pct: 10,
+      union_pct: 2.5,
+      union_employer_pct: 1.5,
+      ...over,
+    })
+    const saveAgreement = (label: string, username: string, input: E.LaborAgreementInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveLaborAgreement(c, company, input),
+        (b) => b.commands.saveLaborAgreement(companyPg, { ...input, id: known(input.id) ?? '' }),
+      )
+    expect(await saveAgreement('Producción no lleva los convenios', 'produccion', agreementInput())).toBeNull()
+    for (const [label, over] of [
+      ['un código de convenio repetido', { code: 'MADERA' }],
+      ['un nombre de convenio corto', { name: 'U' }],
+      ['una forma de pago que no existe', { pay_basis: 'SEMANAL' as never }],
+      ['un porcentaje de más de 100', { union_pct: 120 }],
+      ['un porcentaje con tres decimales', { attendance_pct: 8.333 }],
+    ] as [string, Partial<E.LaborAgreementInput>][])
+      expect(await saveAgreement(label, 'rrhh', agreementInput(over)), label).toBeNull()
+    const metal = await saveAgreement('el convenio metalúrgico', 'rrhh', agreementInput())
+    expect(metal).not.toBeNull()
+    loaded.link(metal!.mock.id, (metal!.pg as { id: string }).id)
+    expect(
+      await saveAgreement('un aporte sindical mayor', 'rrhh', agreementInput({ id: metal!.mock.id, union_pct: 3 })),
+    ).not.toBeNull()
+    const madera = inCompany(mock.laborAgreements, 'MADERA')
+    expect(
+      await saveAgreement(
+        'Madera, con categorías, no pasa a pagar por mes',
+        'rrhh',
+        agreementInput({ id: madera.id, code: 'MADERA', name: madera.name, pay_basis: 'MONTHLY' }),
+      ),
+    ).toBeNull()
+    expect(
+      await step(
+        'desactivar el metalúrgico',
+        'rrhh',
+        (c) => E.cmdSetLaborAgreementActive(c, company, metal!.mock.id, false),
+        (b) => b.commands.setLaborAgreementActive(companyPg, pg(metal!.mock.id), false),
+      ),
+    ).not.toBeNull()
+
+    // Categorías: el barnizador, del taller, en Madera (por hora).
     const categoryInput = (over: Partial<E.JobCategoryInput> = {}): E.JobCategoryInput => ({
       id: '',
       code: 'BARNIZADOR',
       name: 'Barnizador',
-      basic_salary: 1080000.5,
+      agreement_id: madera.id,
+      basic_salary: 6250.5,
       is_direct_labor: true,
       ...over,
     })
@@ -3092,15 +3155,23 @@ describe('paridad de comandos', () => {
         label,
         username,
         (c) => E.cmdSaveJobCategory(c, company, input),
-        (b) => b.commands.saveJobCategory(companyPg, { ...input, id: known(input.id) ?? '' }),
+        (b) =>
+          b.commands.saveJobCategory(companyPg, {
+            ...input,
+            id: known(input.id) ?? '',
+            agreement_id: known(input.agreement_id) ?? '',
+          }),
       )
     expect(await saveCategory('Producción no lleva las categorías', 'produccion', categoryInput())).toBeNull()
     for (const [label, over] of [
       ['un código repetido', { code: 'OFICIAL' }],
       ['un código con espacios', { code: 'con espacios' }],
       ['un nombre corto', { name: 'B' }],
-      ['un sueldo de cero', { basic_salary: 0 }],
-      ['un sueldo con tres decimales', { basic_salary: 1000.555 }],
+      ['sin convenio', { agreement_id: '' }],
+      ['un convenio que no existe', { agreement_id: crypto.randomUUID() }],
+      ['un convenio inactivo', { agreement_id: metal!.mock.id }],
+      ['un valor hora de cero', { basic_salary: 0 }],
+      ['un valor hora con tres decimales', { basic_salary: 1000.555 }],
       ['sin decir si es del taller', { is_direct_labor: 'sí' as unknown as boolean }],
       ['una categoría que no existe', { id: crypto.randomUUID() }],
     ] as [string, Partial<E.JobCategoryInput>][])
@@ -3111,7 +3182,7 @@ describe('paridad de comandos', () => {
     const barnizador = created!.mock.id
     expect(await saveCategory('sin cambios', 'rrhh', categoryInput({ id: barnizador }))).not.toBeNull()
     expect(
-      await saveCategory('un aumento', 'rrhh', categoryInput({ id: barnizador, basic_salary: 1120000 })),
+      await saveCategory('un aumento', 'rrhh', categoryInput({ id: barnizador, basic_salary: 6400 })),
     ).not.toBeNull()
     const oficial = inCompany(mock.jobCategories, 'OFICIAL')
     expect(
@@ -3122,6 +3193,7 @@ describe('paridad de comandos', () => {
           id: oficial.id,
           code: 'OFICIAL',
           name: oficial.name,
+          agreement_id: oficial.agreement_id,
           basic_salary: oficial.basic_salary,
           is_direct_labor: false,
         }),
@@ -3295,6 +3367,7 @@ describe('paridad de comandos', () => {
     const row = (i: number, over: Partial<Row> = {}): Row => ({
       line_id: lines[i].id,
       days_worked: 30,
+      hours_worked: 176,
       absence_days: 0,
       overtime_50: 0,
       overtime_100: 0,
@@ -3424,7 +3497,14 @@ describe('paridad de comandos', () => {
     const cheapest = lines.reduce((a, b) => (b.basic_salary < a.basic_salary ? b : a))
     const rows = lines
       .filter((l) => l.id !== cheapest.id)
-      .map((l) => ({ line_id: l.id, days_worked: 0, absence_days: 0, overtime_50: 0, overtime_100: 0 }))
+      .map((l) => ({
+        line_id: l.id,
+        days_worked: 0,
+        hours_worked: 0,
+        absence_days: 0,
+        overtime_50: 0,
+        overtime_100: 0,
+      }))
     await ok(
       'dejar un solo empleado',
       'rrhh',
