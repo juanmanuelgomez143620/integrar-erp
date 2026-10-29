@@ -118,6 +118,29 @@ describe('persistencia de las operaciones', () => {
     expect(upgraded.documents.filter((d) => d.je?.origin === 'APERTURA')).toHaveLength(upgraded.companies.length)
     expect(JSON.parse(values.get(KEY)!).version).toBe(current.DB_VERSION)
   })
+
+  // Las colecciones que trajo cada versión: una base guardada antes todavía no las tiene.
+  const LATER: [number, string[]][] = [
+    [14, ['jobCategories', 'employees']],
+    [15, ['pyLines']],
+    [18, ['laborAgreements']],
+  ]
+  it.each([13, 14, 17])(
+    'abre una base guardada en la v%i, sin las colecciones que llegaron después',
+    async (version) => {
+      const raw = JSON.parse(JSON.stringify(db.read((data) => data)))
+      raw.version = version
+      const missing = LATER.filter(([since]) => since > version).flatMap(([, keys]) => keys)
+      for (const key of missing) delete raw[key]
+      values.set(KEY, JSON.stringify(raw))
+      vi.resetModules()
+      const current = await import('./db')
+      const upgraded = current.read((data) => data) as unknown as Record<string, unknown>
+      expect(upgraded.version).toBe(current.DB_VERSION)
+      for (const key of missing) expect(Array.isArray(upgraded[key])).toBe(true)
+      expect(JSON.parse(values.get(KEY)!).version).toBe(current.DB_VERSION)
+    },
+  )
 })
 
 describe('reinicio con respaldo obligatorio', () => {

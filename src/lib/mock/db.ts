@@ -189,6 +189,10 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   workCenters: 13,
   bomOperations: 13,
   prdOperations: 13,
+  jobCategories: 14,
+  employees: 14,
+  pyLines: 15,
+  laborAgreements: 18,
 }
 
 function isDatabase(value: unknown): value is DB {
