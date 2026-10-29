@@ -11,7 +11,7 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
 | 7a | Libros IVA compras y ventas por mes; declaración mensual de IVA (débito menos crédito y saldo a favor anterior) con su asiento al presentarla; pago por Tesorería | Impuestos sabe cuánto IVA se paga y de dónde sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas; calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado | Nada vence sin que se vea | Pendiente |
+| 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas (7b.1); calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado (7b.2) | Nada vence sin que se vea | En curso |
 | 7c | Logística: transportistas y vehículos; hojas de ruta con los remitos despachados; entrega con conformidad o no entrega con motivo | El pedido termina cuando el cliente lo recibe | Pendiente |
 | 7d | Tablero de control: indicadores por área, comparación con el mes anterior y alertas | Gerencia ve la empresa entera en una pantalla | Pendiente |
 
@@ -41,6 +41,13 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 - **Calendario de obligaciones** (Impuestos → Vencimientos): por mes, cada obligación con su vencimiento y su estado, que sale de los documentos (no se carga a mano):
   - IVA e ingresos brutos: **pendiente** (sin declaración presentada), **presentada** (falta pagar), **pagada**; **vencida** si pasó la fecha sin pagarse.
   - Sueldos y cargas sociales, de la liquidación del mes (Fase 6c): pendiente o pagada, y vencida.
+- Se hace en dos pasos: **7b.1** (ingresos brutos con percepciones y retenciones) y **7b.2** (calendario).
+- Decisiones de la implementación **(a validar)**:
+  - La alícuota es de la empresa (`settings.iibb_pct`, 3 % si el docente no la cambió) y la declaración la copia, junto con la base: cambiarla después no altera las ya preparadas.
+  - La base es la de las facturas del libro IVA ventas del mes (neto gravado más exento; las anuladas restan en el mes de su contraasiento). El impuesto se redondea a centavos como la base de datos (decimal exacto).
+  - La percepción se carga en la factura del proveedor (cualquier letra) y se suma a lo que se le debe; el libro IVA compras la muestra en su columna para que los totales cierren. La retención se carga en el recibo de cobro: tiene que quedar algo de dinero (es menor que el total) y a la caja o el banco entra el total menos la retención; para anular el recibo alcanza con que esté ese dinero.
+  - Las percepciones y retenciones de un mes son las de los asientos del mes (las anuladas restan en el mes de su contraasiento); la declaración las lista con su comprobante. El saldo a favor no se mueve: queda en Retenciones y percepciones sufridas, como el del IVA queda en el crédito fiscal.
+  - Estados, orden de los meses, anulación (sólo la última), SoD-10 y pago, iguales que en el IVA.
 
 ## 4. Logística (7c)
 
