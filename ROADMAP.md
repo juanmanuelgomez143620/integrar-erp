@@ -31,7 +31,7 @@ gantt
   Fase 6 RRHH y Sueldos             :f6, 2027-09-06, 2027-10-10
   Fase 7 Impuestos, Logística y Control :f7, 2027-10-11, 2027-11-07
   section Pedagogía
-  Fase 8 Escenarios y panel docente :f8, 2027-11-08, 2027-12-12
+  Fase 8 Banco, fisco y escenarios  :f8, 2027-11-08, 2027-12-12
   Fase 9 Tutor IA piloto            :f9, 2028-02-01, 2028-03-15
 ```
 
@@ -91,7 +91,8 @@ Las fechas del receso invernal dependen del calendario escolar de la provincia.
 - Logística: transportistas, vehículos, despachos, entregas, rutas, estado de entrega.
 - Tablero de control de gestión: indicadores por área, alertas, comparaciones entre períodos.
 
-### Fase 8 — Escenarios y panel docente avanzado (noviembre – diciembre 2027)
+### Fase 8 — Banco y fisco simulados, escenarios y panel docente avanzado (noviembre – diciembre 2027)
+- Entorno simulado operado por estudiantes (isla 9): el banco (cuenta, órdenes, extracto, cargos, cheques y préstamos) y el fisco (padrón, puntos de venta, autorización de facturas, recepción de declaraciones, cuenta corriente tributaria e intimaciones), cada uno en modo automático u operado por la isla ([docs/FASE_8_BANCO_Y_FISCO.md](docs/FASE_8_BANCO_Y_FISCO.md)).
 - Motor de escenarios: datos iniciales, consignas, criterios de logro, progreso por isla.
 - Los siete escenarios: compra de materia prima, venta a crédito, producción, cliente moroso, falta de stock, pago de salarios, problema de liquidez.
 - Clonado de empresas desde plantilla y reinicio de escenarios.
