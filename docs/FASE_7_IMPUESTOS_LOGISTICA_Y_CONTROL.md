@@ -12,7 +12,7 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 |---|---|---|---|
 | 7a | Libros IVA compras y ventas por mes; declaración mensual de IVA (débito menos crédito y saldo a favor anterior) con su asiento al presentarla; pago por Tesorería | Impuestos sabe cuánto IVA se paga y de dónde sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas (7b.1); calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado (7b.2) | Nada vence sin que se vea | Hecho (29/10: 7b.1 y 7b.2, simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 7c | Logística: transportistas y vehículos; hojas de ruta con los remitos despachados; entrega con conformidad o no entrega con motivo | El pedido termina cuando el cliente lo recibe | Pendiente |
+| 7c | Logística: transportistas y vehículos; hojas de ruta con los remitos despachados; entrega con conformidad o no entrega con motivo | El pedido termina cuando el cliente lo recibe | En curso (7c.1 transportistas y vehículos; 7c.2 hoja de ruta) |
 | 7d | Tablero de control: indicadores por área, comparación con el mes anterior y alertas | Gerencia ve la empresa entera en una pantalla | Pendiente |
 
 ## 2. IVA (7a)
@@ -58,6 +58,13 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 - **Hoja de ruta** (`HR-00001`): Logística la arma para un día con un vehículo propio y su chofer, o con un transportista, y los remitos despachados que todavía no se entregaron, en el orden de visita. Estados: **Borrador** → **En camino** (salió: sus remitos pasan a "en camino") → **Cerrada** (rendida: cada remito queda **entregado**, con quién lo recibió, o **no entregado**, con el motivo, y vuelve a estar pendiente para otra hoja). Se anula en borrador.
 - El remito muestra su estado de entrega (pendiente, en camino, entregado o no entregado) y Ventas recibe el aviso de cada entrega.
 - Decisiones **(a validar)**: no hay rechazo con devolución de mercadería (sería una nota de crédito y un ingreso al stock, fuera de esta fase); el flete de un transportista se registra con su factura de proveedor, como hasta ahora; el chofer es un empleado del legajo.
+- Decisiones de la implementación **(a validar)**:
+  - Se hace en dos pasos: **7c.1** (transportistas y vehículos, Logística → Transporte) y **7c.2** (hoja de ruta y estado de entrega de los remitos).
+  - Transportista: código (`TR-001`), razón social, CUIT simulado y teléfono. Vehículo: código interno (`CAM-01`), dominio ficticio y descripción. Los dos se desactivan (una hoja de ruta nueva no los usa) y no se borran. La demo trae dos transportistas y el camión propio, que maneja el chofer (legajo 11).
+  - Hoja de ruta: la fecha de salida (hoy o después), el transporte (un transportista, o un vehículo propio activo con un chofer: un empleado activo del legajo) y los remitos en el orden de visita, cada uno con el domicilio del cliente. Un remito entra si está despachado, no está entregado y no está en otra hoja en borrador o en camino. Para elegir el chofer, Logística ve sólo el nombre y el legajo del personal activo (no los sueldos).
+  - Salir (En camino) controla otra vez los remitos. Rendirla (Cerrada) pide el resultado de cada remito: entregado con quién lo recibió, o no entregado con el motivo; Ventas recibe un aviso por cada uno. Un remito no entregado vuelve a estar pendiente.
+  - Estado de entrega de un remito: el de la última hoja que lo lleva (sin contar las anuladas): **pendiente** (sin hoja, o no entregado en la última), **programado** (en una hoja en borrador), **en camino** o **entregado**.
+  - No hay asientos: la logística no mueve la contabilidad. Lo hace Logística (en la demo, el usuario de Depósito también tiene ese rol); Depósito, Ventas, Gerencia y Auditoría consultan.
 
 ## 5. Tablero de control (7d)
 
