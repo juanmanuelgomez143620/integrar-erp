@@ -64,7 +64,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | sales (Fase 4) | `sales_order.read/create/approve/cancel` (pedidos de venta); desde la 4b, `sales_invoice.read/create/cancel` (facturas de venta) y `receivable.read` (cuentas corrientes de clientes); desde la 4c, `customer_receipt.read/create/cancel` (recibos de cobro); desde la 4d, `price_list.read/create/update` (listas de precios) y `sales_quote.read/create/cancel` (presupuestos) |
 | accounting (Fase 2) | `account.read/create/update` (plan de cuentas), `journal_entry.read/create/update/cancel/export` (asientos), `ledger.read/export` (libros), `fiscal_period.update` (cerrar meses); desde la Fase 3, `posting_rule.read/update` (imputación automática) |
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
-| hr (Fase 6) | `employee.read/create/update` (convenios, categorías y legajos del personal); desde la 6b, `payroll.read/create/cancel` (liquidaciones de sueldos) y, desde la 6c, `payroll.pay` (pagar los sueldos y las cargas sociales) |
+| hr (Fase 6) | `employee.read/create/update` (convenios, categorías y legajos del personal); desde la 6b, `payroll.read/create/cancel` (liquidaciones de sueldos); desde la 6c, `payroll.pay` (pagar los sueldos y las cargas sociales) y, desde la 6d, `payroll.approve` (Gerencia autoriza o devuelve la liquidación) |
 | tax (Fase 7) | `tax_return.read/create/cancel/pay` (libros IVA y declaraciones de impuestos) |
 | audit | `audit.read`, `audit.export` |
 
@@ -112,8 +112,8 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 | Orden de producción (Fase 5a y 5b) | L | L | L | L N¹⁶ | L C X¹⁶ | L | — | — | — | — | L | Todo |
 | Centro de trabajo (Fase 5b) | L | — | — | — | L C M¹⁷ | L | — | L | — | — | L | Todo |
 | Costos de producción (Fase 5b) | L | L | L | L | L | L | — | — | — | — | L | Todo |
-| Categorías y legajos del personal (Fase 6a) | L | — | — | — | — | L | — | L C M X¹⁸ | — | — | L | Todo |
-| Liquidación de sueldos (Fase 6b y 6c) | L | — | — | — | — | L | L P²⁰ | L C X¹⁹ | — | — | L | Todo |
+| Convenios, categorías y legajos del personal (Fase 6a y 6d) | L | — | — | — | — | L | — | L C M X¹⁸ | — | — | L | Todo |
+| Liquidación de sueldos (Fase 6b, 6c y 6d) | L A²² | — | — | — | — | L | L P²⁰ | L C X¹⁹ | — | — | L | Todo |
 | Mano de obra del taller (Fase 6c) | L | — | — | — | — | L | L | L | — | — | L | Todo |
 | Libros IVA y declaraciones de impuestos (Fase 7a) | L | — | — | — | — | L | L P²¹ | — | L C X²¹ | — | L | Todo |
 
@@ -135,9 +135,10 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ¹⁶ Producción planifica la orden, la libera (se controlan y se reservan los materiales), la termina (las unidades que salieron bien entran al stock a su costo real) y la anula; Depósito entrega los materiales (**N**: registra lo que realmente sale de cada uno). Cada isla controla a la otra: lo consumido contra lo entregado y lo que entró al stock contra lo fabricado. Una orden terminada no se anula (a validar). Desde la 5c, Producción (o Depósito) le pide a Compras los faltantes de las órdenes planificadas: genera una solicitud de compra en borrador, vinculada a las órdenes (con `purchase_requisition.create`).
 ¹⁷ Producción da de alta los centros del taller con su tarifa de mano de obra directa y su tasa de carga fabril por hora (predeterminadas, a validar), las cambia y los desactiva; cada orden guarda las tarifas con que se planificó. Al terminar una orden, Producción registra las horas trabajadas en cada centro: con ellas se aplica la conversión.
 ¹⁸ RRHH mantiene los convenios colectivos (desde la 6d: forma de pago y porcentajes, a validar), las categorías (cada una en un convenio, con sueldo básico mensual o valor hora, a validar) y los legajos: da de alta al personal (con el número siguiente), lo cambia de categoría, sector o centro de trabajo y le da de baja (**X**, con fecha y motivo; no se borra ni se reincorpora). Los empleados son personajes de la empresa simulada, sin datos personales. Ve los centros de trabajo para asignar al personal del taller.
-¹⁹ RRHH prepara la liquidación del mes (entra el personal activo), carga las novedades de cada empleado (días trabajados, ausencias sin aviso y horas extra), la confirma (se genera el asiento de sueldos) y la anula con motivo (la confirmada, con contraasiento). Los porcentajes de aportes y contribuciones los fija el docente. Tesorería la consulta para pagarla (Fase 6c): quien liquida no mueve el dinero.
-²⁰ Tesorería paga los sueldos (los netos de todos los empleados) y después las cargas sociales (los aportes retenidos y las contribuciones), desde una caja o un banco con saldo; cada pago genera su asiento. SoD-6: quien preparó o confirmó la liquidación no la paga. Un pago no se anula, y una liquidación con algo pagado tampoco.
+¹⁹ RRHH prepara la liquidación del mes (entra el personal activo), carga las novedades de cada empleado (días trabajados o, si cobra por hora, horas trabajadas; ausencias sin aviso y horas extra), la envía a Gerencia para que la autorice (Fase 6d) y la anula con motivo (la confirmada, con contraasiento). Los porcentajes legales los fija el docente; los del convenio, RRHH. Tesorería la consulta para pagarla (Fase 6c): quien liquida no mueve el dinero.
+²⁰ Tesorería paga los sueldos (los netos de todos los empleados) y después las cargas sociales (los aportes retenidos y las contribuciones), desde una caja o un banco con saldo; cada pago genera su asiento. SoD-6: quien preparó la liquidación o la envió a autorizar (antes de la 6d, quien la confirmó) no la paga. Un pago no se anula, y una liquidación con algo pagado tampoco.
 ²¹ Impuestos prepara la declaración de un mes terminado con los libros IVA, la presenta (se registra el asiento del impuesto) y la anula con motivo mientras no esté pagada y sea la última. Tesorería paga el saldo al fisco (simulado) desde una caja o un banco con saldo. SoD-10: quien la preparó o la presentó no la paga.
+²² Gerencia autoriza la liquidación que envió RRHH (se registra el asiento de sueldos y Tesorería recibe la tarea de pagar) o la devuelve a borrador con el motivo (Fase 6d). SoD-11: quien la preparó no la autoriza ni la devuelve.
 
 En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (desde la Fase 6a, RRHH lleva los legajos; desde la 6b, liquida los sueldos, y desde la 6c Tesorería los paga; desde la 7a, Impuestos liquida el IVA) (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
@@ -148,6 +149,7 @@ En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo 
 | Orden de compra | ≤ $ 500.000 | `COMPRAS` | El aprobador no puede ser quien creó la OC |
 | Orden de compra | > $ 500.000 | `GERENCIA` | Ídem |
 | Ajuste de stock | (Fase 2) negativos mayores a un umbral | `GERENCIA` | Quien ajusta no aprueba |
+| Liquidación de sueldos | (Fase 6d) todas | `GERENCIA` | Quien la preparó no la autoriza ni la devuelve (SoD-11) |
 
 - Las reglas son **datos por empresa** (`approval_rules`); el umbral se ajusta sin tocar código (útil con inflación). Editor de reglas en la Fase 2.
 - El monto evaluado se guarda como fotografía en la solicitud de aprobación.
@@ -167,8 +169,9 @@ Se implementa como regla explícita porque es **contenido a enseñar**, no sólo
 | SoD-7 | Quien prepara una orden de pago no la aprueba ni la rechaza | Validación en `op_approve` y `op_reject` | 3b |
 | SoD-8 | Quien carga un pedido de venta no autoriza su crédito | Validación en `so_approve` y `so_reject` | 4a |
 | SoD-9 | Quien emite una factura de venta no registra su cobro | Validación al confirmar el recibo (`rc_create` y `rc_confirm`) | 4c |
-| SoD-6 | Quien liquida los sueldos (prepara o confirma la liquidación) no los paga ni paga sus cargas sociales; la aprobación de la liquidación por Gerencia queda a validar | Matriz + validación en `payroll_pay_salaries` y `payroll_pay_charges` | 6c |
+| SoD-6 | Quien liquida los sueldos (prepara o envía a autorizar la liquidación) no los paga ni paga sus cargas sociales | Matriz + validación en `payroll_pay_salaries` y `payroll_pay_charges` | 6c |
 | SoD-10 | Quien liquida un impuesto (prepara o presenta la declaración) no lo paga | Matriz + validación en `tax_return_pay` | 7a |
+| SoD-11 | Quien prepara la liquidación de sueldos no la autoriza ni la devuelve | Validación en `payroll_approve` y `payroll_reject` | 6d |
 
 - Configuración por empresa: `settings.sod_enabled` (por defecto **activado**). Si una isla tiene un solo estudiante, el docente puede desactivarla o aprobar como supervisor.
 - Cuando una acción se bloquea por esta regla, la interfaz muestra el motivo y la explicación: el bloqueo es una oportunidad de aprendizaje.

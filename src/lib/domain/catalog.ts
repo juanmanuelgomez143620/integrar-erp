@@ -104,7 +104,7 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   CONTABILIDAD: { code: 'CONTABILIDAD', name: 'Contabilidad', island: 4, defaultSector: 'CON', isSupervisor: false, description: 'Registra los asientos, lleva los libros contables y cierra los meses.' },
   IMPUESTOS: { code: 'IMPUESTOS', name: 'Impuestos', island: 4, defaultSector: 'IMP', isSupervisor: false, description: 'Lleva los libros IVA y prepara y presenta las declaraciones de impuestos de cada mes.' },
   TESORERIA: { code: 'TESORERIA', name: 'Tesorería y Finanzas', island: 5, defaultSector: 'TES', isSupervisor: false, description: 'Prepara y ejecuta los pagos a proveedores y controla los saldos de caja y bancos.' },
-  RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Lleva los legajos y las categorías del personal; las liquidaciones de sueldos llegan en la Fase 6b.' },
+  RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Lleva los convenios, las categorías y los legajos del personal, y prepara las liquidaciones de sueldos, que autoriza Gerencia.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.' },
   LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Consulta recepciones y stock (despachos en fases siguientes).' },
@@ -149,7 +149,9 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read',
+    // Autoriza las liquidaciones de sueldos o las devuelve a RRHH (Fase 6d; SoD-11).
+    'payroll.read', 'payroll.approve',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -220,7 +222,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   // Legajos y categorías del personal (Fase 6a).
   RRHH: [
     ...CORE_READ, 'employee.read', 'employee.create', 'employee.update', 'work_center.read',
-    // Liquida los sueldos (Fase 6b); Tesorería los paga (6c).
+    // Liquida los sueldos (Fase 6b): los prepara y los envía a Gerencia (6d); Tesorería los paga (6c).
     'payroll.read', 'payroll.create', 'payroll.cancel',
   ],
   IMPUESTOS: [
@@ -478,8 +480,9 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     ANULADO: { label: 'Anulado', badge: 'neutral', final: true, description: 'Sin efecto.' },
   },
   PAYROLL: {
-    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'RRHH carga las novedades del mes de cada empleado.' },
-    CONFIRMADA: { label: 'Confirmada', badge: 'info', final: false, description: 'Los recibos están calculados y el asiento de sueldos, registrado: Tesorería tiene que pagar los sueldos.' },
+    BORRADOR: { label: 'Borrador', badge: 'neutral', final: false, description: 'RRHH carga las novedades del mes de cada empleado y la envía a Gerencia para que la autorice.' },
+    PENDIENTE_APROBACION: { label: 'Pendiente de autorización', badge: 'warning', final: false, description: 'RRHH la envió: Gerencia la autoriza (se registra el asiento de sueldos) o la devuelve a RRHH con el motivo.' },
+    CONFIRMADA: { label: 'Confirmada', badge: 'info', final: false, description: 'Gerencia la autorizó: los recibos están calculados y el asiento de sueldos, registrado. Tesorería tiene que pagar los sueldos.' },
     SUELDOS_PAGADOS: { label: 'Sueldos pagados', badge: 'warning', final: false, description: 'Tesorería pagó los netos a los empleados: faltan las cargas sociales (los aportes retenidos y las contribuciones) y lo de los sindicatos.' },
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se pagaron los sueldos y las cargas sociales: el ciclo de la liquidación terminó.' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba confirmada, un contraasiento revirtió el de sueldos.' },
@@ -666,8 +669,10 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('PRODUCTION_ORDER', 'EN_PROCESO', 'CANCEL', 'ANULADA', 'production_order.cancel', 'Anular con devolución', 'Los materiales vuelven al depósito y un contraasiento revierte el consumo.', true, 'destructive'),
 
   // Liquidación de sueldos
-  t('PAYROLL', 'BORRADOR', 'CONFIRM', 'CONFIRMADA', 'payroll.create', 'Confirmar', 'Quedan los recibos y se registra el asiento de sueldos.'),
+  t('PAYROLL', 'BORRADOR', 'SUBMIT', 'PENDIENTE_APROBACION', 'payroll.create', 'Enviar a autorizar', 'Gerencia recibirá una tarea para autorizarla; mientras tanto, las novedades no se cambian.'),
   t('PAYROLL', 'BORRADOR', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'La liquidación queda sin efecto.', true, 'destructive'),
+  t('PAYROLL', 'PENDIENTE_APROBACION', 'APPROVE', 'CONFIRMADA', 'payroll.approve', 'Autorizar', 'Quedan los recibos y se registra el asiento de sueldos: Tesorería recibe la tarea de pagar.'),
+  t('PAYROLL', 'PENDIENTE_APROBACION', 'REJECT', 'BORRADOR', 'payroll.approve', 'Devolver a RRHH', 'Vuelve a borrador para que RRHH la corrija: indicá qué hay que revisar.', true, 'outline'),
   t('PAYROLL', 'CONFIRMADA', 'PAY', 'SUELDOS_PAGADOS', 'payroll.pay', 'Pagar los sueldos', 'Paga los netos de todos los empleados desde una caja o un banco: genera el asiento de pago.'),
   t('PAYROLL', 'CONFIRMADA', 'CANCEL', 'ANULADA', 'payroll.cancel', 'Anular', 'Un contraasiento revierte el de sueldos.', true, 'destructive'),
   t('PAYROLL', 'SUELDOS_PAGADOS', 'PAY', 'PAGADA', 'payroll.pay', 'Pagar las cargas sociales', 'Paga los aportes retenidos y las contribuciones del mes (simulado): genera el asiento de pago.'),
@@ -755,7 +760,8 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'SALES_QUOTE', status: 'ENVIADO', taskType: 'SEGUIR_PRE', assignee: 'ROLE', role: 'VENTAS', title: 'Seguir {number} por {total}', description: 'Registrar la aceptación o el rechazo del cliente antes de que venza la oferta.' },
   { docType: 'PRODUCTION_ORDER', status: 'BORRADOR', taskType: 'LIBERAR_OPR', assignee: 'CREATOR', title: 'Liberar {number}', description: 'Revisar el producto, la cantidad y los materiales, y liberar la orden para reservarlos.' },
   { docType: 'PRODUCTION_ORDER', status: 'LIBERADA', taskType: 'ENTREGAR_MATERIALES', assignee: 'ROLE', role: 'DEPOSITO', title: 'Entregar los materiales de {number}', description: 'Preparar los materiales reservados, entregarlos a Producción y registrar lo que sale de cada uno.' },
-  { docType: 'PAYROLL', status: 'BORRADOR', taskType: 'CONFIRMAR_LIQ', assignee: 'CREATOR', title: 'Confirmar {number}', description: 'Revisar las novedades del mes de cada empleado y confirmar la liquidación.' },
+  { docType: 'PAYROLL', status: 'BORRADOR', taskType: 'ENVIAR_LIQ', assignee: 'CREATOR', title: 'Enviar {number} a autorizar', description: 'Revisar las novedades del mes de cada empleado y enviar la liquidación a Gerencia.' },
+  { docType: 'PAYROLL', status: 'PENDIENTE_APROBACION', taskType: 'AUTORIZAR_LIQ', assignee: 'ROLE', role: 'GERENCIA', title: 'Autorizar la liquidación {number} por {total}', description: 'Revisar los recibos y los totales; autorizarla (se registra el asiento de sueldos) o devolverla a RRHH con el motivo.' },
   { docType: 'PAYROLL', status: 'CONFIRMADA', taskType: 'PAGAR_SUELDOS', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar los sueldos de {number} por {total}', description: 'Transferir los netos a los empleados en la fecha de pago y registrar el pago.' },
   { docType: 'TAX_RETURN', status: 'BORRADOR', taskType: 'PRESENTAR_DJ', assignee: 'CREATOR', title: 'Presentar {number}', description: 'Revisar los libros del mes y lo que sale a pagar o a favor, y presentar la declaración.' },
   { docType: 'TAX_RETURN', status: 'PRESENTADA', taskType: 'PAGAR_DJ', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar el saldo de la declaración al fisco (simulado) antes del vencimiento y registrar el pago.' },
@@ -791,6 +797,8 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   ENTREGAR_MATERIALES: 'Entregar materiales',
   TERMINAR_OPR: 'Terminar orden de producción',
   CONFIRMAR_LIQ: 'Confirmar liquidación',
+  ENVIAR_LIQ: 'Enviar liquidación a autorizar',
+  AUTORIZAR_LIQ: 'Autorizar liquidación',
   PAGAR_SUELDOS: 'Pagar sueldos',
   PAGAR_CARGAS_SOCIALES: 'Pagar cargas sociales',
   PRESENTAR_DJ: 'Presentar declaración',

@@ -41,7 +41,7 @@ Borrador → **Pendiente de autorización** (envió RRHH) → Confirmada (autori
 | Paso | Qué | Estado |
 |---|---|---|
 | 6d.1 | Convenios, categorías por convenio (mensual o por hora), el chofer de la demo, el cálculo con los conceptos de cada convenio, la cuenta Sindicatos a pagar y el recibo | Hecho (28/10) |
-| 6d.2 | Envío y autorización de Gerencia (o devolución con motivo) antes del asiento y del pago | Pendiente |
+| 6d.2 | Envío y autorización de Gerencia (o devolución con motivo) antes del asiento y del pago | Hecho (29/10) |
 
 ### Notas de la 6d.1
 
@@ -49,3 +49,11 @@ Borrador → **Pendiente de autorización** (envió RRHH) → Confirmada (autori
 - Base de datos: migraciones 62 a 65 (`20261028120000_convenios.sql`, catálogos, plantilla y empresas existentes). Tabla `labor_agreements`; `job_categories.agreement_id` (obligatoria) y, en `payroll_lines`, el convenio copiado con sus porcentajes, las horas trabajadas, el aporte sindical y la contribución del convenio.
 - Las empresas que ya existían (y las bases guardadas del simulador, versión 18) reciben los cuatro convenios; sus categorías pasan al suyo (taller y depósito a Madera, con el valor hora = básico ÷ 176; la encargada, fuera de convenio; las demás, a Comercio), se suma el chofer con el legajo siguiente y las liquidaciones de antes quedan por mes, sin convenio y sin sindicato.
 - El recibo no muestra los adicionales que el convenio no tiene (por ejemplo, fuera de convenio no hay antigüedad ni presentismo).
+
+### Notas de la 6d.2
+
+- RRHH **envía a autorizar** (`payroll.create`); Gerencia (`payroll.approve`, nuevo) la **autoriza**, con un comentario opcional (se registra el asiento de sueldos y Tesorería recibe la tarea de pagar), o la **devuelve a RRHH** con el motivo (vuelve a borrador y el "¿Qué sigue?" muestra el motivo). Pendiente de autorización no se cambian las novedades ni se anula: primero Gerencia la devuelve.
+- Tareas: "Enviar LIQ-… a autorizar" (para quien la preparó) y "Autorizar la liquidación LIQ-… por $ …" (para Gerencia).
+- SoD-11: quien preparó la liquidación no la autoriza ni la devuelve (aunque tenga el rol de Gerencia; salvo el docente o con la regla apagada). SoD-6: no la paga quien la preparó o la envió a autorizar (en las de antes de la 6d, quien la confirmó).
+- Base de datos: migraciones 66 y su catálogo (`20261029120000_autorizacion_sueldos.sql` y `…120100`), sin cambios de tablas ni de datos de la demo; `payroll_confirm` se reemplaza por `payroll_submit`, `payroll_approve` y `payroll_reject`.
+- El cálculo de los recibos en el simulador redondea en centavos enteros (medio centavo hacia arriba), igual que la base: antes, un caso como el 1 % de $ 922.850,50 podía diferir en un centavo.

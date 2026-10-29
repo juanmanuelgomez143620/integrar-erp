@@ -558,7 +558,8 @@ export function buildScenario(): DB {
     { line_id: lastLines[2].id, days_worked: 0, hours_worked: 176, absence_days: 0, overtime_50: 0, overtime_100: 3.5 },
     { line_id: lastLines[3].id, days_worked: 28, hours_worked: 0, absence_days: 2, overtime_50: 2, overtime_100: 0 },
   ])
-  E.cmdConfirmPayroll(as('rrhh'), lastMonth.id)
+  E.cmdSubmitPayroll(as('rrhh'), lastMonth.id)
+  E.cmdApprovePayroll(as('gerencia'), lastMonth.id, '')
   E.cmdPayPayrollSalaries(
     as('tesoreria'),
     lastMonth.id,

@@ -665,6 +665,15 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     }
     if (
       doc.doc_type === 'PAYROLL' &&
+      (tr.action === 'APPROVE' || tr.action === 'REJECT') &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      doc.created_by === userId
+    ) {
+      reason = 'Separación de funciones: no podés autorizar ni devolver una liquidación que preparaste vos.'
+    }
+    if (
+      doc.doc_type === 'PAYROLL' &&
       tr.action === 'PAY' &&
       !eff.supervisor &&
       company.settings.sod_enabled &&
@@ -1079,7 +1088,14 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
     case 'PAYROLL:BORRADOR':
       return {
         who: 'RRHH',
-        text: 'Cargar las novedades del mes de cada empleado (los días o las horas trabajadas, las ausencias sin aviso y las horas extra), revisar los recibos y confirmar la liquidación: se registra el asiento de sueldos.',
+        text: doc.status_reason
+          ? `Gerencia la devolvió: "${doc.status_reason}". Corregir las novedades y volver a enviarla a autorizar.`
+          : 'Cargar las novedades del mes de cada empleado (los días o las horas trabajadas, las ausencias sin aviso y las horas extra), revisar los recibos y enviar la liquidación a Gerencia para que la autorice.',
+      }
+    case 'PAYROLL:PENDIENTE_APROBACION':
+      return {
+        who: 'Gerencia',
+        text: `Revisar los recibos y los totales (${money(doc.total)} netos) y autorizar la liquidación: se registra el asiento de sueldos y Tesorería recibe la tarea de pagar. Si hay que corregir algo, devolverla a RRHH con el motivo.`,
       }
     case 'PAYROLL:CONFIRMADA':
       return {

@@ -429,7 +429,9 @@ const mockCommands = {
   createPayroll: (companyId: string, input: E.PayrollInput) => command((c) => E.cmdCreatePayroll(c, companyId, input)),
   updatePayrollLines: (docId: string, lines: E.PayrollLineInput[]) =>
     command((c) => E.cmdUpdatePayrollLines(c, docId, lines)),
-  confirmPayroll: (docId: string) => command((c) => E.cmdConfirmPayroll(c, docId)),
+  submitPayroll: (docId: string) => command((c) => E.cmdSubmitPayroll(c, docId)),
+  approvePayroll: (docId: string, comment: string) => command((c) => E.cmdApprovePayroll(c, docId, comment)),
+  rejectPayroll: (docId: string, reason: string) => command((c) => E.cmdRejectPayroll(c, docId, reason)),
   cancelPayroll: (docId: string, reason: string) => command((c) => E.cmdCancelPayroll(c, docId, reason)),
   payPayrollSalaries: (docId: string, accountId: string) =>
     command((c) => E.cmdPayPayrollSalaries(c, docId, accountId)),

@@ -3289,7 +3289,7 @@ describe('paridad de comandos', () => {
     await reads('con la baja')
   })
 
-  it('liquidación de sueldos: crear, novedades, confirmar con su asiento, anular y los porcentajes del docente', async () => {
+  it('liquidación de sueldos: crear, novedades, enviar, devolver, autorizar con su asiento, anular y los porcentajes', async () => {
     const companyPg = pg(company)
     const month = (offset: number) => {
       const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
@@ -3393,13 +3393,27 @@ describe('paridad de comandos', () => {
     ).not.toBeNull()
     await reads('con las novedades')
 
-    // Confirmar y anular.
-    const confirm = (label: string, username: string, docId: string) =>
+    // Enviarla a autorizar, devolverla y autorizarla (Gerencia; SoD-11), y anular.
+    const submit = (label: string, username: string, docId: string) =>
       step(
         label,
         username,
-        (c) => E.cmdConfirmPayroll(c, docId),
-        (b) => b.commands.confirmPayroll(pg(docId)),
+        (c) => E.cmdSubmitPayroll(c, docId),
+        (b) => b.commands.submitPayroll(pg(docId)),
+      )
+    const approve = (label: string, username: string, docId: string, comment = '') =>
+      step(
+        label,
+        username,
+        (c) => E.cmdApprovePayroll(c, docId, comment),
+        (b) => b.commands.approvePayroll(pg(docId), comment),
+      )
+    const reject = (label: string, username: string, docId: string, reason: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdRejectPayroll(c, docId, reason),
+        (b) => b.commands.rejectPayroll(pg(docId), reason),
       )
     const cancel = (label: string, username: string, docId: string, reason: string) =>
       step(
@@ -3408,9 +3422,53 @@ describe('paridad de comandos', () => {
         (c) => E.cmdCancelPayroll(c, docId, reason),
         (b) => b.commands.cancelPayroll(pg(docId), reason),
       )
-    expect(await confirm('Tesorería no la confirma', 'tesoreria', older)).toBeNull()
-    expect(await confirm('confirmarla', 'rrhh', older)).not.toBeNull()
-    expect(await confirm('otra vez', 'rrhh', older)).toBeNull()
+    const asManagement = async (label: string) => {
+      const number = mock.documents.find((d) => d.id === older)!.display_number
+      await sameRead(
+        `${number} ${label} (gerencia)`,
+        'gerencia',
+        (b) => b.api.document(companyPg, 'PAYROLL', number),
+        (u) => Q.documentDetail(mock, u, company, 'PAYROLL', number),
+      )
+      // Las tareas creadas en el mismo instante no tienen un orden definido entre sí.
+      await sameRead(
+        `las tareas ${label}`,
+        'gerencia',
+        (b) => b.api.tasks(companyPg, 'all', true),
+        (u) => Q.listTasks(mock, u, company, 'all', true),
+        (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
+      )
+    }
+    expect(await submit('Tesorería no la envía', 'tesoreria', older)).toBeNull()
+    expect(await approve('Gerencia no autoriza un borrador', 'gerencia', older)).toBeNull()
+    expect(await submit('enviarla a autorizar', 'rrhh', older)).not.toBeNull()
+    expect(await submit('otra vez', 'rrhh', older)).toBeNull()
+    expect(await update('pendiente, sin novedades', 'rrhh', older, [row(0)])).toBeNull()
+    expect(await cancel('pendiente, no se anula', 'rrhh', older, 'Error de cálculo')).toBeNull()
+    expect(await approve('RRHH no la autoriza', 'rrhh', older)).toBeNull()
+    await asManagement('pendiente de autorización')
+    // SoD-11: con el rol de Gerencia, quien la preparó tampoco la autoriza ni la devuelve.
+    const ger = mock.sectors.find((s) => s.company_id === company && s.code === 'GER')!.id
+    await ok(
+      'el docente le suma Gerencia a RRHH',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('rrhh'), 'GERENCIA', ger),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('rrhh')), 'GERENCIA', pg(ger)),
+    )
+    await reads('pendiente, para quien la preparó')
+    expect(await approve('autorizar la que preparó', 'rrhh', older)).toBeNull()
+    expect(await reject('devolver la que preparó', 'rrhh', older, 'Revisar las horas')).toBeNull()
+    expect(await reject('devolverla sin motivo', 'gerencia', older, ' ')).toBeNull()
+    expect(await reject('devolverla', 'gerencia', older, 'Faltan las horas extra del taller')).not.toBeNull()
+    await reads('devuelta')
+    await asManagement('devuelta')
+    expect(
+      await update('devuelta, con las horas extra', 'rrhh', older, [row(1, { overtime_50: 8, overtime_100: 2 })]),
+    ).not.toBeNull()
+    expect(await submit('enviarla de nuevo', 'rrhh', older)).not.toBeNull()
+    expect(await approve('autorizarla', 'gerencia', older, 'Revisada con los partes del taller')).not.toBeNull()
+    expect(await approve('otra vez', 'gerencia', older)).toBeNull()
+    await asManagement('autorizada')
     expect(await update('confirmada, sin novedades', 'rrhh', older, [row(0)])).toBeNull()
     expect(await cancel('sin motivo', 'rrhh', older, ' ')).toBeNull()
     expect(await cancel('Tesorería no la anula', 'tesoreria', older, 'Error de cálculo')).toBeNull()
@@ -3418,7 +3476,7 @@ describe('paridad de comandos', () => {
     const draft = payrolls().find((d) => d.status === 'BORRADOR')!
     expect(await cancel('el borrador sin motivo', 'rrhh', draft.id, '')).toBeNull()
     expect(await cancel('el borrador', 'rrhh', draft.id, 'Se rehace con las horas extra')).not.toBeNull()
-    await reads('después de confirmar y anular')
+    await reads('después de autorizar y anular')
 
     // Los porcentajes los cambia el docente; la liquidación nueva los usa.
     const settings = (label: string, username: string, data: Partial<CompanySettings>) =>
@@ -3516,10 +3574,16 @@ describe('paridad de comandos', () => {
         ),
     )
     await ok(
-      'confirmarla',
+      'enviarla a autorizar',
       'rrhh',
-      (c) => E.cmdConfirmPayroll(c, target.id),
-      (b) => b.commands.confirmPayroll(pg(target.id)),
+      (c) => E.cmdSubmitPayroll(c, target.id),
+      (b) => b.commands.submitPayroll(pg(target.id)),
+    )
+    await ok(
+      'autorizarla',
+      'gerencia',
+      (c) => E.cmdApprovePayroll(c, target.id, ''),
+      (b) => b.commands.approvePayroll(pg(target.id), ''),
     )
     const pay = (label: string, username: string, docId: string, accountId: string, salaries = true) =>
       step(

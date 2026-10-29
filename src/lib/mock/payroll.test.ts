@@ -8,15 +8,17 @@ import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
   cmdAssignRole,
+  cmdApprovePayroll,
   cmdCancelPayroll,
-  cmdConfirmPayroll,
   cmdCreatePayroll,
   cmdFinishProductionOrder,
   cmdIssueProductionOrder,
   cmdPayPayrollCharges,
   cmdPayPayrollSalaries,
+  cmdRejectPayroll,
   cmdSaveEmployee,
   cmdSaveLaborAgreement,
+  cmdSubmitPayroll,
   cmdUpdateCompanySettings,
   cmdUpdatePayrollLines,
   payrollAmounts,
@@ -48,6 +50,11 @@ const companyId = () => db.companies[0].id
 const byNumber = (number: string) => db.documents.find((d) => d.display_number === number)!
 const employee = (n: number) => db.employees.find((e) => e.company_id === companyId() && e.file_number === n)!
 const lineOf = (docId: string, n: number) => payrollLines(db, docId).find((l) => l.employee_id === employee(n).id)!
+/** RRHH la envía y Gerencia la autoriza (Fase 6d): queda confirmada, con su asiento. */
+const authorize = (docId: string, username = 'rrhh') => {
+  cmdSubmitPayroll(ctx(username), docId)
+  cmdApprovePayroll(ctx('gerencia'), docId, '')
+}
 const agreement = (code: string) => db.laborAgreements.find((a) => a.company_id === companyId() && a.code === code)!
 
 function expectBusinessError(fn: () => void, code: string) {
@@ -106,6 +113,13 @@ describe('el cálculo de un recibo', () => {
     expect(payrollAmounts(rates, 'MONTHLY', 1250000, 12, { ...full, overtime_50: 4, overtime_100: 2 }).overtime).toBe(
       70000,
     )
+    // Medio centavo se redondea hacia arriba, como en la base (decimal exacto): el 11 % y el 1 % de 922.850,50.
+    const flat = { ...rates, seniority_pct: 0, attendance_pct: 0, union_pct: 0 }
+    expect(payrollAmounts(flat, 'MONTHLY', 922850.5, 0, full)).toMatchObject({
+      gross: 922850.5,
+      retirement: 101513.56,
+      union_contribution: 9228.51,
+    })
     // Dos días sin aviso: cobra 28 días y pierde el presentismo.
     expect(payrollAmounts(rates, 'MONTHLY', 1250000, 12, { ...full, days_worked: 28, absence_days: 2 })).toMatchObject({
       basic: 1166666.67,
@@ -200,7 +214,9 @@ describe('liquidación de sueldos', () => {
     expect(doc.subtotal).toBe(Math.round(lines.reduce((s, l) => s + l.gross, 0) * 100) / 100)
     expect(doc.total).toBe(Math.round(lines.reduce((s, l) => s + l.net, 0) * 100) / 100)
     expect(db.audit.at(-1)!.summary).toBe('Creó LIQ-00001: sueldos de 05/2027 (12 empleados)')
-    expect(db.tasks.filter((t) => t.document_id === doc.id).map((t) => t.title)).toEqual(['Confirmar LIQ-00001'])
+    expect(db.tasks.filter((t) => t.document_id === doc.id).map((t) => t.title)).toEqual([
+      'Enviar LIQ-00001 a autorizar',
+    ])
     expect(listDocuments(db, userId('tesoreria'), companyId(), 'PAYROLL')[0]).toMatchObject({
       summary: 'Sueldos de 05/2027',
       line_count: 12,
@@ -276,9 +292,9 @@ describe('liquidación de sueldos', () => {
     expectBusinessError(() => cmdUpdatePayrollLines(ctx('contabilidad'), id, [base]), 'SIN_PERMISO')
   })
 
-  it('confirmar: el asiento de sueldos separa el taller (mano de obra directa) del resto', () => {
+  it('autorizada: el asiento de sueldos separa el taller (mano de obra directa) del resto', () => {
     const { id } = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
-    cmdConfirmPayroll(ctx('rrhh'), id)
+    authorize(id)
     const doc = byNumber('LIQ-00001')
     expect(doc.status).toBe('CONFIRMADA')
     expect(doc.py!.confirmed_at).not.toBeNull()
@@ -331,7 +347,7 @@ describe('liquidación de sueldos', () => {
     cmdCancelPayroll(ctx('rrhh'), draft.id, 'Faltaban novedades')
     expect(byNumber('LIQ-00001').status).toBe('ANULADA')
     const second = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
-    cmdConfirmPayroll(ctx('rrhh'), second.id)
+    authorize(second.id)
     expectBusinessError(() => cmdCancelPayroll(ctx('rrhh'), second.id, ' '), 'MOTIVO_REQUERIDO')
     expectBusinessError(() => cmdCancelPayroll(ctx('tesoreria'), second.id, 'Error'), 'SIN_PERMISO')
     cmdCancelPayroll(ctx('rrhh'), second.id, 'Se liquidó con el básico viejo')
@@ -340,6 +356,68 @@ describe('liquidación de sueldos', () => {
       /^Anuló LIQ-00002: el contraasiento AS-\d+ revirtió el de sueldos — Se liquidó con el básico viejo$/,
     )
     expect(cmdCreatePayroll(ctx('rrhh'), companyId(), input()).display_number).toBe('LIQ-00003')
+  })
+
+  it('enviar a autorizar, devolver con el motivo y autorizar: decide Gerencia, con sus tareas', () => {
+    const { id } = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
+    const doc = byNumber('LIQ-00001')
+    const tasks = () => db.tasks.filter((t) => t.document_id === id && t.status === 'PENDIENTE').map((t) => t.title)
+    expectBusinessError(() => cmdApprovePayroll(ctx('gerencia'), id, ''), 'TRANSICION_INVALIDA')
+    expectBusinessError(() => cmdSubmitPayroll(ctx('tesoreria'), id), 'SIN_PERMISO')
+    cmdSubmitPayroll(ctx('rrhh'), id)
+    expect(doc.status).toBe('PENDIENTE_APROBACION')
+    expect(db.audit.at(-1)!.summary).toBe(`Envió LIQ-00001 a autorizar: sueldos de 05/2027, ${money(doc.total)} netos`)
+    expect(tasks()).toEqual([`Autorizar la liquidación LIQ-00001 por ${money(doc.total)}`])
+    // Pendiente: no se cambian las novedades ni se anula, y RRHH no la autoriza.
+    expectBusinessError(() => cmdUpdatePayrollLines(ctx('rrhh'), id, []), 'TRANSICION_INVALIDA')
+    expectBusinessError(() => cmdCancelPayroll(ctx('rrhh'), id, 'Error de cálculo'), 'TRANSICION_INVALIDA')
+    expectBusinessError(() => cmdApprovePayroll(ctx('rrhh'), id, ''), 'SIN_PERMISO')
+    expect(documentDetail(db, userId('gerencia'), companyId(), 'PAYROLL', 'LIQ-00001')!.actions).toMatchObject([
+      { action: 'APPROVE', label: 'Autorizar', enabled: true },
+      { action: 'REJECT', label: 'Devolver a RRHH', enabled: true, requires_comment: true },
+    ])
+    // Gerencia la devuelve con el motivo: vuelve a borrador, con la tarea de RRHH.
+    expectBusinessError(() => cmdRejectPayroll(ctx('gerencia'), id, ' '), 'MOTIVO_REQUERIDO')
+    cmdRejectPayroll(ctx('gerencia'), id, 'Faltan las horas extra del taller')
+    expect(doc).toMatchObject({ status: 'BORRADOR', status_reason: 'Faltan las horas extra del taller' })
+    expect(db.audit.at(-1)!.summary).toBe('Devolvió LIQ-00001 a RRHH — Faltan las horas extra del taller')
+    expect(tasks()).toEqual(['Enviar LIQ-00001 a autorizar'])
+    expect(documentDetail(db, userId('rrhh'), companyId(), 'PAYROLL', 'LIQ-00001')!.next_step).toEqual({
+      who: 'RRHH',
+      text: 'Gerencia la devolvió: "Faltan las horas extra del taller". Corregir las novedades y volver a enviarla a autorizar.',
+    })
+    expect(entriesOf(id)).toEqual([])
+    // Se envía de nuevo y Gerencia la autoriza: se registra el asiento y Tesorería recibe la tarea.
+    cmdSubmitPayroll(ctx('rrhh'), id)
+    cmdApprovePayroll(ctx('gerencia'), id, 'Revisada con los partes del taller')
+    expect(doc.status).toBe('CONFIRMADA')
+    expect(doc.py!.confirmed_at).not.toBeNull()
+    expect(db.audit.find((e) => e.document_id === id && e.action === 'APPROVE')!.summary).toBe(
+      `Autorizó LIQ-00001: sueldos de 05/2027, ${money(doc.total)} netos a pagar — Revisada con los partes del taller`,
+    )
+    expect(entriesOf(id)).toHaveLength(1)
+    expect(tasks()).toEqual([`Pagar los sueldos de LIQ-00001 por ${money(doc.total)}`])
+  })
+
+  it('SoD-11: quien preparó la liquidación no la autoriza ni la devuelve (salvo que el docente apague la regla)', () => {
+    const ger = db.sectors.find((s) => s.company_id === companyId() && s.code === 'GER')!.id
+    cmdAssignRole(ctx('docente'), companyId(), userId('rrhh'), 'GERENCIA', ger)
+    const { id } = cmdCreatePayroll(ctx('rrhh'), companyId(), input())
+    cmdSubmitPayroll(ctx('rrhh'), id)
+    const action = (name: string) =>
+      documentDetail(db, userId('rrhh'), companyId(), 'PAYROLL', 'LIQ-00001')!.actions.find((a) => a.action === name)
+    expect(action('APPROVE')).toMatchObject({
+      enabled: false,
+      reason: 'Separación de funciones: no podés autorizar ni devolver una liquidación que preparaste vos.',
+    })
+    expect(action('REJECT')).toMatchObject({ enabled: false })
+    expect(expectBusinessError(() => cmdApprovePayroll(ctx('rrhh'), id, ''), 'SEPARACION_FUNCIONES')).toBe(
+      'No podés autorizar ni devolver una liquidación que preparaste vos.',
+    )
+    expectBusinessError(() => cmdRejectPayroll(ctx('rrhh'), id, 'Revisar las horas'), 'SEPARACION_FUNCIONES')
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { sod_enabled: false })
+    cmdApprovePayroll(ctx('rrhh'), id, '')
+    expect(byNumber('LIQ-00001').status).toBe('CONFIRMADA')
   })
 
   it('los porcentajes legales los cambia el docente y los del convenio, RRHH; la liquidación conserva los suyos', () => {
@@ -436,7 +514,7 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
           overtime_100: 0,
         })),
     )
-    cmdConfirmPayroll(ctx(username), id)
+    authorize(id, username)
     return id
   }
 
@@ -567,7 +645,7 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
       payroll: { display_number: 'LIQ-00001', status_info: { label: 'Borrador' } },
       real: 0,
     })
-    cmdConfirmPayroll(ctx('rrhh'), id)
+    authorize(id)
     const view = report()
     expect(view.rows.map((r) => `${r.work_center?.code} ${r.employees}`)).toEqual([
       'ARMADO 2',

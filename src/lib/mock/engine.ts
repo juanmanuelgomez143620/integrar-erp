@@ -6699,6 +6699,15 @@ export const payrollLineRates = (rates: T.PayrollRates, line: T.PayrollLine): Pa
 })
 
 /**
+ * Un importe por un factor de hasta 4 decimales, o dividido por un entero, redondeado a
+ * centavos como la base (decimal exacto, la mitad hacia arriba): en centavos enteros, para
+ * que medio centavo (9.228,505) no se pierda en la representación binaria.
+ */
+const timesCents = (amount: number, factor: number) =>
+  Math.round((Math.round(amount * 100) * Math.round(factor * 10000)) / 10000) / 100
+const overCents = (amount: number, divisor: number) => Math.round(Math.round(amount * 100) / divisor) / 100
+
+/**
  * Los importes de un empleado, cada concepto redondeado a centavos: el básico (por mes,
  * proporcional a los días de un mes de 30; por hora, el valor hora por las horas), la
  * antigüedad y el presentismo del convenio (si no faltó sin aviso), las horas extra (valor
@@ -6713,17 +6722,19 @@ export function payrollAmounts(
   n: PayrollNovelties,
 ) {
   const monthly = basis === 'MONTHLY'
-  const basic = round2(monthly ? (basicSalary * n.days_worked) / 30 : basicSalary * n.hours_worked)
-  const seniority = round2((basic * rates.seniority_pct * years) / 100)
-  const attendance = n.absence_days === 0 ? round2(((basic + seniority) * rates.attendance_pct) / 100) : 0
-  const full = basicSalary + round2((basicSalary * rates.seniority_pct * years) / 100)
-  const hourly = round2(monthly ? full / 200 : full)
-  const overtime = round2(round2(hourly * 1.5 * n.overtime_50) + round2(hourly * 2 * n.overtime_100))
+  const basic = monthly ? overCents(basicSalary * n.days_worked, 30) : timesCents(basicSalary, n.hours_worked)
+  const seniorityRate = (rates.seniority_pct * years) / 100
+  const seniority = timesCents(basic, seniorityRate)
+  const attendance = n.absence_days === 0 ? timesCents(basic + seniority, rates.attendance_pct / 100) : 0
+  const full = basicSalary + timesCents(basicSalary, seniorityRate)
+  const hourly = monthly ? overCents(full, 200) : round2(full)
+  const overtime = round2(timesCents(hourly, 1.5 * n.overtime_50) + timesCents(hourly, 2 * n.overtime_100))
   const gross = round2(basic + seniority + attendance + overtime)
-  const retirement = round2((gross * rates.retirement_pct) / 100)
-  const pami = round2((gross * rates.pami_pct) / 100)
-  const health = round2((gross * rates.health_pct) / 100)
-  const unionDues = round2((gross * rates.union_pct) / 100)
+  const share = (pct: number) => timesCents(gross, pct / 100)
+  const retirement = share(rates.retirement_pct)
+  const pami = share(rates.pami_pct)
+  const health = share(rates.health_pct)
+  const unionDues = share(rates.union_pct)
   const deductions = round2(retirement + pami + health + unionDues)
   return {
     basic,
@@ -6737,8 +6748,8 @@ export function payrollAmounts(
     union_dues: unionDues,
     deductions,
     net: round2(gross - deductions),
-    employer: round2((gross * rates.employer_pct) / 100),
-    union_contribution: round2((gross * rates.union_employer_pct) / 100),
+    employer: share(rates.employer_pct),
+    union_contribution: share(rates.union_employer_pct),
   }
 }
 
@@ -6928,22 +6939,52 @@ export function cmdUpdatePayrollLines(ctx: Ctx, docId: string, lines: PayrollLin
 }
 
 /**
- * Confirmar: quedan los recibos y se registra el asiento de sueldos (SUELDOS): el
- * personal del taller, como mano de obra directa; los demás, como sueldos y cargas sociales.
+ * RRHH envía la liquidación a Gerencia para que la autorice (Fase 6d): desde ahí no se
+ * cambian las novedades; si hay que corregir algo, Gerencia la devuelve.
  */
-export function cmdConfirmPayroll(ctx: Ctx, docId: string) {
+export function cmdSubmitPayroll(ctx: Ctx, docId: string) {
   const { db } = ctx
   const doc = getDoc(db, docId, 'PAYROLL')
-  requireTransition(doc, 'CONFIRM')
+  requireTransition(doc, 'SUBMIT')
   requirePermission(ctx, doc.company_id, 'payroll.create')
+  if (!(sumLines(payrollLines(db, doc.id), (l) => l.gross) > 0))
+    fail('DATO_INVALIDO', 'La liquidación no tiene importes: revisá los días o las horas trabajadas.')
+  transition(ctx, doc, 'SUBMIT', {
+    summary: `Envió ${doc.display_number} a autorizar: sueldos de ${periodLabel(doc.py!.period)}, ${money(doc.total)} netos`,
+  })
+}
+
+/** Gerencia autoriza o devuelve; quien preparó la liquidación no decide sobre ella (SoD-11). */
+function decidePayroll(ctx: Ctx, docId: string, action: 'APPROVE' | 'REJECT') {
+  const doc = getDoc(ctx.db, docId, 'PAYROLL')
+  requireTransition(doc, action)
+  const actor = requirePermission(ctx, doc.company_id, 'payroll.approve')
+  const eff = effectivePermissions(ctx.db, ctx.userId!, doc.company_id)
+  if (!eff.supervisor && getCompany(ctx.db, doc.company_id).settings.sod_enabled && doc.created_by === ctx.userId)
+    fail(
+      'SEPARACION_FUNCIONES',
+      'No podés autorizar ni devolver una liquidación que preparaste vos.',
+      'Separación de funciones: quien liquida los sueldos no los autoriza.',
+    )
+  return { doc, actor }
+}
+
+/**
+ * Gerencia autoriza: quedan los recibos y se registra el asiento de sueldos (SUELDOS): el
+ * personal del taller, como mano de obra directa; los demás, como sueldos y cargas sociales;
+ * lo del sindicato, en Sindicatos a pagar.
+ */
+export function cmdApprovePayroll(ctx: Ctx, docId: string, comment: string) {
+  const { db } = ctx
+  const { doc, actor } = decidePayroll(ctx, docId, 'APPROVE')
   const lines = payrollLines(db, doc.id)
-  const sum = (rows: T.PayrollLine[], value: (l: T.PayrollLine) => number) =>
-    round2(rows.reduce((s, l) => s + value(l), 0))
-  if (!(sum(lines, (l) => l.gross) > 0))
-    fail('DATO_INVALIDO', 'La liquidación no tiene importes: revisá los días trabajados.')
+  const sum = sumLines
   const period = periodLabel(doc.py!.period)
-  const actor = transition(ctx, doc, 'CONFIRM', {
-    summary: `Confirmó ${doc.display_number}: sueldos de ${period}, ${money(doc.total)} netos a pagar`,
+  const note = comment.trim()
+  transition(ctx, doc, 'APPROVE', {
+    actor,
+    comment,
+    summary: `Autorizó ${doc.display_number}: sueldos de ${period}, ${money(doc.total)} netos a pagar${note ? ` — ${note}` : ''}`,
   })
   doc.py = { ...doc.py!, confirmed_at: ctx.now }
   const direct = lines.filter((l) => l.is_direct_labor)
@@ -6967,6 +7008,16 @@ export function cmdConfirmPayroll(ctx: Ctx, docId: string) {
       { key: 'SINDICATOS_A_PAGAR', debit: 0, credit: sum(lines, unionCharges) },
     ],
   )
+}
+
+/** Gerencia la devuelve a RRHH con el motivo: vuelve a borrador para corregirla. */
+export function cmdRejectPayroll(ctx: Ctx, docId: string, reason: string) {
+  const { doc, actor } = decidePayroll(ctx, docId, 'REJECT')
+  transition(ctx, doc, 'REJECT', {
+    actor,
+    comment: reason,
+    summary: `Devolvió ${doc.display_number} a RRHH — ${reason.trim()}`,
+  })
 }
 
 /** Anular: la que está en borrador, sin más; la confirmada, con el contraasiento del de sueldos. */
@@ -7018,10 +7069,15 @@ export const payrollCharges = (db: DB, docId: string) =>
 const sumLines = (lines: T.PayrollLine[], value: (l: T.PayrollLine) => number) =>
   round2(lines.reduce((s, l) => s + value(l), 0))
 
-/** Quienes liquidaron los sueldos (SoD-6): quien preparó la liquidación y quien la confirmó. */
+/**
+ * Quienes liquidaron los sueldos (SoD-6): quien preparó la liquidación y quien la envió a
+ * autorizar (en las de antes de la Fase 6d, quien la confirmó).
+ */
 export function payrollLiquidators(db: DB, doc: T.Document) {
-  const confirmer = db.audit.find((e) => e.document_id === doc.id && e.action === 'CONFIRM')?.actor_user_id
-  return [doc.created_by, confirmer].filter((id): id is string => !!id)
+  const senders = db.audit
+    .filter((e) => e.document_id === doc.id && (e.action === 'SUBMIT' || e.action === 'CONFIRM'))
+    .map((e) => e.actor_user_id)
+  return [doc.created_by, ...senders].filter((id): id is string => !!id)
 }
 
 /**

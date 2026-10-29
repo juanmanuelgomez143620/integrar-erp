@@ -146,7 +146,9 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CANCEL: (id, t) => commands.cancelProductionOrder(id, t),
   },
   PAYROLL: {
-    CONFIRM: (id) => commands.confirmPayroll(id),
+    SUBMIT: (id) => commands.submitPayroll(id),
+    APPROVE: (id, t) => commands.approvePayroll(id, t),
+    REJECT: (id, t) => commands.rejectPayroll(id, t),
     CANCEL: (id, t) => commands.cancelPayroll(id, t),
   },
   // Pagar tiene su propio diálogo: hay que elegir la caja o el banco.
