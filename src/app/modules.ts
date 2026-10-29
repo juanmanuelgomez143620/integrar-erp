@@ -33,6 +33,7 @@ import {
   Layers,
   LayoutDashboard,
   ListTree,
+  Network,
   NotebookPen,
   Package,
   PackageCheck,
@@ -72,6 +73,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Inicio', path: '', icon: LayoutDashboard },
       { label: 'Mi trabajo', path: 'mi-trabajo', icon: Inbox, badge: 'tasks' },
+      { label: 'Mapa vivo', path: 'mapa-vivo', icon: Network },
       { label: 'Notificaciones', path: 'notificaciones', icon: Bell },
     ],
   },

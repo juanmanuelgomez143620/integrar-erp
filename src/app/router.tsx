@@ -24,6 +24,7 @@ const ChangePasswordPage = lazyPage(() =>
 )
 const ProfilePage = lazyPage(() => import('@/features/auth/profile-page').then((m) => m.ProfilePage))
 const DashboardPage = lazyPage(() => import('@/features/dashboard/dashboard-page').then((m) => m.DashboardPage))
+const LiveMapPage = lazyPage(() => import('@/features/flow/live-map-page').then((m) => m.LiveMapPage))
 const MyWorkPage = lazyPage(() => import('@/features/my-work/my-work-page').then((m) => m.MyWorkPage))
 const NotificationsPage = lazyPage(() =>
   import('@/features/notifications/notifications-page').then((m) => m.NotificationsPage),
@@ -148,6 +149,7 @@ export const router = createBrowserRouter(
               element: <AppShell />,
               children: [
                 { index: true, element: <DashboardPage /> },
+                { path: 'mapa-vivo', element: <LiveMapPage /> },
                 { path: 'mi-trabajo', element: <MyWorkPage /> },
                 { path: 'notificaciones', element: <NotificationsPage /> },
                 { path: 'compras/solicitudes', element: <DocumentListPage key="pr" docType="PURCHASE_REQUISITION" /> },
