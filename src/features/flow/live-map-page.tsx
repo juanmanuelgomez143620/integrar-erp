@@ -12,8 +12,10 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Route,
   Truck,
   Wallet,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EmptyState, KpiCard, Loading, Section } from '@/components/common/blocks'
@@ -35,6 +37,8 @@ import {
   type NodeId,
   type NodeStats,
 } from './flow-model'
+import { DigitalTwin } from './digital-twin'
+import { replaySteps, type ReplayStep } from './twin-model'
 import { WarehouseView } from './warehouse-view'
 
 interface FlowData {
@@ -103,6 +107,9 @@ function LiveMap({
   const [step, setStep] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
+  const [replayDocId, setReplayDocId] = useState<string | null>(null)
+  const [replayIndex, setReplayIndex] = useState(0)
+  const [replayPlaying, setReplayPlaying] = useState(false)
 
   const openDocs = useMemo(() => data.docs.filter((doc) => !doc.status_info.final), [data.docs])
   const nodes = useMemo(() => buildNodeStats(openDocs, data.tasks), [openDocs, data.tasks])
@@ -130,6 +137,31 @@ function LiveMap({
   // del render: así el valor es estable y no cambia en cada dibujo.
   const oldestDays = oldestTask && updatedAt ? (updatedAt - new Date(oldestTask.created_at).getTime()) / 86_400_000 : 0
   const playingNow = playing && stepIndex < events.length
+
+  const selectedSteps = useMemo(
+    () => (selectedDoc ? replaySteps(selectedDoc, data.audit) : []),
+    [selectedDoc, data.audit],
+  )
+  const replayDoc = data.docs.find((doc) => doc.id === replayDocId) ?? null
+  const replay = useMemo(() => (replayDoc ? replaySteps(replayDoc, data.audit) : []), [replayDoc, data.audit])
+  const replayAt = Math.min(replayIndex, Math.max(0, replay.length - 1))
+
+  useEffect(() => {
+    if (!replayPlaying || replayAt >= replay.length - 1) return
+    const timer = window.setTimeout(() => setReplayIndex((value) => value + 1), 2200)
+    return () => window.clearTimeout(timer)
+  }, [replayPlaying, replayAt, replay.length])
+
+  function startReplay(doc: DocumentListItem) {
+    setReplayDocId(doc.id)
+    setReplayIndex(0)
+    setReplayPlaying(true)
+  }
+
+  function stopReplay() {
+    setReplayDocId(null)
+    setReplayPlaying(false)
+  }
 
   function selectDoc(doc: DocumentListItem) {
     setSelectedDocId(doc.id)
@@ -165,7 +197,7 @@ function LiveMap({
     <>
       <PageHeader
         title="Mapa vivo de la empresa"
-        description="El circuito completo en una vista: documentos abiertos, tareas que esperan y stock en los depósitos. Se actualiza cada 20 segundos y muestra sólo lo que tu rol puede leer."
+        description="El gemelo digital de la empresa: la planta en 3D con los documentos abiertos, las tareas que esperan, el stock y los camiones. Se actualiza cada 20 segundos y muestra sólo lo que tu rol puede leer."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -222,6 +254,86 @@ function LiveMap({
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Section
+          title="La empresa en 3D"
+          description="La planta con sus sectores: los sobres son los documentos abiertos, las estanterías tienen el stock real y los camiones esperan en los muelles. Hacé clic en un sector o en un sobre."
+          bodyClassName="p-2 sm:p-3"
+        >
+          <DigitalTwin
+            docs={openDocs}
+            nodes={nodes}
+            stock={data.stock}
+            focus={focus}
+            activeNode={activeNode}
+            selectedDocId={selectedDocId}
+            replay={replayDoc && replay.length ? { steps: replay.map((s) => s.place), index: replayAt } : null}
+            onSelectPlace={focusNode}
+            onSelectDoc={(id) => {
+              const doc = data.docs.find((item) => item.id === id)
+              if (doc) selectDoc(doc)
+            }}
+          >
+            {replayDoc && replay.length ? (
+              <ReplayBar
+                doc={replayDoc}
+                step={replay[replayAt]}
+                index={replayAt}
+                total={replay.length}
+                playing={replayPlaying && replayAt < replay.length - 1}
+                onPrev={() => {
+                  setReplayPlaying(false)
+                  setReplayIndex(Math.max(0, replayAt - 1))
+                }}
+                onNext={() => {
+                  setReplayPlaying(false)
+                  setReplayIndex(Math.min(replay.length - 1, replayAt + 1))
+                }}
+                onToggle={() => {
+                  if (replayAt >= replay.length - 1) {
+                    setReplayIndex(0)
+                    setReplayPlaying(true)
+                  } else {
+                    setReplayPlaying((value) => !value)
+                  }
+                }}
+                onClose={stopReplay}
+              />
+            ) : null}
+          </DigitalTwin>
+        </Section>
+
+        <Section
+          title={selectedDoc ? 'Documento' : focus ? NODES[focus].short : 'Dónde se trabaja'}
+          description={
+            selectedDoc
+              ? DOC_TYPES[selectedDoc.doc_type].name
+              : focus
+                ? NODES[focus].description
+                : 'Tareas abiertas por sector, de la cola más larga a la más corta.'
+          }
+          actions={
+            selectedDoc || focus ? (
+              <Button variant="ghost" size="sm" onClick={clearFocus}>
+                <ArrowLeft /> Volver
+              </Button>
+            ) : undefined
+          }
+          bodyClassName="p-0"
+        >
+          {selectedDoc ? (
+            <DocumentDetail
+              doc={selectedDoc}
+              steps={selectedSteps.length}
+              replaying={replayDocId === selectedDoc.id}
+              onReplay={() => startReplay(selectedDoc)}
+            />
+          ) : focus ? (
+            <SectorDetail node={focus} stats={nodes[focus]} onSelectDoc={selectDoc} />
+          ) : (
+            <SectorQueues nodes={nodes} onFocus={focusNode} readableCount={readable.length} />
+          )}
+        </Section>
+
+        <Section
           className="xl:col-span-2"
           title="Circuito operativo"
           description="Cada tarjeta es un sector; las fichas son documentos abiertos. Hacé clic en una ficha para verla y seguir la operación."
@@ -258,37 +370,9 @@ function LiveMap({
         </Section>
 
         <Section
-          className="order-2 xl:order-3"
-          title={selectedDoc ? 'Documento' : focus ? NODES[focus].short : 'Dónde se trabaja'}
-          description={
-            selectedDoc
-              ? DOC_TYPES[selectedDoc.doc_type].name
-              : focus
-                ? NODES[focus].description
-                : 'Tareas abiertas por sector, de la cola más larga a la más corta.'
-          }
-          actions={
-            selectedDoc || focus ? (
-              <Button variant="ghost" size="sm" onClick={clearFocus}>
-                <ArrowLeft /> Volver
-              </Button>
-            ) : undefined
-          }
-          bodyClassName="p-0"
-        >
-          {selectedDoc ? (
-            <DocumentDetail doc={selectedDoc} />
-          ) : focus ? (
-            <SectorDetail node={focus} stats={nodes[focus]} onSelectDoc={selectDoc} />
-          ) : (
-            <SectorQueues nodes={nodes} onFocus={focusNode} readableCount={readable.length} />
-          )}
-        </Section>
-
-        <Section
           title="Recorrido de la actividad"
-          description="Reproducí los últimos eventos de auditoría. Resalta el sector que actuó; no reconstruye el estado histórico del mapa."
-          className="order-3 xl:order-2"
+          description="Reproducí los últimos eventos de auditoría. Resalta en la planta y en el circuito el sector que actuó; no reconstruye el estado histórico."
+          className="xl:col-span-2"
           actions={
             <Button
               variant="outline"
@@ -422,7 +506,17 @@ function LiveMap({
   )
 }
 
-function DocumentDetail({ doc }: { doc: DocumentListItem }) {
+function DocumentDetail({
+  doc,
+  steps,
+  replaying,
+  onReplay,
+}: {
+  doc: DocumentListItem
+  steps: number
+  replaying: boolean
+  onReplay: () => void
+}) {
   return (
     <div className="p-4">
       <div className="flex items-center justify-between gap-2">
@@ -440,9 +534,100 @@ function DocumentDetail({ doc }: { doc: DocumentListItem }) {
         {doc.reference_label ? <DetailRow label="Origen" value={doc.reference_label} /> : null}
         {doc.total > 0 ? <DetailRow label="Total" value={money(doc.total)} /> : null}
       </dl>
-      <Button asChild className="mt-4 w-full">
-        <Link to={doc.path}>Abrir documento</Link>
-      </Button>
+      <div className="mt-4 grid gap-2">
+        <Button variant="outline" onClick={onReplay} disabled={steps === 0 || replaying}>
+          <Route /> {steps === 0 ? 'Sin recorrido registrado' : `Ver su recorrido en 3D (${steps} pasos)`}
+        </Button>
+        <Button asChild>
+          <Link to={doc.path}>Abrir documento</Link>
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function ReplayBar({
+  doc,
+  step,
+  index,
+  total,
+  playing,
+  onPrev,
+  onNext,
+  onToggle,
+  onClose,
+}: {
+  doc: DocumentListItem
+  step: ReplayStep
+  index: number
+  total: number
+  playing: boolean
+  onPrev: () => void
+  onNext: () => void
+  onToggle: () => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      className="absolute inset-x-2 bottom-2 rounded-lg border bg-white/95 p-2.5 shadow-md sm:left-auto sm:w-[380px]"
+      role="region"
+      aria-label={`Recorrido de ${doc.display_number}`}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="font-mono text-xs font-semibold text-navy">{doc.display_number}</span>
+        <span className="tabular text-[11px] text-muted-foreground">
+          paso {index + 1} de {total}
+        </span>
+        <div className="ml-auto flex gap-1">
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-7"
+            onClick={onPrev}
+            disabled={index === 0}
+            aria-label="Paso anterior"
+          >
+            <ChevronLeft />
+          </Button>
+          <Button size="icon" className="size-7" onClick={onToggle} aria-label={playing ? 'Pausar' : 'Reproducir'}>
+            {playing ? <Pause /> : <Play />}
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-7"
+            onClick={onNext}
+            disabled={index >= total - 1}
+            aria-label="Paso siguiente"
+          >
+            <ChevronRight />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-7" onClick={onClose} aria-label="Cerrar el recorrido">
+            <X />
+          </Button>
+        </div>
+      </div>
+      {step.event ? (
+        <>
+          <div className="mt-1.5 text-[11px] text-muted-foreground" aria-live={playing ? 'off' : 'polite'}>
+            <span className="tabular">{dateTime(step.event.occurred_at)}</span> ·{' '}
+            <span className="font-medium text-foreground">{step.event.actor_name}</span> en{' '}
+            <span className="font-medium text-foreground">{NODES[step.place].short}</span>
+            {step.event.from_status && step.event.to_status ? (
+              <>
+                {' '}
+                · {statusLabel(step.event.from_status)} → {statusLabel(step.event.to_status)}
+              </>
+            ) : null}
+          </div>
+          <p className="mt-0.5 text-sm">{step.event.summary}</p>
+        </>
+      ) : (
+        <p className="mt-1.5 text-sm" aria-live={playing ? 'off' : 'polite'}>
+          Hoy espera en <span className="font-medium">{NODES[step.place].short}</span> ({doc.status_info.label}).
+          {doc.pending_approver ? ` Le toca a ${doc.pending_approver}.` : ''}
+        </p>
+      )}
     </div>
   )
 }
