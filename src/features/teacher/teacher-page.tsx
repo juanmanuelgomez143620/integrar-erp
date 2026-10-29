@@ -25,6 +25,7 @@ import { relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { PayrollRatesSection } from '@/features/hr/payroll'
+import { IibbRateSection } from '@/features/tax/tax-return'
 import { BulkStudentsDialog } from './bulk-students-dialog'
 
 export function TeacherPage() {
@@ -234,6 +235,7 @@ export function TeacherPage() {
             </ul>
           </Section>
           <PayrollRatesSection />
+          <IibbRateSection />
         </TabsContent>
 
         <TabsContent value="activity" className="mt-3 grid gap-4 lg:grid-cols-[280px_1fr]">

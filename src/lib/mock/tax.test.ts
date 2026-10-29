@@ -1,5 +1,5 @@
-// Pruebas de los libros IVA y de la declaración mensual de IVA
-// (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2) sobre buildSeed() y los cmd*.
+// Pruebas de los libros IVA, de la declaración mensual de IVA y de la de ingresos brutos con sus
+// percepciones y retenciones (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2 y §3) sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { money } from '../format'
@@ -7,10 +7,15 @@ import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
   cmdAssignRole,
+  cmdCancelCustomerReceipt,
+  cmdCancelPaymentOrder,
   cmdCancelSalesInvoice,
+  cmdCancelSupplierInvoice,
   cmdCancelTaxReturn,
   cmdConfirmDeliveryNote,
+  cmdCreateCustomerReceipt,
   cmdCreateSalesInvoice,
+  cmdCreateSupplierInvoice,
   cmdCreateTaxReturn,
   cmdPayTaxReturn,
   cmdPresentTaxReturn,
@@ -204,7 +209,7 @@ describe('declaración mensual de IVA', () => {
       expectBusinessError(() => cmdCreateTaxReturn(ctx(username), companyId(), input(over)), 'DATO_INVALIDO')
     expect(create({})).toBe('05/2027 todavía no terminó: la declaración se prepara después de que termine el mes.')
     at('2027-07-05')
-    expect(create({ tax: 'IIBB' })).toBe('Elegí el impuesto: por ahora, el IVA.')
+    expect(create({ tax: 'GANANCIAS' as never })).toBe('Elegí el impuesto: IVA o ingresos brutos.')
     expect(create({ period: '2027-5' })).toBe('El período es un mes: aaaa-mm.')
     expect(create({ period: '2015-02' })).toBe(
       'La empresa empezó sus actividades el 02/03/2015: no hay declaraciones antes.',
@@ -288,5 +293,178 @@ describe('declaración mensual de IVA', () => {
         .map((r) => `${r.event}:${r.key}`)
         .sort(),
     ).toEqual(['IVA:IVA_A_PAGAR', 'IVA:IVA_CREDITO', 'IVA:IVA_DEBITO', 'PAGO_IVA:IVA_A_PAGAR'])
+  })
+})
+
+describe('ingresos brutos (Fase 7b): percepciones, retenciones y declaración', () => {
+  /** La factura de la orden de compra de la demo, otra vez (con la orden liberada). */
+  const invoiceOrder = (perception: number, register = true) => {
+    const order = db.documents.find((d) => d.id === byNumber('FP-00001').si!.purchase_order_id)!
+    return cmdCreateSupplierInvoice(
+      ctx('compras1'),
+      companyId(),
+      {
+        purchase_order_id: order.id,
+        point_of_sale: '3',
+        invoice_number: '12875',
+        document_date: '2027-05-14',
+        notes: '',
+        lines: db.poLines
+          .filter((l) => l.document_id === order.id)
+          .map((l) => ({ po_line_id: l.id, quantity: l.quantity, unit_price: l.unit_price })),
+        perception,
+      },
+      register,
+    )
+  }
+
+  /** Libera la orden de compra de la demo: se anulan su orden de pago y la factura FP-00001. */
+  function freeDemoOrder() {
+    const op = db.documents.find((d) => d.company_id === companyId() && d.doc_type === 'PAYMENT_ORDER')!
+    cmdCancelPaymentOrder(ctx('contabilidad'), op.id, 'Se rehace la factura del proveedor')
+    cmdCancelSupplierInvoice(ctx('compras1'), byNumber('FP-00001').id, 'Faltaba la percepción de ingresos brutos')
+  }
+
+  /** Rehace la factura del proveedor de la demo con una percepción. */
+  function invoiceWithPerception(perception: number) {
+    freeDemoOrder()
+    return invoiceOrder(perception)
+  }
+
+  /** Tesorería cobra toda la factura con una retención del cliente. */
+  const collect = (invoiceId: string, retention: number) => {
+    const invoice = db.documents.find((d) => d.id === invoiceId)!
+    return cmdCreateCustomerReceipt(
+      ctx('tesoreria'),
+      companyId(),
+      {
+        customer_id: invoice.customer_id!,
+        treasury_account_id: account('1.1.01.03'),
+        payment_method: 'TRANSFERENCIA',
+        reference: '',
+        notes: '',
+        lines: [{ invoice_id: invoice.id, amount: invoice.total }],
+        retention,
+      },
+      true,
+    )
+  }
+
+  it('la percepción de la factura del proveedor: a lo que se le debe, a su cuenta y al libro IVA compras', () => {
+    freeDemoOrder()
+    const bad = (perception: number) => expectBusinessError(() => invoiceOrder(perception, false), 'DATO_INVALIDO')
+    expect(bad(-1)).toBe('La percepción de ingresos brutos es un importe de cero o más, con hasta 2 decimales.')
+    bad(10.555)
+    const { id } = invoiceOrder(2500)
+    const fp = byNumber('FP-00002')
+    expect(fp).toMatchObject({ total: round2(fp.subtotal + fp.tax_total + 2500), si: { perception: 2500 } })
+    expect(entriesOf(id)).toEqual([
+      [`1.1.05.02 ${fp.subtotal} 0`, `1.1.04.01 ${fp.tax_total} 0`, '1.1.04.03 2500 0', `2.1.01.01 0 ${fp.total}`],
+    ])
+    const book = ivaBook(db, userId('contabilidad'), companyId(), '2027-05', false)
+    expect(book.rows.find((r) => r.invoice.id === id)).toMatchObject({ perception: 2500, total: fp.total })
+    expect(book.perception).toBe(2500)
+  })
+
+  it('la retención del cliente: entra el resto a la caja o el banco; para anular alcanza con ese dinero', () => {
+    const fv = byNumber(invoiceDemoOrder().display_number)
+    const receipt = (retention: number) => expectBusinessError(() => collect(fv.id, retention), 'DATO_INVALIDO')
+    expect(receipt(fv.total)).toBe(
+      `La retención (${money(fv.total)}) tiene que ser menor que lo que se cobra (${money(fv.total)}): el resto ingresa a la caja o el banco.`,
+    )
+    expect(receipt(-5)).toBe('La retención de ingresos brutos es un importe de cero o más, con hasta 2 decimales.')
+    receipt(10.555)
+    const { id, display_number } = collect(fv.id, 1500)
+    const rbo = byNumber(display_number)
+    expect(rbo).toMatchObject({ status: 'CONFIRMADO', total: fv.total, rc: { retention: 1500 } })
+    expect(entriesOf(id)).toEqual([
+      [`1.1.01.03 ${round2(fv.total - 1500)} 0`, '1.1.04.03 1500 0', `1.1.03.01 0 ${fv.total}`],
+    ])
+    expect(db.audit.find((e) => e.document_id === id && e.action === 'CONFIRM')!.summary).toMatch(
+      /, con una retención de ingresos brutos de \$\s1\.500,00$/,
+    )
+    expect(byNumber(fv.display_number).status).toBe('COBRADA')
+    cmdCancelCustomerReceipt(ctx('tesoreria'), id, 'El cliente pidió rehacer el recibo')
+    const entry = db.docLinks
+      .filter((l) => l.from_document_id === id)
+      .map((l) => db.documents.find((d) => d.id === l.to_document_id)!)
+      .find((d) => d.doc_type === 'JOURNAL_ENTRY')!
+    const reversal = db.documents.find((d) => d.je?.reverses_id === entry.id)!
+    expect(
+      db.jeLines
+        .filter((l) => l.document_id === reversal.id)
+        .map((l) => `${db.accounts.find((a) => a.id === l.account_id)!.code} ${l.debit} ${l.credit}`),
+    ).toEqual([`1.1.01.03 0 ${round2(fv.total - 1500)}`, '1.1.04.03 0 1500', `1.1.03.01 ${fv.total} 0`])
+  })
+
+  it('la declaración: la alícuota sobre las ventas netas, menos percepciones y retenciones; asiento y pago', () => {
+    invoiceWithPerception(2000)
+    const fv = byNumber(invoiceDemoOrder().display_number)
+    collect(fv.id, 1000)
+    // El docente cambia la alícuota; la declaración la copia.
+    expectBusinessError(
+      () => cmdUpdateCompanySettings(ctx('contabilidad'), companyId(), { iibb_pct: 4 }),
+      'SIN_PERMISO',
+    )
+    expect(
+      expectBusinessError(
+        () => cmdUpdateCompanySettings(ctx('docente'), companyId(), { iibb_pct: 3.555 }),
+        'DATO_INVALIDO',
+      ),
+    ).toBe('La alícuota de ingresos brutos va de 0 a 100, con hasta 2 decimales.')
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { iibb_pct: 3.5 })
+    expect(db.audit.at(-1)).toMatchObject({
+      summary: 'Cambió la alícuota de ingresos brutos',
+      changes: { iibb_pct: { from: null, to: 3.5 } },
+    })
+    at('2027-06-05')
+    const { id } = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input({ tax: 'IIBB' }))
+    const dj = byNumber('DJ-00001')
+    const tax = Math.round((Math.round(fv.subtotal * 100) * 350) / 10000) / 100
+    const due = round2(tax - 3000)
+    expect(dj).toMatchObject({
+      status: 'BORRADOR',
+      subtotal: tax,
+      total: due,
+      tr: { tax: 'IIBB', base: fv.subtotal, rate: 3.5, tax_amount: tax, credits: 3000, due_date: '2027-06-15' },
+    })
+    const view = documentDetail(db, userId('contabilidad'), companyId(), 'TAX_RETURN', 'DJ-00001')!
+    expect(view.tax_return!.withholdings.map((w) => [w.kind, w.source.display_number, w.amount])).toEqual([
+      ['PERCEPCION', 'FP-00002', 2000],
+      ['RETENCION', 'RBO-00001', 1000],
+    ])
+    expect(view.next_step.text).toMatch(/^Revisar las ventas netas del mes y las percepciones y retenciones/)
+    // Que no se pueda declarar el mes de nuevo (el IVA es otro impuesto: sí).
+    expect(
+      expectBusinessError(
+        () => cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input({ tax: 'IIBB' })),
+        'DATO_INVALIDO',
+      ),
+    ).toBe('Ya hay una declaración de ingresos brutos de 05/2027: DJ-00001.')
+    cmdPresentTaxReturn(ctx('contabilidad'), id)
+    expect(entriesOf(id)).toEqual([[`5.2.03.01 ${tax} 0`, '1.1.04.03 0 3000', `2.1.04.03 0 ${due}`]])
+    cmdPayTaxReturn(ctx('tesoreria'), id, account('1.1.01.03'))
+    expect(byNumber('DJ-00001').status).toBe('PAGADA')
+    expect(entriesOf(id)[1]).toEqual([`2.1.04.03 ${due} 0`, `1.1.01.03 0 ${due}`])
+    expect(db.audit.find((e) => e.document_id === id && e.action === 'PAY')!.summary).toMatch(
+      /^Pagó DJ-00001: ingresos brutos de 05\/2027, /,
+    )
+  })
+
+  it('al actualizar una base guardada (v18), las reglas nuevas y los documentos sin percepción ni retención', () => {
+    invoiceWithPerception(0)
+    const stored = structuredClone(db)
+    const company = stored.companies[0].id
+    stored.postingRules = stored.postingRules.filter((r) => r.event !== 'IIBB' && r.event !== 'PAGO_IIBB')
+    for (const d of stored.documents) {
+      if (d.si) delete (d.si as { perception?: number }).perception
+      if (d.rc) delete (d.rc as { retention?: number }).retention
+    }
+    const upgraded = upgradeDatabase({ ...stored, version: 18 })!
+    expect(upgraded.version).toBe(DB_VERSION)
+    expect(
+      upgraded.postingRules.filter((r) => r.company_id === company && (r.event === 'IIBB' || r.event === 'PAGO_IIBB')),
+    ).toHaveLength(4)
+    expect(upgraded.documents.filter((d) => d.si).every((d) => d.si!.perception === 0)).toBe(true)
   })
 })

@@ -37,6 +37,7 @@ import {
   getProfile,
   INVOICED_STATUSES,
   invoiceCommitted,
+  iibbCredits,
   ivaBookEntries,
   laterTaxReturn,
   invoicedQuantity,
@@ -1110,7 +1111,10 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
     case 'TAX_RETURN:BORRADOR':
       return {
         who: 'Impuestos',
-        text: 'Revisar los libros IVA del mes (el débito y el crédito fiscal) y presentar la declaración: se registra el asiento del impuesto.',
+        text:
+          doc.tr?.tax === 'IIBB'
+            ? 'Revisar las ventas netas del mes y las percepciones y retenciones sufridas, y presentar la declaración: se registra el asiento del impuesto.'
+            : 'Revisar los libros IVA del mes (el débito y el crédito fiscal) y presentar la declaración: se registra el asiento del impuesto.',
       }
     case 'TAX_RETURN:PRESENTADA':
       return {
@@ -4268,6 +4272,19 @@ export interface TaxReturnView {
   presented_at: string | null
   paid_on: string | null
   paid_account: { id: string; code: string; name: string } | null
+  /** En ingresos brutos (Fase 7b): las ventas netas del mes y la alícuota (null en el IVA). */
+  base: number | null
+  rate: number | null
+  /** En ingresos brutos: las percepciones y retenciones del mes (las anuladas, con signo negativo). */
+  withholdings: {
+    entry_date: string
+    sign: 1 | -1
+    source: { id: string; doc_type: T.DocType; display_number: string; path: string }
+    kind: 'PERCEPCION' | 'RETENCION'
+    voucher: string
+    counterparty: string
+    amount: number
+  }[]
 }
 
 function taxReturnView(db: DB, doc: T.Document): TaxReturnView {
@@ -4285,6 +4302,33 @@ function taxReturnView(db: DB, doc: T.Document): TaxReturnView {
     presented_at: tr.presented_at,
     paid_on: tr.paid_on,
     paid_account: paid ? { id: paid.id, code: paid.code, name: paid.name } : null,
+    base: tr.base,
+    rate: tr.rate,
+    withholdings:
+      tr.tax === 'IIBB'
+        ? iibbCredits(db, doc.company_id, tr.period).map((w) => {
+            const invoice = w.source.doc_type === 'SUPPLIER_INVOICE'
+            const party = invoice
+              ? db.suppliers.find((s) => s.id === w.source.supplier_id)!
+              : db.customers.find((c) => c.id === w.source.customer_id)!
+            return {
+              entry_date: w.entry.document_date,
+              sign: w.sign,
+              source: {
+                id: w.source.id,
+                doc_type: w.source.doc_type,
+                display_number: w.source.display_number,
+                path: docPath(db, w.source),
+              },
+              kind: invoice ? 'PERCEPCION' : 'RETENCION',
+              voucher: invoice
+                ? `${w.source.si!.letter} ${w.source.si!.point_of_sale}-${w.source.si!.invoice_number}`
+                : w.source.display_number,
+              counterparty: party.legal_name,
+              amount: w.amount,
+            }
+          })
+        : [],
   }
 }
 
@@ -4300,6 +4344,8 @@ export interface IvaBookRow {
   vat: number
   exempt: number
   no_credit: number
+  /** En las compras, la percepción de ingresos brutos (Fase 7b). */
+  perception: number
   total: number
 }
 
@@ -4313,6 +4359,7 @@ export interface IvaBook {
   vat: number
   exempt: number
   no_credit: number
+  perception: number
   total: number
 }
 
@@ -4345,6 +4392,7 @@ export function ivaBook(db: DB, userId: string, companyId: string, period: strin
         vat: e.vat,
         exempt: e.exempt,
         no_credit: e.no_credit,
+        perception: e.perception,
         total: e.total,
       }
     }),
@@ -4357,6 +4405,7 @@ export function ivaBook(db: DB, userId: string, companyId: string, period: strin
     vat: total((e) => e.vat),
     exempt: total((e) => e.exempt),
     no_credit: total((e) => e.no_credit),
+    perception: total((e) => e.perception),
     total: total((e) => e.total),
   }
 }

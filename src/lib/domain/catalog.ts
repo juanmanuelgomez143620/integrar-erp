@@ -911,6 +911,7 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       MERCADERIA_REVENTA: 'Mercaderías de reventa compradas',
       SERVICIO: 'Servicios comprados',
       IVA_CREDITO: 'IVA de la factura (letra A)',
+      PERCEPCIONES: 'Percepción de ingresos brutos que cobró el proveedor',
       PROVEEDORES: 'Deuda con el proveedor',
     },
   },
@@ -936,6 +937,7 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     keys: {
       // La contrapartida es la caja o el banco del recibo, no una regla.
       DEUDORES: 'Lo que el cliente deja de deber',
+      RETENCIONES: 'Retención de ingresos brutos que hizo el cliente',
     },
   },
   COSTO_VENTA: {
@@ -996,6 +998,21 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       IVA_A_PAGAR: 'Saldo que se paga',
     },
   },
+  IIBB: {
+    label: 'Ingresos brutos (declaración presentada)',
+    keys: {
+      IMPUESTO: 'Impuesto del mes',
+      RETENCIONES: 'Percepciones y retenciones que se usan',
+      IIBB_A_PAGAR: 'Saldo a pagar',
+    },
+  },
+  PAGO_IIBB: {
+    label: 'Pago de ingresos brutos (declaración)',
+    keys: {
+      // La contrapartida es la caja o el banco elegido, no una regla.
+      IIBB_A_PAGAR: 'Saldo que se paga',
+    },
+  },
   CONVERSION_PRODUCCION: {
     label: 'Costos de conversión aplicados (orden de producción terminada)',
     keys: {
@@ -1031,6 +1048,9 @@ export const PAY_BASES: Record<PayBasis, string> = {
  * Desde la Fase 6d, la antigüedad y el presentismo son de cada convenio: los de acá quedan para
  * las liquidaciones de antes.
  */
+/** La alícuota de ingresos brutos simplificado sobre las ventas netas del mes (Fase 7b, a validar). */
+export const IIBB_DEFAULT_PCT = 3
+
 export const PAYROLL_DEFAULT_RATES: PayrollRates = {
   seniority_pct: 1,
   attendance_pct: 8.33,

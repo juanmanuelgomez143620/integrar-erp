@@ -180,6 +180,7 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'COMPRA', key: 'MERCADERIA_REVENTA', code: '1.1.05.05' },
   { event: 'COMPRA', key: 'SERVICIO', code: '5.2.02.04' },
   { event: 'COMPRA', key: 'IVA_CREDITO', code: '1.1.04.01' },
+  { event: 'COMPRA', key: 'PERCEPCIONES', code: '1.1.04.03' },
   { event: 'COMPRA', key: 'PROVEEDORES', code: '2.1.01.01' },
   { event: 'PAGO', key: 'PROVEEDORES', code: '2.1.01.01' },
   { event: 'COSTO_VENTA', key: 'COSTO_PRODUCTO_TERMINADO', code: '5.1.01.01' },
@@ -192,6 +193,7 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'VENTA', key: 'IVA_DEBITO', code: '2.1.04.01' },
   { event: 'VENTA', key: 'DEUDORES', code: '1.1.03.01' },
   { event: 'COBRO', key: 'DEUDORES', code: '1.1.03.01' },
+  { event: 'COBRO', key: 'RETENCIONES', code: '1.1.04.03' },
   { event: 'CONSUMO_PRODUCCION', key: 'PRODUCCION_EN_PROCESO', code: '1.1.05.03' },
   { event: 'CONSUMO_PRODUCCION', key: 'MATERIA_PRIMA', code: '1.1.05.01' },
   { event: 'CONSUMO_PRODUCCION', key: 'INSUMO', code: '1.1.05.02' },
@@ -213,6 +215,10 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'IVA', key: 'IVA_CREDITO', code: '1.1.04.01' },
   { event: 'IVA', key: 'IVA_A_PAGAR', code: '2.1.04.02' },
   { event: 'PAGO_IVA', key: 'IVA_A_PAGAR', code: '2.1.04.02' },
+  { event: 'IIBB', key: 'IMPUESTO', code: '5.2.03.01' },
+  { event: 'IIBB', key: 'RETENCIONES', code: '1.1.04.03' },
+  { event: 'IIBB', key: 'IIBB_A_PAGAR', code: '2.1.04.03' },
+  { event: 'PAGO_IIBB', key: 'IIBB_A_PAGAR', code: '2.1.04.03' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */

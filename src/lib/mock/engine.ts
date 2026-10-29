@@ -10,6 +10,7 @@ import {
   DOC_STATUSES,
   DOC_TYPES,
   MODULES,
+  IIBB_DEFAULT_PCT,
   PAYROLL_DEFAULT_RATES,
   POSTING_EVENTS,
   PRODUCT_TYPES,
@@ -73,6 +74,15 @@ export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 10
 export const round3 = (n: number) => Math.round((n + Number.EPSILON) * 1000) / 1000
 export const round4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000
 const EPS = 1e-9
+
+/**
+ * Un importe por un factor de hasta 4 decimales, o dividido por un entero, redondeado a
+ * centavos como la base (decimal exacto, la mitad hacia arriba): en centavos enteros, para
+ * que medio centavo (9.228,505) no se pierda en la representación binaria.
+ */
+export const timesCents = (amount: number, factor: number) =>
+  Math.round((Math.round(amount * 100) * Math.round(factor * 10000)) / 10000) / 100
+export const overCents = (amount: number, divisor: number) => Math.round(Math.round(amount * 100) / divisor) / 100
 
 // ============================================================ Identidad y permisos
 
@@ -2534,6 +2544,8 @@ export interface SupplierInvoiceInput {
   document_date: string
   notes: string
   lines: { po_line_id: string; quantity: number; unit_price: number }[]
+  /** Percepción de ingresos brutos que cobra el proveedor (Fase 7b): 0 si no hay. */
+  perception?: number
 }
 
 /** Estados de una factura que generó deuda (registrada, con o sin pagos). */
@@ -2598,6 +2610,7 @@ export function cmdCreateSupplierInvoice(ctx: Ctx, companyId: string, input: Sup
     // Vence según el plazo de pago pactado en la orden de compra.
     due_date: addDays(input.document_date, order.po!.payment_terms_days),
     registered_at: null,
+    perception: 0,
   }
   const duplicate = db.documents.find(
     (d) =>
@@ -2629,6 +2642,10 @@ export function cmdCreateSupplierInvoice(ctx: Ctx, companyId: string, input: Sup
       return { poLine, quantity: l.quantity, unit_price: l.unit_price, subtotal, tax }
     })
   if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué cantidades factura el proveedor.')
+  const perception = input.perception ?? 0
+  if (!Number.isFinite(perception) || perception < 0 || round2(perception) !== perception || perception >= 1e9)
+    fail('DATO_INVALIDO', 'La percepción de ingresos brutos es un importe de cero o más, con hasta 2 decimales.')
+  header.perception = perception
   const doc = newDocument(ctx, companyId, 'SUPPLIER_INVOICE', actor, {
     document_date: input.document_date,
     supplier_id: supplier.id,
@@ -2653,7 +2670,7 @@ export function cmdCreateSupplierInvoice(ctx: Ctx, companyId: string, input: Sup
   })
   doc.subtotal = round2(lines.reduce((s, l) => s + l.subtotal, 0))
   doc.tax_total = round2(lines.reduce((s, l) => s + l.tax, 0))
-  doc.total = round2(doc.subtotal + doc.tax_total)
+  doc.total = round2(doc.subtotal + doc.tax_total + perception)
   link(ctx, companyId, order.id, doc.id)
   logAudit(ctx, {
     company_id: companyId,
@@ -2706,6 +2723,7 @@ function registerInvoice(ctx: Ctx, doc: T.Document) {
         .filter((type) => byType.has(type))
         .map((type) => ({ key: type, debit: byType.get(type)!, credit: 0 })),
       { key: 'IVA_CREDITO', debit: si.letter === 'A' ? doc.tax_total : 0, credit: 0 },
+      { key: 'PERCEPCIONES', debit: si.perception, credit: 0 },
       { key: 'PROVEEDORES', debit: 0, credit: doc.total },
     ],
   )
@@ -4537,7 +4555,13 @@ export interface CustomerReceiptInput {
   reference: string
   notes: string
   lines: { invoice_id: string; amount: number }[]
+  /** Retención de ingresos brutos que hace el cliente (Fase 7b): 0 si no hay. */
+  retention?: number
 }
+
+/** ", con una retención de ingresos brutos de $ …": lo que sumó el cliente en lugar de dinero. */
+const retentionNote = (retention: number) =>
+  retention > 0 ? `, con una retención de ingresos brutos de ${money(retention)}` : ''
 
 /** Facturas de venta que todavía se pueden cobrar. */
 const COLLECTIBLE_STATUSES = ['REGISTRADA', 'COBRADA_PARCIAL']
@@ -4615,10 +4639,25 @@ export function cmdCreateCustomerReceipt(ctx: Ctx, companyId: string, input: Cus
       return { invoice, amount: l.amount }
     })
   if (!lines.length) fail('DATO_INVALIDO', 'Indicá qué facturas se cobran y cuánto de cada una.')
+  const total = round2(lines.reduce((s, l) => s + l.amount, 0))
+  const retention = input.retention ?? 0
+  if (!Number.isFinite(retention) || retention < 0 || round2(retention) !== retention)
+    fail('DATO_INVALIDO', 'La retención de ingresos brutos es un importe de cero o más, con hasta 2 decimales.')
+  if (retention > 0 && retention >= total)
+    fail(
+      'DATO_INVALIDO',
+      `La retención (${money(retention)}) tiene que ser menor que lo que se cobra (${money(total)}): el resto ingresa a la caja o el banco.`,
+    )
   const doc = newDocument(ctx, companyId, 'CUSTOMER_RECEIPT', actor, {
     customer_id: customer.id,
     notes: input.notes.trim(),
-    rc: { treasury_account_id: account.id, payment_method: input.payment_method, reference, received_on: null },
+    rc: {
+      treasury_account_id: account.id,
+      payment_method: input.payment_method,
+      reference,
+      received_on: null,
+      retention,
+    },
   })
   lines.forEach((l, i) => {
     db.rcLines.push({
@@ -4630,8 +4669,8 @@ export function cmdCreateCustomerReceipt(ctx: Ctx, companyId: string, input: Cus
       amount: l.amount,
     })
   })
-  doc.subtotal = round2(lines.reduce((s, l) => s + l.amount, 0))
-  doc.total = doc.subtotal
+  doc.subtotal = total
+  doc.total = total
   for (const l of lines) link(ctx, companyId, l.invoice.id, doc.id)
   logAudit(ctx, {
     company_id: companyId,
@@ -4642,7 +4681,7 @@ export function cmdCreateCustomerReceipt(ctx: Ctx, companyId: string, input: Cus
     entity_label: doc.display_number,
     document_id: doc.id,
     to_status: 'BORRADOR',
-    summary: `Creó ${doc.display_number}: cobro a ${customer.legal_name} por ${money(doc.total)} ${PAYMENT_VIA[input.payment_method].phrase} en ${accountLabel(account)}`,
+    summary: `Creó ${doc.display_number}: cobro a ${customer.legal_name} por ${money(doc.total)} ${PAYMENT_VIA[input.payment_method].phrase} en ${accountLabel(account)}${retentionNote(retention)}`,
   })
   if (confirm) confirmCustomerReceipt(ctx, doc)
   else openTasksForStatus(ctx, doc, actor)
@@ -4683,8 +4722,9 @@ function confirmCustomerReceipt(ctx: Ctx, doc: T.Document) {
   const customer = db.customers.find((c) => c.id === doc.customer_id)!
   const via = PAYMENT_VIA[doc.rc!.payment_method]
   const number = doc.rc!.reference ? ` N.º ${doc.rc!.reference}` : ''
+  const retention = doc.rc!.retention
   const actor = transition(ctx, doc, 'CONFIRM', {
-    summary: `Confirmó ${doc.display_number}: cobró ${money(doc.total)} a ${customer.legal_name} ${via.phrase}${number} en ${accountLabel(account)}`,
+    summary: `Confirmó ${doc.display_number}: cobró ${money(doc.total)} a ${customer.legal_name} ${via.phrase}${number} en ${accountLabel(account)}${retentionNote(retention)}`,
   })
   doc.rc = { ...doc.rc!, received_on: businessDate(company) }
   postEvent(
@@ -4694,7 +4734,8 @@ function confirmCustomerReceipt(ctx: Ctx, doc: T.Document) {
     'COBRO',
     `Cobro a ${customer.legal_name} según ${doc.display_number} (${via.noun}${number}).`,
     [
-      { account_id: account.id, debit: doc.total, credit: 0 },
+      { account_id: account.id, debit: round2(doc.total - retention), credit: 0 },
+      { key: 'RETENCIONES', debit: retention, credit: 0 },
       { key: 'DEUDORES', debit: 0, credit: doc.total },
     ],
   )
@@ -4724,10 +4765,11 @@ export function cmdCancelCustomerReceipt(ctx: Ctx, docId: string, reason: string
   if (comment.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo: queda registrado en el historial del documento.')
   const account = db.accounts.find((a) => a.id === doc.rc!.treasury_account_id)!
   const balance = accountBalance(db, account.id)
-  if (doc.total > balance + EPS)
+  const cash = round2(doc.total - doc.rc!.retention)
+  if (cash > balance + EPS)
     fail(
       'SALDO_INSUFICIENTE',
-      `No se puede anular: en ${accountLabel(account)} hay ${money(balance)} y el cobro fue por ${money(doc.total)}.`,
+      `No se puede anular: en ${accountLabel(account)} hay ${money(balance)} y el cobro ingresó ${money(cash)}.`,
       'El dinero ya salió de esa cuenta (por ejemplo, se depositó en el banco): primero hay que anular ese movimiento.',
     )
   const entry = automaticEntryOf(db, doc.id)
@@ -6699,15 +6741,6 @@ export const payrollLineRates = (rates: T.PayrollRates, line: T.PayrollLine): Pa
 })
 
 /**
- * Un importe por un factor de hasta 4 decimales, o dividido por un entero, redondeado a
- * centavos como la base (decimal exacto, la mitad hacia arriba): en centavos enteros, para
- * que medio centavo (9.228,505) no se pierda en la representación binaria.
- */
-const timesCents = (amount: number, factor: number) =>
-  Math.round((Math.round(amount * 100) * Math.round(factor * 10000)) / 10000) / 100
-const overCents = (amount: number, divisor: number) => Math.round(Math.round(amount * 100) / divisor) / 100
-
-/**
  * Los importes de un empleado, cada concepto redondeado a centavos: el básico (por mes,
  * proporcional a los días de un mes de 30; por hora, el valor hora por las horas), la
  * antigüedad y el presentismo del convenio (si no faltó sin aviso), las horas extra (valor
@@ -7169,6 +7202,8 @@ export interface IvaBookEntry {
   vat: number
   exempt: number
   no_credit: number
+  /** En las compras, la percepción de ingresos brutos (Fase 7b). */
+  perception: number
   total: number
   /** Neto e IVA por alícuota (sin las exentas). */
   by_rate: { rate: number; net: number; vat: number }[]
@@ -7213,6 +7248,7 @@ export function ivaBookEntries(db: DB, companyId: string, period: string, sales:
           )
         : 0,
       no_credit: credit ? 0 : sum(lines, (l) => l.line_total),
+      perception: sales ? 0 : round2(sign * invoice.si!.perception),
       total: round2(sign * invoice.total),
       by_rate: rates.map((rate) => {
         const own = taxed.filter((l) => l.vat_rate === rate)
@@ -7226,6 +7262,45 @@ export function ivaBookEntries(db: DB, companyId: string, period: string, sales:
       a.entry.je!.entry_number! - b.entry.je!.entry_number!,
   )
 }
+
+/** Una percepción (factura de proveedor) o retención (recibo de cobro) de ingresos brutos de un mes. */
+export interface IibbCreditEntry {
+  entry: T.Document
+  source: T.Document
+  /** 1 por su asiento; -1 por el contraasiento de su anulación. */
+  sign: 1 | -1
+  amount: number
+}
+
+/**
+ * Las percepciones y retenciones de ingresos brutos de un mes (Fase 7b): las de los asientos
+ * registrados en el mes que salen de una factura de proveedor o de un cobro, y las anuladas en
+ * el mes, que restan.
+ */
+export function iibbCredits(db: DB, companyId: string, period: string): IibbCreditEntry[] {
+  const amountOf = (d: T.Document | undefined) =>
+    d?.doc_type === 'SUPPLIER_INVOICE' ? d.si!.perception : d?.doc_type === 'CUSTOMER_RECEIPT' ? d.rc!.retention : 0
+  const rows: IibbCreditEntry[] = []
+  for (const entry of db.documents) {
+    if (entry.company_id !== companyId || !isPosted(entry) || entry.document_date.slice(0, 7) !== period) continue
+    const origin = entry.je!.reverses_id ?? entry.id
+    const source = db.docLinks
+      .filter((l) => l.to_document_id === origin)
+      .map((l) => db.documents.find((d) => d.id === l.from_document_id))
+      .find((d) => amountOf(d) > 0)
+    if (!source) continue
+    const sign = entry.je!.reverses_id ? -1 : 1
+    rows.push({ entry, source, sign, amount: round2(sign * amountOf(source)) })
+  }
+  return rows.sort(
+    (a, b) =>
+      (a.entry.document_date < b.entry.document_date ? -1 : a.entry.document_date > b.entry.document_date ? 1 : 0) ||
+      a.entry.je!.entry_number! - b.entry.je!.entry_number!,
+  )
+}
+
+/** La alícuota de ingresos brutos de la empresa: la que fijó el docente o, si no, la de la demo. */
+export const iibbRate = (company: T.Company) => company.settings.iibb_pct ?? IIBB_DEFAULT_PCT
 
 /** Las declaraciones de un impuesto que no están anuladas, de la más vieja a la más nueva. */
 const taxReturnsOf = (db: DB, companyId: string, tax: T.TaxCode) =>
@@ -7253,15 +7328,17 @@ export interface TaxReturnInput {
 }
 
 /**
- * Impuestos prepara la declaración de un mes terminado con los libros IVA: débito fiscal
- * menos crédito fiscal menos el saldo a favor de la declaración del mes anterior. Después
- * de la primera, los meses van en orden y cada uno con la anterior presentada.
+ * Impuestos prepara la declaración de un mes terminado. IVA: débito fiscal menos crédito
+ * fiscal (los libros IVA). Ingresos brutos (Fase 7b): la alícuota de la empresa sobre las
+ * ventas netas del mes, menos las percepciones y retenciones sufridas. En los dos, menos el
+ * saldo a favor de la declaración del mes anterior. Después de la primera, los meses van en
+ * orden y cada uno con la anterior presentada.
  */
 export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturnInput) {
   const { db } = ctx
   const actor = requirePermission(ctx, companyId, 'tax_return.create')
   const company = getCompany(db, companyId)
-  if (input.tax !== 'IVA') fail('DATO_INVALIDO', 'Elegí el impuesto: por ahora, el IVA.')
+  if (input.tax !== 'IVA' && input.tax !== 'IIBB') fail('DATO_INVALIDO', 'Elegí el impuesto: IVA o ingresos brutos.')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) fail('DATO_INVALIDO', 'El período es un mes: aaaa-mm.')
   const month = periodLabel(input.period)
   if (input.period >= businessDate(company).slice(0, 7))
@@ -7293,8 +7370,15 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
     )
   const notes = input.notes.trim()
   if (notes.length > 500) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 500 caracteres.')
-  const debit = round2(ivaBookEntries(db, companyId, input.period, true).reduce((s, r) => s + r.vat, 0))
-  const credit = round2(ivaBookEntries(db, companyId, input.period, false).reduce((s, r) => s + r.vat, 0))
+  const iva = input.tax === 'IVA'
+  const sales = ivaBookEntries(db, companyId, input.period, true)
+  // Ingresos brutos: si en el mes se anuló más de lo que se vendió, la base es cero (a validar).
+  const base = iva ? null : Math.max(round2(sales.reduce((s, r) => s + r.net + r.exempt, 0)), 0)
+  const rate = iva ? null : iibbRate(company)
+  const debit = iva ? round2(sales.reduce((s, r) => s + r.vat, 0)) : timesCents(base!, rate! / 100)
+  const credit = iva
+    ? round2(ivaBookEntries(db, companyId, input.period, false).reduce((s, r) => s + r.vat, 0))
+    : round2(iibbCredits(db, companyId, input.period).reduce((s, r) => s + r.amount, 0))
   const previous = last ? last.tr!.balance_in_favor : 0
   const result = round2(debit - credit - previous)
   const doc = newDocument(ctx, companyId, 'TAX_RETURN', actor, {
@@ -7307,6 +7391,8 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
       credits: credit,
       previous_balance: previous,
       balance_in_favor: Math.max(-result, 0),
+      base,
+      rate,
       presented_at: null,
       paid_on: null,
       paid_account_id: null,
@@ -7346,17 +7432,34 @@ export function cmdPresentTaxReturn(ctx: Ctx, docId: string) {
     summary: `Presentó ${doc.display_number}: ${name} de ${month}, ${doc.total > 0 ? `${money(doc.total)} a pagar` : 'sin saldo a pagar'}`,
   })
   doc.tr = { ...tr, presented_at: ctx.now }
-  if (tr.tax_amount > 0)
+  if (!(tr.tax_amount > 0)) return
+  // Del crédito (o de las percepciones y retenciones) se usa hasta el impuesto; lo que sobra queda en la cuenta.
+  const used = Math.min(tr.tax_amount, round2(tr.credits + tr.previous_balance))
+  const previous = tr.previous_balance ? ` y saldo a favor anterior ${money(tr.previous_balance)}` : ''
+  if (tr.tax === 'IVA')
     postEvent(
       ctx,
       actor,
       doc,
       'IVA',
-      `IVA de ${month} (${doc.display_number}): débito fiscal ${money(tr.tax_amount)}, crédito fiscal ${money(tr.credits)}${tr.previous_balance ? ` y saldo a favor anterior ${money(tr.previous_balance)}` : ''}.`,
+      `IVA de ${month} (${doc.display_number}): débito fiscal ${money(tr.tax_amount)}, crédito fiscal ${money(tr.credits)}${previous}.`,
       [
         { key: 'IVA_DEBITO', debit: tr.tax_amount, credit: 0 },
-        { key: 'IVA_CREDITO', debit: 0, credit: Math.min(tr.tax_amount, round2(tr.credits + tr.previous_balance)) },
+        { key: 'IVA_CREDITO', debit: 0, credit: used },
         { key: 'IVA_A_PAGAR', debit: 0, credit: doc.total },
+      ],
+    )
+  else
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'IIBB',
+      `Ingresos brutos de ${month} (${doc.display_number}): impuesto ${money(tr.tax_amount)}, percepciones y retenciones ${money(tr.credits)}${previous}.`,
+      [
+        { key: 'IMPUESTO', debit: tr.tax_amount, credit: 0 },
+        { key: 'RETENCIONES', debit: 0, credit: used },
+        { key: 'IIBB_A_PAGAR', debit: 0, credit: doc.total },
       ],
     )
 }
@@ -7382,7 +7485,7 @@ export function cmdPayTaxReturn(ctx: Ctx, docId: string, accountId: string) {
   if (doc.total > balance + EPS)
     fail(
       'SALDO_INSUFICIENTE',
-      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y el ${name} de ${month} es ${money(doc.total)}.`,
+      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y ${doc.tr!.tax === 'IVA' ? 'el IVA' : 'el impuesto sobre los ingresos brutos'} de ${month} es ${money(doc.total)}.`,
       'Antes de pagar hay que controlar que haya fondos: el flujo de fondos proyectado lo anticipa.',
     )
   transition(ctx, doc, 'PAY', {
@@ -7390,10 +7493,18 @@ export function cmdPayTaxReturn(ctx: Ctx, docId: string, accountId: string) {
     summary: `Pagó ${doc.display_number}: ${name} de ${month}, ${money(doc.total)} desde ${accountLabel(account)}`,
   })
   doc.tr = { ...doc.tr!, paid_on: businessDate(company), paid_account_id: account.id }
-  postEvent(ctx, actor, doc, 'PAGO_IVA', `Pago del IVA de ${month} (${doc.display_number}).`, [
-    { key: 'IVA_A_PAGAR', debit: doc.total, credit: 0 },
-    { account_id: account.id, debit: 0, credit: doc.total },
-  ])
+  const iva = doc.tr!.tax === 'IVA'
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    iva ? 'PAGO_IVA' : 'PAGO_IIBB',
+    `Pago ${iva ? 'del IVA' : 'de ingresos brutos'} de ${month} (${doc.display_number}).`,
+    [
+      { key: iva ? 'IVA_A_PAGAR' : 'IIBB_A_PAGAR', debit: doc.total, credit: 0 },
+      { account_id: account.id, debit: 0, credit: doc.total },
+    ],
+  )
 }
 
 /** Anular: el borrador sin más; la presentada sin pagar, si es la última, con el contraasiento del impuesto. */
@@ -7687,11 +7798,15 @@ export function cmdSetModule(ctx: Ctx, companyId: string, module: T.ModuleCode, 
 }
 
 const PAYROLL_RATE_KEYS = Object.keys(PAYROLL_DEFAULT_RATES) as (keyof T.PayrollRates)[]
-const comparable = (settings: T.CompanySettings) => ({ ...settings, payroll: settings.payroll ?? null })
+const comparable = (settings: T.CompanySettings) => ({
+  ...settings,
+  payroll: settings.payroll ?? null,
+  iibb_pct: settings.iibb_pct ?? null,
+})
 
 /**
- * El docente cambia el control interno (separación de funciones, stock negativo)
- * o los porcentajes de la liquidación de sueldos de la empresa.
+ * El docente cambia el control interno (separación de funciones, stock negativo),
+ * los porcentajes de la liquidación de sueldos o la alícuota de ingresos brutos de la empresa.
  */
 export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: Partial<T.CompanySettings>) {
   const actor = requireSupervisor(ctx, companyId)
@@ -7711,6 +7826,12 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
     }
     after.payroll = rates
   }
+  if (settings.iibb_pct !== undefined) {
+    const value = settings.iibb_pct
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100 || round2(value) !== value)
+      fail('DATO_INVALIDO', 'La alícuota de ingresos brutos va de 0 a 100, con hasta 2 decimales.')
+    after.iibb_pct = value
+  }
   company.settings = after
   logAudit(ctx, {
     company_id: companyId,
@@ -7721,9 +7842,16 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
     entity_label: company.legal_name,
     summary: settings.payroll
       ? 'Cambió los porcentajes de la liquidación de sueldos'
-      : 'Cambió la configuración de control interno de la empresa',
+      : settings.iibb_pct !== undefined
+        ? 'Cambió la alícuota de ingresos brutos'
+        : 'Cambió la configuración de control interno de la empresa',
     // Sin porcentajes configurados, la base los compara como null.
-    changes: diff(comparable(before), comparable(company.settings), ['sod_enabled', 'allow_negative_stock', 'payroll']),
+    changes: diff(comparable(before), comparable(company.settings), [
+      'sod_enabled',
+      'allow_negative_stock',
+      'payroll',
+      'iibb_pct',
+    ]),
   })
 }
 

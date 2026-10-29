@@ -89,10 +89,11 @@ export function buildScenario(): DB {
     notes: '',
     lines: lines.map(([po_line_id, quantity, unit_price]) => ({ po_line_id, quantity, unit_price })),
   })
+  // La vencida trae una percepción de ingresos brutos (Fase 7b).
   const overdue = E.cmdCreateSupplierInvoice(
     as('compras1'),
     company,
-    invoice(oc2.id, '7', '2201', [[oc2Line.id, 20, 1300]], addDays(todayAR(), -40)),
+    { ...invoice(oc2.id, '7', '2201', [[oc2Line.id, 20, 1300]], addDays(todayAR(), -40)), perception: 390 },
     true,
   )
   E.cmdCreateSupplierInvoice(as('compras2'), company, invoice(oc2.id, '7', '2202', [[oc2Line.id, 5, 1300]]), false)
@@ -379,10 +380,11 @@ export function buildScenario(): DB {
     notes: '',
     lines: [{ invoice_id: invoiceId, amount }],
   })
-  E.cmdCreateCustomerReceipt(
+  // El cliente retiene ingresos brutos (Fase 7b): el cheque es por el resto.
+  const chequeReceipt = E.cmdCreateCustomerReceipt(
     as('tesoreria'),
     company,
-    collection(demoInvoice.id, 500000, 'CHEQUE', '1.1.01.04', '00004567'),
+    { ...collection(demoInvoice.id, 505000, 'CHEQUE', '1.1.01.04', '00004567'), retention: 5000 },
     true,
   )
   E.cmdCreateFundsTransfer(
@@ -571,12 +573,15 @@ export function buildScenario(): DB {
     notes: 'Faltan las horas extra de la última semana',
   })
 
-  // Impuestos: la factura de la compra de la demo y la de venta de PV-00001 se registraron el
-  // mes pasado (se corre la fecha de sus asientos), así hay libros IVA de un mes terminado y
-  // una declaración con importes.
+  // Impuestos: la factura de la compra de la demo, la de venta de PV-00001, la vencida (con su
+  // percepción) y el cobro con cheque (con su retención) se registraron el mes pasado (se corre
+  // la fecha de sus asientos), así hay libros IVA y percepciones y retenciones de un mes
+  // terminado, y declaraciones con importes.
   for (const invoice of [
     db.documents.find((d) => d.company_id === company && d.display_number === 'FP-00001')!,
     db.documents.find((d) => d.id === demoInvoice.id)!,
+    db.documents.find((d) => d.id === overdue.id)!,
+    db.documents.find((d) => d.id === chequeReceipt.id)!,
   ]) {
     const entry = db.docLinks
       .filter((l) => l.from_document_id === invoice.id)

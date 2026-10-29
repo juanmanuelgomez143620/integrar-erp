@@ -53,6 +53,8 @@ function InvoiceForm({
   const [num, setNum] = useState('')
   const [issued, setIssued] = useState(todayAR())
   const [notes, setNotes] = useState('')
+  // La percepción de ingresos brutos que cobra el proveedor, si la hay (Fase 7b).
+  const [perception, setPerception] = useState('')
   const defaults = (o: InvoiceableOrder | undefined) =>
     Object.fromEntries(
       (o?.lines ?? []).map((l) => [
@@ -80,6 +82,8 @@ function InvoiceForm({
   })
   const subtotal = round2(rows.reduce((s, r) => s + r.subtotal, 0))
   const tax = round2(rows.reduce((s, r) => s + r.tax, 0))
+  const perceived = perception.trim() ? number(perception) : 0
+  const total = round2(subtotal + tax + (perceived || 0))
 
   const save = useCommand(
     (register: boolean) =>
@@ -92,6 +96,7 @@ function InvoiceForm({
           document_date: issued,
           notes,
           lines: rows.map((r) => ({ po_line_id: r.line.id, quantity: r.quantity, unit_price: r.price })),
+          perception: perceived,
         },
         register,
       ),
@@ -233,9 +238,22 @@ function InvoiceForm({
                   <span className="text-muted-foreground">IVA {letter === 'A' ? '' : '(no discriminado)'}</span>
                   <span className="tabular">{money(tax)}</span>
                 </div>
+                <Field
+                  label="Percepción de ingresos brutos"
+                  hint="Si el proveedor la cobra en la factura: se descuenta del impuesto del mes."
+                  error={!(perceived >= 0) ? 'Un importe de cero o más.' : undefined}
+                >
+                  <Input
+                    inputMode="decimal"
+                    value={perception}
+                    onChange={(e) => setPerception(e.target.value)}
+                    placeholder="0,00"
+                    className="tabular text-right"
+                  />
+                </Field>
                 <div className="flex justify-between border-t pt-1 font-semibold text-navy">
                   <span>Total</span>
-                  <span className="tabular">{money(subtotal + tax)}</span>
+                  <span className="tabular">{money(total)}</span>
                 </div>
               </div>
             </Section>
@@ -265,7 +283,7 @@ function InvoiceForm({
           open={confirming}
           onOpenChange={setConfirming}
           title="Registrar factura"
-          description={`Factura ${letter} de ${order.order.supplier_name} por ${money(subtotal + tax)}. Se genera el asiento de compra y la deuda con el proveedor.`}
+          description={`Factura ${letter} de ${order.order.supplier_name} por ${money(total)}. Se genera el asiento de compra y la deuda con el proveedor.`}
           confirmLabel="Registrar"
           busy={save.isPending}
           onConfirm={() => save.mutate([true])}

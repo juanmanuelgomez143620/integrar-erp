@@ -73,7 +73,7 @@ function Book({ data }: { data: IvaBook }) {
         description={
           data.sales
             ? 'El débito fiscal del mes es el total de la columna IVA: coincide con lo que se acreditó en IVA débito fiscal (2.1.04.01).'
-            : 'El crédito fiscal del mes es el total de la columna IVA (sólo las facturas con letra A): coincide con lo que se debitó en IVA crédito fiscal (1.1.04.01). Las de letra C van por el total, sin crédito fiscal.'
+            : 'El crédito fiscal del mes es el total de la columna IVA (sólo las facturas con letra A): coincide con lo que se debitó en IVA crédito fiscal (1.1.04.01). Las de letra C van por el total, sin crédito fiscal. Las percepciones de ingresos brutos que cobró el proveedor no son IVA: van a Retenciones y percepciones sufridas (1.1.04.03).'
         }
         bodyClassName="p-0"
       >
@@ -88,13 +88,14 @@ function Book({ data }: { data: IvaBook }) {
                 <TableHead className={cn(head, 'text-right')}>IVA</TableHead>
                 <TableHead className={cn(head, 'text-right')}>Exento</TableHead>
                 {!data.sales && <TableHead className={cn(head, 'text-right')}>Sin crédito fiscal</TableHead>}
+                {!data.sales && <TableHead className={cn(head, 'text-right')}>Percep. IIBB</TableHead>}
                 <TableHead className={cn(head, 'text-right')}>Total</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={data.sales ? 7 : 8} className="py-6 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={data.sales ? 7 : 9} className="py-6 text-center text-sm text-muted-foreground">
                     No hay facturas registradas en el mes.
                   </TableCell>
                 </TableRow>
@@ -128,6 +129,9 @@ function Book({ data }: { data: IvaBook }) {
                   {!data.sales && (
                     <TableCell className="tabular text-right">{r.no_credit ? money(r.no_credit) : '—'}</TableCell>
                   )}
+                  {!data.sales && (
+                    <TableCell className="tabular text-right">{r.perception ? money(r.perception) : '—'}</TableCell>
+                  )}
                   <TableCell className="tabular text-right font-medium">{money(r.total)}</TableCell>
                 </TableRow>
               ))}
@@ -144,6 +148,11 @@ function Book({ data }: { data: IvaBook }) {
                   {!data.sales && (
                     <TableCell className="tabular text-right font-semibold text-navy">
                       {money(data.no_credit)}
+                    </TableCell>
+                  )}
+                  {!data.sales && (
+                    <TableCell className="tabular text-right font-semibold text-navy">
+                      {money(data.perception)}
                     </TableCell>
                   )}
                   <TableCell className="tabular text-right font-semibold text-navy">{money(data.total)}</TableCell>

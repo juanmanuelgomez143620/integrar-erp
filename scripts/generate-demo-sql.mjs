@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 6d).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 7b.1).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261028120200_demo_template_convenios.sql'
+const target = process.argv[2] ?? '20261029130200_demo_template_ingresos_brutos.sql'
 
 const server = await createServer({
   root,
@@ -39,6 +39,7 @@ const values = (rows, columns) => rows.map((r) => `      (${columns.map((c) => s
 try {
   const { buildSeed } = await server.ssrLoadModule('/src/lib/mock/seed.ts')
   const chart = await server.ssrLoadModule('/src/lib/domain/chart-of-accounts.ts')
+  const { IIBB_DEFAULT_PCT } = await server.ssrLoadModule('/src/lib/domain/catalog.ts')
   const { DEMO_BOMS, DEMO_BOM_OPERATIONS, DEMO_WORK_CENTERS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
   const { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } =
     await server.ssrLoadModule('/src/lib/domain/employees.ts')
@@ -191,6 +192,14 @@ language sql
 immutable
 set search_path = ''
 as $$ select ${sql(chart.TREASURY_RUBRO)}::text $$;
+
+-- La alícuota de ingresos brutos si el docente no la cambió (IIBB_DEFAULT_PCT, a validar).
+create or replace function private.iibb_default_pct()
+returns numeric
+language sql
+immutable
+set search_path = ''
+as $$ select ${IIBB_DEFAULT_PCT}::numeric $$;
 
 -- ------------------------------------------------------------------ Listas de materiales de la demo (a validar)
 create or replace function private.demo_bom_rows()

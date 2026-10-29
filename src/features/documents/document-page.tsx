@@ -745,7 +745,16 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
           {PAYMENT_METHODS[receipt.payment_method]}
           {receipt.reference ? ` N.º ${receipt.reference}` : ''}
         </InfoRow>
-        <InfoRow label="Importe">{money(doc.total)}</InfoRow>
+        <InfoRow label="Importe">
+          {money(doc.total)}
+          {!!doc.rc?.retention && (
+            <span className="text-xs text-muted-foreground">
+              {' '}
+              · retención de ingresos brutos {money(doc.rc.retention)} (certificado del cliente); ingresan{' '}
+              {money(doc.total - doc.rc.retention)}
+            </span>
+          )}
+        </InfoRow>
         <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
         <InfoRow label="Cobro">{receipt.received_on ? date(receipt.received_on) : 'Todavía no se cobró'}</InfoRow>
         <InfoRow label="Preparó">
@@ -1756,6 +1765,14 @@ function Lines({ detail }: { detail: DocumentDetail }) {
           <TableFooter>
             <TotalRow label="Subtotal neto" value={doc.subtotal} span={totals.span} trailing={totals.trailing} />
             <TotalRow label="IVA" value={doc.tax_total} span={totals.span} trailing={totals.trailing} />
+            {!!doc.si?.perception && (
+              <TotalRow
+                label="Percepción de ingresos brutos"
+                value={doc.si.perception}
+                span={totals.span}
+                trailing={totals.trailing}
+              />
+            )}
             <TotalRow label="Total" value={doc.total} span={totals.span} strong trailing={totals.trailing} />
           </TableFooter>
         )}

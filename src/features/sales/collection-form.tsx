@@ -60,6 +60,8 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
   const [accountId, setAccountId] = useState(() => accountFor('TRANSFERENCIA') ?? accounts[0]?.account.id ?? '')
   const [reference, setReference] = useState('')
   const [notes, setNotes] = useState('')
+  // La retención de ingresos brutos que hace el cliente al pagar, si la hay (Fase 7b).
+  const [retention, setRetention] = useState('')
   const [values, setValues] = useState<Record<string, string>>({})
   const [confirming, setConfirming] = useState(false)
 
@@ -79,6 +81,13 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
 
   const rows = (candidates.data ?? []).map((c) => ({ ...c, amount: amount(values[c.invoice.id] ?? '') }))
   const total = round2(rows.reduce((s, r) => s + r.amount, 0))
+  const retained = retention.trim() ? amount(retention) : 0
+  const retentionError = !(retained >= 0)
+    ? 'Un importe de cero o más.'
+    : retained && retained >= total
+      ? 'Tiene que ser menor que lo que se cobra.'
+      : undefined
+  const cash = round2(total - (retained || 0))
   const account = accounts.find((a) => a.account.id === accountId)
   const customer = customers.find((r) => r.customer.id === customerId)
   const over = rows.some((r) => r.amount > r.available + 1e-9)
@@ -87,7 +96,7 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
   // Con el campo vacío alcanza la ayuda; el error aparece cuando lo escrito no es un número de cheque.
   const chequeError =
     invalidCheque && reference.trim() !== '' ? 'El número del cheque lleva sólo números (hasta 8).' : undefined
-  const ready = !!customer && !!account && total > 0 && !over && !invalidCheque
+  const ready = !!customer && !!account && total > 0 && !over && !invalidCheque && !retentionError
 
   const changeMethod = (m: PaymentMethod) => {
     setMethod(m)
@@ -106,6 +115,7 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
           reference: reference.trim(),
           notes,
           lines: rows.filter((r) => r.amount).map((r) => ({ invoice_id: r.invoice.id, amount: r.amount })),
+          retention: retained,
         },
         confirm,
       ),
@@ -253,9 +263,32 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
                   )}
                 </div>
               )}
-              <div className="mt-4 ml-auto flex w-full max-w-xs justify-between border-t pt-2 font-semibold text-navy">
-                <span>Total del recibo</span>
-                <span className="tabular">{money(total)}</span>
+              <div className="mt-4 ml-auto grid w-full max-w-xs gap-2 text-sm">
+                <div className="flex justify-between border-t pt-2 font-semibold text-navy">
+                  <span>Total del recibo</span>
+                  <span className="tabular">{money(total)}</span>
+                </div>
+                <Field
+                  label="Retención de ingresos brutos"
+                  hint="Si el cliente la retiene: entrega el certificado en lugar de ese dinero."
+                  error={retentionError}
+                >
+                  <Input
+                    inputMode="decimal"
+                    value={retention}
+                    onChange={(e) => setRetention(e.target.value)}
+                    placeholder="0,00"
+                    className="tabular text-right"
+                  />
+                </Field>
+                {retained > 0 && !retentionError && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      Ingresa a {account?.account.name ?? 'la caja o el banco'}
+                    </span>
+                    <span className="tabular">{money(cash)}</span>
+                  </div>
+                )}
               </div>
             </Section>
           )}
@@ -264,8 +297,8 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
           <Section title="Después">
             <ul className="flex list-disc flex-col gap-1.5 pl-4 text-sm text-muted-foreground">
               <li>
-                Se genera el asiento: {account?.account.name ?? 'la caja o el banco'} al debe y Deudores por ventas al
-                haber.
+                Se genera el asiento: {account?.account.name ?? 'la caja o el banco'} (y, si hay retención, Retenciones
+                y percepciones sufridas) al debe y Deudores por ventas al haber.
               </li>
               <li>
                 La deuda baja en la cuenta corriente del cliente y cada factura pasa a cobrada o cobrada en parte.
@@ -289,7 +322,7 @@ function CollectionForm({ receivables, treasury }: { receivables: ReceivableRow[
           open={confirming}
           onOpenChange={setConfirming}
           title="Confirmar cobro"
-          description={`${money(total)} de ${customer.customer.legal_name} ${method === 'EFECTIVO' ? 'en efectivo' : method === 'CHEQUE' ? 'con cheque' : 'por transferencia'} en ${account?.account.name ?? ''}. Se genera el asiento y baja la deuda del cliente.`}
+          description={`${money(total)} de ${customer.customer.legal_name} ${method === 'EFECTIVO' ? 'en efectivo' : method === 'CHEQUE' ? 'con cheque' : 'por transferencia'} en ${account?.account.name ?? ''}${retained > 0 ? `, con una retención de ingresos brutos de ${money(retained)} (ingresan ${money(cash)})` : ''}. Se genera el asiento y baja la deuda del cliente.`}
           confirmLabel="Confirmar cobro"
           busy={save.isPending}
           onConfirm={() => save.mutate([true])}

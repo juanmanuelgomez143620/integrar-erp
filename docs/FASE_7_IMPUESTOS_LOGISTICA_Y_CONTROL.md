@@ -11,7 +11,7 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
 | 7a | Libros IVA compras y ventas por mes; declaración mensual de IVA (débito menos crédito y saldo a favor anterior) con su asiento al presentarla; pago por Tesorería | Impuestos sabe cuánto IVA se paga y de dónde sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas (7b.1); calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado (7b.2) | Nada vence sin que se vea | En curso |
+| 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas (7b.1); calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado (7b.2) | Nada vence sin que se vea | En curso: 7b.1 hecha (29/10, simulador, pantallas y Supabase con paridad); falta la 7b.2 |
 | 7c | Logística: transportistas y vehículos; hojas de ruta con los remitos despachados; entrega con conformidad o no entrega con motivo | El pedido termina cuando el cliente lo recibe | Pendiente |
 | 7d | Tablero de control: indicadores por área, comparación con el mes anterior y alertas | Gerencia ve la empresa entera en una pantalla | Pendiente |
 
@@ -48,6 +48,7 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
   - La percepción se carga en la factura del proveedor (cualquier letra) y se suma a lo que se le debe; el libro IVA compras la muestra en su columna para que los totales cierren. La retención se carga en el recibo de cobro: tiene que quedar algo de dinero (es menor que el total) y a la caja o el banco entra el total menos la retención; para anular el recibo alcanza con que esté ese dinero.
   - Las percepciones y retenciones de un mes son las de los asientos del mes (las anuladas restan en el mes de su contraasiento); la declaración las lista con su comprobante. El saldo a favor no se mueve: queda en Retenciones y percepciones sufridas, como el del IVA queda en el crédito fiscal.
   - Estados, orden de los meses, anulación (sólo la última), SoD-10 y pago, iguales que en el IVA.
+- Notas de la 7b.1: la alícuota se cambia en Docente → Módulos y control interno (sección Impuestos); la nueva declaración elige el impuesto y, en ingresos brutos, muestra las ventas netas, el impuesto, cada percepción y retención con su comprobante y el saldo; el libro IVA compras suma la columna "Percep. IIBB". Base de datos: migraciones 67 a 70 (`20261029130000_ingresos_brutos.sql`, catálogos, plantilla con la alícuota por defecto y las reglas de las empresas existentes); columnas `supplier_invoices.perception`, `customer_receipts.retention` y `tax_returns.base` y `rate`.
 
 ## 4. Logística (7c)
 

@@ -89,7 +89,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 18
+export const DB_VERSION = 19
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -403,6 +403,17 @@ const UPGRADES: Record<number, (db: DB) => void> = {
         union_dues: line.union_dues ?? 0,
         union_contribution: line.union_contribution ?? 0,
       })
+    }
+  },
+  // v18 → v19: ingresos brutos (Fase 7b): las reglas de sus asientos, y las facturas de
+  // proveedores sin percepción, los cobros sin retención y las declaraciones sin base ni alícuota.
+  18: (db) => {
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+    for (const d of db.documents) {
+      if (d.si) d.si = { ...d.si, perception: d.si.perception ?? 0 }
+      if (d.rc) d.rc = { ...d.rc, retention: d.rc.retention ?? 0 }
+      if (d.tr) d.tr = { ...d.tr, base: d.tr.base ?? null, rate: d.tr.rate ?? null }
     }
   },
 }

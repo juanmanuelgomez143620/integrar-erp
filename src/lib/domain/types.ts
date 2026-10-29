@@ -139,6 +139,8 @@ export interface CompanySettings {
   allow_negative_stock: boolean
   /** Los porcentajes de la liquidación de sueldos (Fase 6b); sin ellos, los de PAYROLL_DEFAULT_RATES. */
   payroll?: Partial<PayrollRates>
+  /** La alícuota de ingresos brutos (Fase 7b); sin ella, IIBB_DEFAULT_PCT. */
+  iibb_pct?: number
 }
 
 /** Porcentajes de la liquidación de sueldos (a validar: sin pretensión de exactitud legal). */
@@ -345,6 +347,9 @@ export interface TaxReturnHeader {
   previous_balance: number
   /** Lo que queda a favor para el mes siguiente (0 si hay saldo a pagar). */
   balance_in_favor: number
+  /** En ingresos brutos (Fase 7b): las ventas netas del mes y la alícuota de la empresa (null en el IVA). */
+  base: number | null
+  rate: number | null
   presented_at: string | null
   /** El pago (si hubo saldo a pagar): el día y la caja o el banco. */
   paid_on: string | null
@@ -543,6 +548,8 @@ export interface SupplierInvoiceHeader {
   invoice_number: string
   due_date: string
   registered_at: string | null
+  /** Percepción de ingresos brutos que cobró el proveedor (Fase 7b): se suma a lo que se le debe. */
+  perception: number
 }
 
 /** Orden de pago (tabla payment_orders, 1 a 1 con documents): qué facturas de un proveedor se pagan y desde dónde. */
@@ -686,6 +693,8 @@ export interface CustomerReceiptHeader {
   reference: string
   /** Fecha del cobro (al confirmarse: la del asiento). */
   received_on: string | null
+  /** Retención de ingresos brutos que hizo el cliente (Fase 7b): entrega el certificado en lugar de ese dinero. */
+  retention: number
 }
 
 /** Un ítem del presupuesto: el precio de lista que se propuso y el que se cotizó. */

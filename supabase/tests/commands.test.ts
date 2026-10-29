@@ -918,9 +918,10 @@ describe('paridad de comandos', () => {
       number: string,
       quantity: number,
       price: number,
-      { pos = '4', date = today } = {},
+      { pos = '4', date = today, perception = undefined as number | undefined } = {},
     ) => {
       const input: E.SupplierInvoiceInput = {
+        ...(perception === undefined ? {} : { perception }),
         purchase_order_id: orderId,
         point_of_sale: pos,
         invoice_number: number,
@@ -974,6 +975,8 @@ describe('paridad de comandos', () => {
       ['número de nueve cifras', 'compras1', invoice(oc, ocLine, '123456789', 1, 1600)],
       ['fecha futura', 'compras1', invoice(oc, ocLine, '1001', 1, 1600, { date: addDays(today, 1) })],
       ['Depósito no registra facturas', 'deposito', invoice(oc, ocLine, '1001', 1, 1600)],
+      ['percepción negativa', 'compras1', invoice(oc, ocLine, '1001', 1, 1600, { perception: -1 })],
+      ['percepción con tres decimales', 'compras1', invoice(oc, ocLine, '1001', 1, 1600, { perception: 1.005 })],
     ] as const)
       expect(await create(label, username, i, true), label).toBeNull()
 
@@ -987,9 +990,9 @@ describe('paridad de comandos', () => {
 
     // Otra factura completa lo recibido; después no queda nada por facturar.
     const second = await createdInvoice(
-      'factura con otro precio',
+      'factura con otro precio y percepción de ingresos brutos',
       'compras1',
-      invoice(oc, ocLine, '1002', received - 3, 1650),
+      invoice(oc, ocLine, '1002', received - 3, 1650, { perception: 1250 }),
       true,
     )
     expect(await create('facturar lo ya facturado', 'compras1', invoice(oc, ocLine, '1003', 1, 1600), true)).toBeNull()
@@ -2203,14 +2206,17 @@ describe('paridad de comandos', () => {
       ['sin facturas', 'tesoreria', receipt(null, 0)],
       ['la misma factura dos veces', 'tesoreria', receipt(a.id, 1000, {}, [{ invoice_id: a.id, amount: 1000 }])],
       ['una factura anulada', 'tesoreria', receipt(cancelled.id, 1000)],
+      ['una retención negativa', 'tesoreria', receipt(a.id, 1000, { retention: -1 })],
+      ['una retención con tres decimales', 'tesoreria', receipt(a.id, 1000, { retention: 1.005 })],
+      ['una retención igual al cobro', 'tesoreria', receipt(a.id, 1000, { retention: 1000 })],
     ] as const)
       expect(await create(label, username, r, true), label).toBeNull()
 
     // Un cobro parcial por transferencia, y el resto en borrador: la factura no se anula mientras lo reserva.
     const partial = await createdReceipt(
-      'cobro parcial',
+      'cobro parcial, con una retención de ingresos brutos',
       'tesoreria',
-      receipt(a.id, 100000, { reference: 'TRF 1201' }),
+      receipt(a.id, 100000, { reference: 'TRF 1201', retention: 1500 }),
       true,
     )
     expect(status(partial)).toBe('CONFIRMADO')
@@ -3724,7 +3730,7 @@ describe('paridad de comandos', () => {
     expect(await create('Tesorería no la prepara', 'tesoreria', input())).toBeNull()
     for (const [label, over] of [
       ['un mes que no terminó', { period: month(0) }],
-      ['otro impuesto', { tax: 'IIBB' }],
+      ['un impuesto que no existe', { tax: 'GANANCIAS' as never }],
       ['un mes mal escrito', { period: '2026-1' }],
       ['antes del inicio de actividades', { period: '2015-02' }],
     ] as [string, Partial<E.TaxReturnInput>][])
@@ -3803,6 +3809,93 @@ describe('paridad de comandos', () => {
     expect(await pay('pagarla otra vez', 'tesoreria', account('1.1.01.03'))).toBeNull()
     expect(await cancel('anular la pagada', 'contabilidad', second, 'Tarde')).toBeNull()
     await reads('pagada')
+  })
+
+  it('ingresos brutos: la alícuota del docente, la declaración con percepciones y retenciones, su asiento y el pago', async () => {
+    const companyPg = pg(company)
+    const month = (offset: number) => {
+      const d = new Date(`${todayAR().slice(0, 7)}-15T12:00:00Z`)
+      d.setUTCMonth(d.getUTCMonth() + offset)
+      return d.toISOString().slice(0, 7)
+    }
+    const iibb = () =>
+      mock.documents.filter((d) => d.company_id === company && d.doc_type === 'TAX_RETURN' && d.tr!.tax === 'IIBB')
+    const reads = async (label: string) => {
+      for (const d of iibb())
+        await sameRead(
+          `${d.display_number} ${label}`,
+          'contabilidad',
+          (b) => b.api.document(companyPg, 'TAX_RETURN', d.display_number),
+          (u) => Q.documentDetail(mock, u, company, 'TAX_RETURN', d.display_number),
+        )
+      await sameRead(
+        `declaraciones ${label}`,
+        'tesoreria',
+        (b) => b.api.documents(companyPg, 'TAX_RETURN'),
+        (u) => Q.listDocuments(mock, u, company, 'TAX_RETURN'),
+      )
+      await sameRead(
+        `libro IVA compras del mes pasado ${label}`,
+        'contabilidad',
+        (b) => b.api.ivaBook(companyPg, month(-1), false),
+        (u) => Q.ivaBook(mock, u, company, month(-1), false),
+      )
+    }
+    await reads('al empezar')
+
+    // La alícuota la cambia el docente.
+    const settings = (label: string, username: string, data: Partial<CompanySettings>) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdUpdateCompanySettings(c, company, data),
+        (b) => b.commands.updateCompanySettings(companyPg, data),
+      )
+    expect(await settings('Contabilidad no cambia la alícuota', 'contabilidad', { iibb_pct: 4 })).toBeNull()
+    expect(await settings('una alícuota con tres decimales', 'docente', { iibb_pct: 3.555 })).toBeNull()
+    expect(await settings('una alícuota de más de 100', 'docente', { iibb_pct: 120 })).toBeNull()
+    expect(await settings('una alícuota que no es un número', 'docente', { iibb_pct: '3' as never })).toBeNull()
+    expect(await settings('la alícuota del 3,5 %', 'docente', { iibb_pct: 3.5 })).not.toBeNull()
+
+    // La del mes pasado: la base del libro IVA ventas, la percepción de la factura vencida y la
+    // retención del cobro con cheque.
+    const data: E.TaxReturnInput = { tax: 'IIBB', period: month(-1), notes: '' }
+    const id = await created(
+      'la declaración de ingresos brutos del mes pasado',
+      'contabilidad',
+      (c) => E.cmdCreateTaxReturn(c, company, data),
+      (b) => b.commands.createTaxReturn(companyPg, data),
+    )
+    const doc = () => mock.documents.find((d) => d.id === id)!
+    expect(doc().tr).toMatchObject({ rate: 3.5, credits: 5390 })
+    expect(
+      await step(
+        'otra del mismo mes',
+        'contabilidad',
+        (c) => E.cmdCreateTaxReturn(c, company, data),
+        (b) => b.commands.createTaxReturn(companyPg, data),
+      ),
+    ).toBeNull()
+    await reads('preparada')
+    await ok(
+      'presentarla',
+      'contabilidad',
+      (c) => E.cmdPresentTaxReturn(c, id),
+      (b) => b.commands.presentTaxReturn(pg(id)),
+    )
+    await reads('presentada')
+    const bank = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
+    if (doc().status === 'PRESENTADA') {
+      expect(
+        await step(
+          'pagarla',
+          'tesoreria',
+          (c) => E.cmdPayTaxReturn(c, id, bank),
+          (b) => b.commands.payTaxReturn(pg(id), pg(bank)),
+        ),
+      ).not.toBeNull()
+      await reads('pagada')
+    }
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
