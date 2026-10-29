@@ -7,15 +7,18 @@
 import type * as T from '../domain/types'
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } from '../domain/employees'
+import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
 import {
   insertBaseChart,
   insertBasePostingRules,
   insertBomOperations,
   insertBoms,
+  insertCarriers,
   insertDriver,
   insertEmployees,
   insertJobCategories,
   insertLaborAgreements,
+  insertVehicles,
   insertWorkCenters,
   round2,
   startAccounting,
@@ -72,6 +75,8 @@ export interface DB {
   bomOperations: T.BomOperation[]
   prdOperations: T.ProductionOrderOperation[]
   laborAgreements: T.LaborAgreement[]
+  carriers: T.Carrier[]
+  vehicles: T.Vehicle[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -89,7 +94,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 19
+export const DB_VERSION = 20
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -146,6 +151,8 @@ const COLLECTIONS = [
   'bomOperations',
   'prdOperations',
   'laborAgreements',
+  'carriers',
+  'vehicles',
   'jobCategories',
   'employees',
   'pyLines',
@@ -193,6 +200,8 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   employees: 14,
   pyLines: 15,
   laborAgreements: 18,
+  carriers: 20,
+  vehicles: 20,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -418,6 +427,16 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       if (d.si) d.si = { ...d.si, perception: d.si.perception ?? 0 }
       if (d.rc) d.rc = { ...d.rc, retention: d.rc.retention ?? 0 }
       if (d.tr) d.tr = { ...d.tr, base: d.tr.base ?? null, rate: d.tr.rate ?? null }
+    }
+  },
+  // v19 → v20: logística (Fase 7c): los transportistas y el camión de la demo en cada empresa.
+  19: (db) => {
+    db.carriers ??= []
+    db.vehicles ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      insertCarriers(ctx, company.id, DEMO_CARRIERS)
+      insertVehicles(ctx, company.id, DEMO_VEHICLES)
     }
   },
 }

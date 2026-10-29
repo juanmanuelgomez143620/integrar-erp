@@ -6,6 +6,7 @@
 
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS } from '../domain/employees'
+import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
 import type * as T from '../domain/types'
 import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
@@ -28,9 +29,11 @@ import {
   cmdSubmitPurchaseOrder,
   insertBomOperations,
   insertBoms,
+  insertCarriers,
   insertEmployees,
   insertJobCategories,
   insertLaborAgreements,
+  insertVehicles,
   insertWorkCenters,
   scanStockAlerts,
   startAccounting,
@@ -109,6 +112,8 @@ export function buildSeed(): DB {
     bomOperations: [],
     prdOperations: [],
     laborAgreements: [],
+    carriers: [],
+    vehicles: [],
     jobCategories: [],
     employees: [],
     pyLines: [],
@@ -447,6 +452,10 @@ export function buildSeed(): DB {
   insertLaborAgreements(ctx(null, 289), companyId, DEMO_LABOR_AGREEMENTS)
   insertJobCategories(ctx(null, 289), companyId, DEMO_JOB_CATEGORIES)
   insertEmployees(ctx(null, 289), companyId, DEMO_EMPLOYEES)
+
+  // ------------------------------------------------------------ Transporte: los fletes y el camión propio (a validar)
+  insertCarriers(ctx(null, 289), companyId, DEMO_CARRIERS)
+  insertVehicles(ctx(null, 289), companyId, DEMO_VEHICLES)
 
   // ------------------------------------------------------------ Un circuito completo previo (historial de ejemplo)
   const sc = cmdCreateRequisition(

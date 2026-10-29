@@ -283,6 +283,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     productionCosts: (companyId, from, to) =>
       rpc('production_costs', { ...company(companyId), p_from: from, p_to: to }),
     laborAgreements: (companyId) => rpc('labor_agreements_list', company(companyId)),
+    carriers: (companyId) => rpc('carriers_list', company(companyId)),
+    vehicles: (companyId) => rpc('vehicles_list', company(companyId)),
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
     employees: (companyId) => rpc('employees_list', company(companyId)),
     laborVariance: (companyId, period) => rpc('labor_variance', { ...company(companyId), p_period: period }),
@@ -427,6 +429,12 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     saveLaborAgreement: (companyId, input) => rpc('labor_agreement_save', { ...company(companyId), p_input: input }),
     setLaborAgreementActive: (companyId, agreementId, active) =>
       rpc('labor_agreement_set_active', { ...company(companyId), p_agreement_id: agreementId, p_active: active }),
+    saveCarrier: (companyId, input) => rpc('carrier_save', { ...company(companyId), p_input: input }),
+    setCarrierActive: (companyId, carrierId, active) =>
+      rpc('carrier_set_active', { ...company(companyId), p_carrier_id: carrierId, p_active: active }),
+    saveVehicle: (companyId, input) => rpc('vehicle_save', { ...company(companyId), p_input: input }),
+    setVehicleActive: (companyId, vehicleId, active) =>
+      rpc('vehicle_set_active', { ...company(companyId), p_vehicle_id: vehicleId, p_active: active }),
     saveJobCategory: (companyId, input) => rpc('job_category_save', { ...company(companyId), p_input: input }),
     setJobCategoryActive: (companyId, categoryId, active) =>
       rpc('job_category_set_active', { ...company(companyId), p_job_category_id: categoryId, p_active: active }),

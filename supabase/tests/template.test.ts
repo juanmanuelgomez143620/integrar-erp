@@ -109,6 +109,14 @@ const mockStaff = ofTemplate(seed.employees)
   )
   .sort()
 
+/** El transporte de la demo: "código razón social CUIT teléfono activo" y "código dominio descripción activo". */
+const mockCarriers = ofTemplate(seed.carriers)
+  .map((c) => `${c.code} ${c.legal_name} ${c.tax_id} ${c.phone} ${c.is_active}`)
+  .sort()
+const mockVehicles = ofTemplate(seed.vehicles)
+  .map((v) => `${v.code} ${v.plate} ${v.description} ${v.is_active}`)
+  .sort()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -242,6 +250,28 @@ const staff = async (company: string) =>
          join public.sectors s on s.id = e.sector_id
          left join public.work_centers w on w.id = e.work_center_id
         where e.company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const carriers = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select code || ' ' || legal_name || ' ' || tax_id || ' ' || phone || ' ' || is_active::text as line
+         from public.carriers where company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const vehicles = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select code || ' ' || plate || ' ' || description || ' ' || is_active::text as line
+         from public.vehicles where company_id = $1`,
       [company],
     )
   )
@@ -442,6 +472,13 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await staff(template)).toEqual(mockStaff)
   })
 
+  it('tiene los mismos transportistas y vehículos propios que la demo', async () => {
+    expect(mockCarriers).toHaveLength(2)
+    expect(await carriers(template)).toEqual(mockCarriers)
+    expect(mockVehicles).toHaveLength(1)
+    expect(await vehicles(template)).toEqual(mockVehicles)
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -510,6 +547,8 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await agreements(created.id)).toEqual(mockAgreements)
     expect(await categories(created.id)).toEqual(mockCategories)
     expect(await staff(created.id)).toEqual(mockStaff)
+    expect(await carriers(created.id)).toEqual(mockCarriers)
+    expect(await vehicles(created.id)).toEqual(mockVehicles)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

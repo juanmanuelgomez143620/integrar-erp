@@ -13,8 +13,9 @@ import { createTestDb, type TestDb } from './support/db'
 import { loadMockDb, normalize, type LoadedMock } from './support/mock-loader'
 import { buildScenario } from './support/scenario'
 
-// Cientos de llamadas por prueba: con los demás archivos de base en paralelo, 5 s no alcanzan.
-vi.setConfig({ testTimeout: 120_000 })
+// Cientos de llamadas por prueba: con los demás archivos de base en paralelo, 5 s no alcanzan
+// (y el detalle de todos los documentos de la demo ya pasa los dos minutos en una PC cargada).
+vi.setConfig({ testTimeout: 300_000 })
 
 let db: TestDb
 let mock: DB

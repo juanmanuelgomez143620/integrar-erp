@@ -4700,6 +4700,18 @@ export function listLaborAgreements(db: DB, userId: string, companyId: string): 
     })
 }
 
+/** Los transportistas de la empresa, por código (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §4). */
+export function listCarriers(db: DB, userId: string, companyId: string): T.Carrier[] {
+  assertPerm(db, userId, companyId, 'carrier.read')
+  return db.carriers.filter((c) => c.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
+}
+
+/** Los vehículos propios de la empresa, por código. */
+export function listVehicles(db: DB, userId: string, companyId: string): T.Vehicle[] {
+  assertPerm(db, userId, companyId, 'carrier.read')
+  return db.vehicles.filter((v) => v.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
+}
+
 export interface JobCategoryRow {
   id: string
   code: string

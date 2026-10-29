@@ -42,7 +42,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 | `PRODUCCION` | Producción | 7 | Producción | Detecta necesidades (SC en MVP); órdenes de producción (Fase 5) |
 | `COSTOS` *(Fase 5)* | Costos | 7 | Costos | Costeo de órdenes, previsto vs. real |
 | `DEPOSITO` | Depósito y Stock | 8 | Depósito | Recepciones, stock, ajustes, alertas de mínimo, SC de reposición |
-| `LOGISTICA` | Logística | 8 | Logística | Consulta en MVP; despachos y entregas (Fase 7) |
+| `LOGISTICA` | Logística | 8 | Logística | Consulta recepciones y stock; transportistas y vehículos propios (Fase 7c.1); hojas de ruta y entregas (7c.2) |
 | `DOCENTE` | Docente (supervisor) | — | — | Todo, incluido aprobar como supervisor |
 
 `CONTROL_GESTION` podrá agregarse en la Fase 7 como rol de indicadores. Los roles son datos de catálogo: agregar uno no requiere cambiar código.
@@ -66,6 +66,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
 | hr (Fase 6) | `employee.read/create/update` (convenios, categorías y legajos del personal); desde la 6b, `payroll.read/create/cancel` (liquidaciones de sueldos); desde la 6c, `payroll.pay` (pagar los sueldos y las cargas sociales) y, desde la 6d, `payroll.approve` (Gerencia autoriza o devuelve la liquidación) |
 | tax (Fase 7) | `tax_return.read/create/cancel/pay` (libros IVA y declaraciones de impuestos) |
+| logistics (Fase 7c) | `carrier.read/create/update` (transportistas y vehículos propios: los mantiene Logística y los consultan Gerencia, Depósito y Auditoría) |
 | audit | `audit.read`, `audit.export` |
 
 Implícitos para cualquier miembro: ver y tomar sus tareas, sus notificaciones, su perfil, y el historial de los documentos que puede leer.
@@ -140,7 +141,7 @@ Leyenda: **L** leer · **C** crear · **M** modificar · **A** aprobar/rechazar 
 ²¹ Impuestos prepara la declaración de un mes terminado (la de IVA con los libros IVA; desde la 7b, la de ingresos brutos con las ventas netas del mes, menos las percepciones de los proveedores y las retenciones de los clientes, con la alícuota que fija el docente), la presenta (se registra el asiento del impuesto) y la anula con motivo mientras no esté pagada y sea la última. Tesorería paga el saldo al fisco (simulado) desde una caja o un banco con saldo. SoD-10: quien la preparó o la presentó no la paga.
 ²² Gerencia autoriza la liquidación que envió RRHH (se registra el asiento de sueldos y Tesorería recibe la tarea de pagar) o la devuelve a borrador con el motivo (Fase 6d). SoD-11: quien la preparó no la autoriza ni la devuelve.
 
-En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (desde la Fase 6a, RRHH lleva los legajos; desde la 6b, liquida los sueldos, y desde la 6c Tesorería los paga; desde la 7a, Impuestos liquida el IVA) (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
+En el MVP, las islas de Tesorería, RRHH, Impuestos y Logística tienen **sólo consulta** (desde la Fase 6a, RRHH lleva los legajos; desde la 6b, liquida los sueldos, y desde la 6c Tesorería los paga; desde la 7a, Impuestos liquida el IVA, y desde la 7c Logística lleva el transporte) (ver sugerencias de organización del piloto en [MVP.md §9](../MVP.md#9-organización-del-aula-en-el-piloto)); desde la Fase 2, Contabilidad registra asientos y lleva los libros, y desde la Fase 3b Tesorería paga a los proveedores.
 
 ## 5. Reglas de aprobación del MVP
 

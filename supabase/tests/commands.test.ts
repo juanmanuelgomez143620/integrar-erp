@@ -3911,6 +3911,131 @@ describe('paridad de comandos', () => {
     }
   })
 
+  it('transporte: transportistas y vehículos (alta, cambios, validaciones y desactivación)', async () => {
+    const companyPg = pg(company)
+    /** El id de la base si el registro existe; si no (vacío o inventado), tal cual. */
+    const known = (id: string) => ([...mock.carriers, ...mock.vehicles].some((x) => x.id === id) ? pg(id) : id)
+    const reads = async (label: string) => {
+      for (const username of ['deposito', 'gerencia', 'auditor', 'ventas']) {
+        await sameRead(
+          `transportistas ${label} (${username})`,
+          username,
+          (b) => b.api.carriers(companyPg),
+          (u) => Q.listCarriers(mock, u, company),
+        )
+        await sameRead(
+          `vehículos ${label} (${username})`,
+          username,
+          (b) => b.api.vehicles(companyPg),
+          (u) => Q.listVehicles(mock, u, company),
+        )
+      }
+    }
+    await reads('al empezar')
+
+    // Transportistas.
+    const carrierInput = (over: Partial<E.CarrierInput> = {}): E.CarrierInput => ({
+      id: '',
+      code: ' tr-003 ',
+      legal_name: 'Fletes del Alto Paraná SRL',
+      tax_id: '30-00000112-7',
+      phone: '3757 400000',
+      ...over,
+    })
+    const saveCarrier = (label: string, username: string, input: E.CarrierInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveCarrier(c, company, input),
+        (b) => b.commands.saveCarrier(companyPg, { ...input, id: known(input.id) }),
+      )
+    for (const username of ['ventas', 'gerencia'])
+      expect(await saveCarrier(`${username} no da de alta transportistas`, username, carrierInput())).toBeNull()
+    for (const [label, over] of [
+      ['un código repetido', { code: 'TR-001' }],
+      ['un código con espacios', { code: 'TR 4' }],
+      ['una razón social corta', { legal_name: 'F' }],
+      ['un CUIT sin guiones', { tax_id: '30000001127' }],
+      ['un teléfono largo', { phone: '1'.repeat(41) }],
+      ['un transportista que no existe', { id: crypto.randomUUID() }],
+    ] as [string, Partial<E.CarrierInput>][])
+      expect(await saveCarrier(label, 'deposito', carrierInput(over)), label).toBeNull()
+    const added = await ok(
+      'el alta del transportista',
+      'deposito',
+      (c) => E.cmdSaveCarrier(c, company, carrierInput()),
+      (b) => b.commands.saveCarrier(companyPg, carrierInput()),
+    )
+    loaded.link(added.mock.id, (added.pg as { id: string }).id)
+    const fletes = added.mock.id
+    expect(await saveCarrier('sin cambios', 'deposito', carrierInput({ id: fletes }))).not.toBeNull()
+    expect(
+      await saveCarrier('otro teléfono', 'deposito', carrierInput({ id: fletes, phone: '3757 411111' })),
+    ).not.toBeNull()
+    expect(await saveCarrier('el código de otro', 'deposito', carrierInput({ id: fletes, code: 'TR-002' }))).toBeNull()
+    const setCarrierActive = (label: string, username: string, id: string, active: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSetCarrierActive(c, company, id, active),
+        (b) => b.commands.setCarrierActive(companyPg, pg(id), active),
+      )
+    expect(await setCarrierActive('Gerencia no lo desactiva', 'gerencia', fletes, false)).toBeNull()
+    expect(await setCarrierActive('desactivarlo', 'deposito', fletes, false)).not.toBeNull()
+    expect(await setCarrierActive('desactivarlo otra vez', 'deposito', fletes, false)).not.toBeNull()
+    await reads('con el transportista')
+
+    // Vehículos propios.
+    const vehicleInput = (over: Partial<E.VehicleInput> = {}): E.VehicleInput => ({
+      id: '',
+      code: 'util-01',
+      plate: ' ag  300   ms ',
+      description: 'Utilitario para entregas chicas',
+      ...over,
+    })
+    const saveVehicle = (label: string, username: string, input: E.VehicleInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveVehicle(c, company, input),
+        (b) => b.commands.saveVehicle(companyPg, { ...input, id: known(input.id) }),
+      )
+    expect(await saveVehicle('Ventas no da de alta vehículos', 'ventas', vehicleInput())).toBeNull()
+    for (const [label, over] of [
+      ['un código repetido', { code: 'CAM-01' }],
+      ['un dominio repetido', { plate: 'af 512 ms' }],
+      ['un dominio con guiones', { plate: 'AF-1' }],
+      ['un dominio largo', { plate: 'ABC 1234 DEF' }],
+      ['una descripción corta', { description: 'U' }],
+      ['un vehículo que no existe', { id: crypto.randomUUID() }],
+    ] as [string, Partial<E.VehicleInput>][])
+      expect(await saveVehicle(label, 'deposito', vehicleInput(over)), label).toBeNull()
+    const bought = await ok(
+      'el alta del vehículo',
+      'deposito',
+      (c) => E.cmdSaveVehicle(c, company, vehicleInput()),
+      (b) => b.commands.saveVehicle(companyPg, vehicleInput()),
+    )
+    loaded.link(bought.mock.id, (bought.pg as { id: string }).id)
+    const utilitario = bought.mock.id
+    expect(
+      await saveVehicle('otra descripción', 'deposito', vehicleInput({ id: utilitario, description: 'En el taller' })),
+    ).not.toBeNull()
+    expect(
+      await saveVehicle('el dominio del camión', 'deposito', vehicleInput({ id: utilitario, plate: 'AF 512 MS' })),
+    ).toBeNull()
+    const setVehicleActive = (label: string, username: string, id: string, active: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSetVehicleActive(c, company, id, active),
+        (b) => b.commands.setVehicleActive(companyPg, pg(id), active),
+      )
+    expect(await setVehicleActive('desactivarlo', 'deposito', utilitario, false)).not.toBeNull()
+    expect(await setVehicleActive('reactivarlo', 'deposito', utilitario, true)).not.toBeNull()
+    await reads('con el vehículo')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

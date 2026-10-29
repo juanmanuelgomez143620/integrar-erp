@@ -49,6 +49,7 @@ import {
   TrendingUp,
   Truck,
   Users,
+  Van,
   Wallet,
   Workflow,
   Wrench,
@@ -154,6 +155,10 @@ export const NAV: NavGroup[] = [
         permission: 'stock_adjustment.read',
       },
     ],
+  },
+  {
+    label: 'Logística',
+    items: [{ label: 'Transporte', path: 'logistica/transporte', icon: Van, permission: 'carrier.read' }],
   },
   {
     label: 'Producción',

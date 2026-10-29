@@ -26,6 +26,7 @@ export type ModuleCode =
   | 'production'
   | 'hr'
   | 'tax'
+  | 'logistics'
   | 'payables'
   | 'accounting'
   | 'management'
@@ -298,6 +299,29 @@ export interface BomLine {
  * Centro de trabajo (tabla work_centers): un sector del taller con su tarifa de
  * mano de obra directa y su tasa de carga fabril por hora, predeterminadas.
  */
+/** Transportista: un flete contratado (Fase 7c). */
+export interface Carrier extends Audited {
+  id: string
+  company_id: string
+  code: string
+  legal_name: string
+  /** CUIT simulado. */
+  tax_id: string
+  phone: string
+  is_active: boolean
+}
+
+/** Vehículo propio de la empresa (Fase 7c): lo maneja un empleado del legajo. */
+export interface Vehicle extends Audited {
+  id: string
+  company_id: string
+  code: string
+  /** Dominio ficticio. */
+  plate: string
+  description: string
+  is_active: boolean
+}
+
 export interface WorkCenter extends Audited {
   id: string
   company_id: string

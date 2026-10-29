@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 7b.1).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 7c.1).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261029130200_demo_template_ingresos_brutos.sql'
+const target = process.argv[2] ?? '20261029150200_demo_template_transporte.sql'
 
 const server = await createServer({
   root,
@@ -43,6 +43,7 @@ try {
   const { DEMO_BOMS, DEMO_BOM_OPERATIONS, DEMO_WORK_CENTERS } = await server.ssrLoadModule('/src/lib/domain/boms.ts')
   const { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } =
     await server.ssrLoadModule('/src/lib/domain/employees.ts')
+  const { DEMO_CARRIERS, DEMO_VEHICLES } = await server.ssrLoadModule('/src/lib/domain/logistics.ts')
   const driver = DEMO_EMPLOYEES.find((e) => e.category === 'CHOFER')
   if (!driver) throw new Error('El personal de la demo no tiene chofer')
   const bomOperationRows = DEMO_BOM_OPERATIONS.flatMap((b) =>
@@ -437,6 +438,59 @@ as $$
      and not exists (select 1 from public.employees x where x.category_id = c.id)
 $$;
 
+-- ------------------------------------------------------------------ El transporte de la demo (a validar)
+create or replace function private.demo_carrier_rows()
+returns table (code text, legal_name text, tax_id text, phone text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select c.code::text, c.legal_name::text, c.tax_id::text, c.phone::text
+    from (values
+${values(DEMO_CARRIERS, ['code', 'legal_name', 'tax_id', 'phone'])}
+    ) as c (code, legal_name, tax_id, phone)
+$$;
+
+-- Los transportistas de la demo que la empresa todavía no tiene, por código (insertCarriers).
+create or replace function private.insert_demo_carriers(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.carriers (company_id, code, legal_name, tax_id, phone)
+  select p_company, r.code, r.legal_name, r.tax_id, r.phone
+    from private.demo_carrier_rows() r
+   where not exists (select 1 from public.carriers c where c.company_id = p_company and c.code = r.code)
+$$;
+
+create or replace function private.demo_vehicle_rows()
+returns table (code text, plate text, description text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select v.code::text, v.plate::text, v.description::text
+    from (values
+${values(DEMO_VEHICLES, ['code', 'plate', 'description'])}
+    ) as v (code, plate, description)
+$$;
+
+-- Los vehículos de la demo que la empresa todavía no tiene: ni su código ni su dominio
+-- (insertVehicles).
+create or replace function private.insert_demo_vehicles(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.vehicles (company_id, code, plate, description)
+  select p_company, r.code, r.plate, r.description
+    from private.demo_vehicle_rows() r
+   where not exists (select 1 from public.vehicles v
+                      where v.company_id = p_company and (v.code = r.code or v.plate = r.plate))
+$$;
+
 -- ------------------------------------------------------------------ Empresa plantilla
 create or replace function private.seed_demo_company()
 returns uuid
@@ -529,6 +583,9 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
   perform private.insert_demo_labor_agreements(v_id);
   perform private.insert_demo_job_categories(v_id);
   perform private.insert_demo_employees(v_id);
+  -- El transporte: los fletes contratados y el camión propio (a validar).
+  perform private.insert_demo_carriers(v_id);
+  perform private.insert_demo_vehicles(v_id);
 
   -- Inventario inicial documentado (un ajuste por depósito), contabilidad con su
   -- asiento de apertura y alertas de arranque.

@@ -31,6 +31,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   production: { name: 'Producción y costos', lockable: true },
   hr: { name: 'RRHH y sueldos', lockable: true },
   tax: { name: 'Impuestos', lockable: true },
+  logistics: { name: 'Logística', lockable: true },
   payables: { name: 'Pagos y tesorería', lockable: true },
   accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
@@ -64,6 +65,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   employee: 'hr',
   payroll: 'hr',
   tax_return: 'tax',
+  carrier: 'logistics',
   supplier_invoice: 'purchasing',
   payable: 'payables',
   payment_order: 'payables',
@@ -107,7 +109,7 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   RRHH: { code: 'RRHH', name: 'RRHH y Sueldos', island: 6, defaultSector: 'RRH', isSupervisor: false, description: 'Lleva los convenios, las categorías y los legajos del personal, y prepara las liquidaciones de sueldos, que autoriza Gerencia.' },
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.' },
-  LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Consulta recepciones y stock (despachos en fases siguientes).' },
+  LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Organiza el reparto de lo que despacha Depósito: transportistas, vehículos y hojas de ruta.' },
   DOCENTE: { code: 'DOCENTE', name: 'Docente (supervisor)', island: null, defaultSector: null, isSupervisor: true, description: 'Todos los permisos en la empresa; puede actuar como supervisor.' },
 }
 
@@ -149,7 +151,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'carrier.read',
     // Autoriza las liquidaciones de sueldos o las devuelve a RRHH (Fase 6d; SoD-11).
     'payroll.read', 'payroll.approve',
   ],
@@ -184,6 +186,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'sales_order.read', 'delivery_note.read', 'delivery_note.create', 'delivery_note.cancel',
     // Entrega los materiales de las órdenes de producción liberadas.
     'bom.read', 'production_order.read', 'production_order.issue',
+    // Ve con qué transporte sale lo que despacha (Fase 7c).
+    'carrier.read',
   ],
   PRODUCCION: [
     ...CORE_READ,
@@ -235,6 +239,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
     'sales_order.read', 'delivery_note.read',
+    // Organiza el reparto (Fase 7c): los transportistas y los vehículos.
+    'carrier.read', 'carrier.create', 'carrier.update',
   ],
   AUDITOR: [
     ...CORE_READ,
@@ -247,7 +253,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
-    'payroll.read', 'tax_return.read',
+    'payroll.read', 'tax_return.read', 'carrier.read',
   ],
   DOCENTE: [],
 }

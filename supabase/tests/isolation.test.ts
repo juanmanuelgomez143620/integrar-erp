@@ -111,6 +111,8 @@ async function snapshot(company: string) {
     'payrolls',
     'payroll_lines',
     'tax_returns',
+    'carriers',
+    'vehicles',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -305,6 +307,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     ]),
     p_document_ids: `{${B.productionOrder}}`,
     p_period: '2027-05',
+    p_carrier_id: B.carrier,
+    p_vehicle_id: B.vehicle,
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {
@@ -683,6 +687,9 @@ beforeAll(async () => {
       p_input: JSON.stringify({ tax: 'IVA', period: lastMonth, notes: '' }),
     })
   ).id
+  // El transporte de B: un transportista y el camión de la demo.
+  B.carrier = (await one(`select id from public.carriers where company_id = $1 and code = 'TR-001'`, [B.id])).id
+  B.vehicle = (await one(`select id from public.vehicles where company_id = $1 and code = 'CAM-01'`, [B.id])).id
 
   bIds = new Set(
     (
@@ -727,6 +734,8 @@ beforeAll(async () => {
          union select id::text from public.job_categories where company_id = $1
          union select id::text from public.employees where company_id = $1
          union select id::text from public.payroll_lines where company_id = $1
+         union select id::text from public.carriers where company_id = $1
+         union select id::text from public.vehicles where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

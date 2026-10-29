@@ -5577,6 +5577,229 @@ export function insertWorkCenters(
   }
 }
 
+// ============================================================ Transporte (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §4)
+
+export interface CarrierInput {
+  /** Vacío para uno nuevo. */
+  id: string
+  code: string
+  legal_name: string
+  tax_id: string
+  phone: string
+}
+
+export const carrierLabel = (c: T.Carrier) => `${c.code} ${c.legal_name}`
+
+/** Logística da de alta o modifica un transportista (un flete contratado). */
+export function cmdSaveCarrier(ctx: Ctx, companyId: string, input: CarrierInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, input.id ? 'carrier.update' : 'carrier.create')
+  const existing = input.id ? db.carriers.find((c) => c.id === input.id && c.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'El transportista no existe.')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código del transportista tiene de 1 a 12 letras, números o guiones.')
+  if (db.carriers.some((c) => c.company_id === companyId && c.code === code && c.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe un transportista con el código ${code}.`)
+  const legalName = input.legal_name.trim()
+  if (legalName.length < 2 || legalName.length > 80)
+    fail('DATO_INVALIDO', 'La razón social tiene de 2 a 80 caracteres.')
+  const taxId = input.tax_id.trim()
+  if (!/^\d{2}-\d{8}-\d$/.test(taxId)) fail('DATO_INVALIDO', 'El CUIT debe tener el formato 30-12345678-9.')
+  const phone = input.phone.trim()
+  if (phone.length > 40) fail('DATO_INVALIDO', 'El teléfono tiene hasta 40 caracteres.')
+  const fields = { code, legal_name: legalName, tax_id: taxId, phone }
+  if (existing) {
+    const changes = diff(existing, { ...existing, ...fields }, ['code', 'legal_name', 'tax_id', 'phone'])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, fields, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'carrier',
+      entity_id: existing.id,
+      entity_label: carrierLabel(existing),
+      summary: `Modificó el transportista ${carrierLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const carrier: T.Carrier = {
+    id: uid(),
+    company_id: companyId,
+    ...fields,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.carriers.push(carrier)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'carrier',
+    entity_id: carrier.id,
+    entity_label: carrierLabel(carrier),
+    summary: `Dio de alta el transportista ${carrierLabel(carrier)}`,
+  })
+  return { id: carrier.id }
+}
+
+/** Un transportista desactivado no se elige en las hojas de ruta nuevas. */
+export function cmdSetCarrierActive(ctx: Ctx, companyId: string, carrierId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'carrier.update')
+  const carrier = db.carriers.find((c) => c.id === carrierId && c.company_id === companyId)
+  if (!carrier) fail('DATO_INVALIDO', 'El transportista no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si el transportista está activo.')
+  if (carrier.is_active === active) return
+  Object.assign(carrier, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'carrier',
+    entity_id: carrier.id,
+    entity_label: carrierLabel(carrier),
+    summary: `${active ? 'Activó' : 'Desactivó'} el transportista ${carrierLabel(carrier)}`,
+  })
+}
+
+export interface VehicleInput {
+  /** Vacío para uno nuevo. */
+  id: string
+  code: string
+  plate: string
+  description: string
+}
+
+export const vehicleLabel = (v: T.Vehicle) => `${v.code} (${v.plate})`
+
+/** Logística da de alta o modifica un vehículo propio. */
+export function cmdSaveVehicle(ctx: Ctx, companyId: string, input: VehicleInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, input.id ? 'carrier.update' : 'carrier.create')
+  const existing = input.id ? db.vehicles.find((v) => v.id === input.id && v.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'El vehículo no existe.')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código del vehículo tiene de 1 a 12 letras, números o guiones.')
+  if (db.vehicles.some((v) => v.company_id === companyId && v.code === code && v.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe un vehículo con el código ${code}.`)
+  const plate = input.plate.trim().toUpperCase().replace(/\s+/g, ' ')
+  if (!/^[A-Z0-9 ]{6,9}$/.test(plate))
+    fail('DATO_INVALIDO', 'El dominio tiene de 6 a 9 letras, números o espacios (por ejemplo, AB 123 CD).')
+  if (db.vehicles.some((v) => v.company_id === companyId && v.plate === plate && v.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe un vehículo con el dominio ${plate}.`)
+  const description = input.description.trim()
+  if (description.length < 2 || description.length > 80)
+    fail('DATO_INVALIDO', 'La descripción del vehículo tiene de 2 a 80 caracteres.')
+  const fields = { code, plate, description }
+  if (existing) {
+    const changes = diff(existing, { ...existing, ...fields }, ['code', 'plate', 'description'])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, fields, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'vehicle',
+      entity_id: existing.id,
+      entity_label: vehicleLabel(existing),
+      summary: `Modificó el vehículo ${vehicleLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const vehicle: T.Vehicle = {
+    id: uid(),
+    company_id: companyId,
+    ...fields,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.vehicles.push(vehicle)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'vehicle',
+    entity_id: vehicle.id,
+    entity_label: vehicleLabel(vehicle),
+    summary: `Dio de alta el vehículo ${vehicleLabel(vehicle)}: ${description}`,
+  })
+  return { id: vehicle.id }
+}
+
+/** Un vehículo desactivado (en el taller, vendido) no se elige en las hojas de ruta nuevas. */
+export function cmdSetVehicleActive(ctx: Ctx, companyId: string, vehicleId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'carrier.update')
+  const vehicle = db.vehicles.find((v) => v.id === vehicleId && v.company_id === companyId)
+  if (!vehicle) fail('DATO_INVALIDO', 'El vehículo no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si el vehículo está activo.')
+  if (vehicle.is_active === active) return
+  Object.assign(vehicle, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'vehicle',
+    entity_id: vehicle.id,
+    entity_label: vehicleLabel(vehicle),
+    summary: `${active ? 'Activó' : 'Desactivó'} el vehículo ${vehicleLabel(vehicle)}`,
+  })
+}
+
+/** Carga los transportistas de la demo que la empresa todavía no tiene (por código). */
+export function insertCarriers(
+  ctx: Ctx,
+  companyId: string,
+  rows: { code: string; legal_name: string; tax_id: string; phone: string }[],
+) {
+  for (const row of rows) {
+    if (ctx.db.carriers.some((c) => c.company_id === companyId && c.code === row.code)) continue
+    ctx.db.carriers.push({
+      id: uid(),
+      company_id: companyId,
+      ...row,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
+/** Carga los vehículos de la demo que la empresa todavía no tiene: ni su código ni su dominio. */
+export function insertVehicles(
+  ctx: Ctx,
+  companyId: string,
+  rows: { code: string; plate: string; description: string }[],
+) {
+  for (const row of rows) {
+    if (ctx.db.vehicles.some((v) => v.company_id === companyId && (v.code === row.code || v.plate === row.plate)))
+      continue
+    ctx.db.vehicles.push({
+      id: uid(),
+      company_id: companyId,
+      ...row,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
 // ============================================================ Órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §3)
 
 export interface ProductionOrderInput {
@@ -8116,6 +8339,9 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
     sector_id: sectorIds.get(e.sector_id)!,
     work_center_id: e.work_center_id ? (centerIds.get(e.work_center_id) ?? null) : null,
   }))
+  // El transporte: los transportistas y los vehículos propios.
+  copy(db.carriers, () => audited)
+  copy(db.vehicles, () => audited)
   const accountIds = copy(db.accounts, () => audited)
   copy(db.postingRules, (r) => ({ account_id: accountIds.get(r.account_id)! }))
 

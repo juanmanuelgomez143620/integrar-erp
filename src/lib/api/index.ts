@@ -254,6 +254,8 @@ const mockApi = {
   productionCosts: (companyId: string, from: string, to: string) =>
     query((db, u) => Q.productionCosts(db, u, companyId, from, to)),
   laborAgreements: (companyId: string) => query((db, u) => Q.listLaborAgreements(db, u, companyId)),
+  carriers: (companyId: string) => query((db, u) => Q.listCarriers(db, u, companyId)),
+  vehicles: (companyId: string) => query((db, u) => Q.listVehicles(db, u, companyId)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
   employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
   /** El libro IVA ventas (sales) o compras de un mes (aaaa-mm). */
@@ -422,6 +424,12 @@ const mockCommands = {
     command((c) => E.cmdSaveLaborAgreement(c, companyId, input)),
   setLaborAgreementActive: (companyId: string, agreementId: string, active: boolean) =>
     command((c) => E.cmdSetLaborAgreementActive(c, companyId, agreementId, active)),
+  saveCarrier: (companyId: string, input: E.CarrierInput) => command((c) => E.cmdSaveCarrier(c, companyId, input)),
+  setCarrierActive: (companyId: string, carrierId: string, active: boolean) =>
+    command((c) => E.cmdSetCarrierActive(c, companyId, carrierId, active)),
+  saveVehicle: (companyId: string, input: E.VehicleInput) => command((c) => E.cmdSaveVehicle(c, companyId, input)),
+  setVehicleActive: (companyId: string, vehicleId: string, active: boolean) =>
+    command((c) => E.cmdSetVehicleActive(c, companyId, vehicleId, active)),
   saveJobCategory: (companyId: string, input: E.JobCategoryInput) =>
     command((c) => E.cmdSaveJobCategory(c, companyId, input)),
   setJobCategoryActive: (companyId: string, categoryId: string, active: boolean) =>
