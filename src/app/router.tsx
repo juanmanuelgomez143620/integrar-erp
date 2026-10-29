@@ -67,6 +67,7 @@ const PayrollFormPage = lazyPage(() => import('@/features/hr/payroll').then((m) 
 const LaborVariancePage = lazyPage(() => import('@/features/hr/labor-variance-page').then((m) => m.LaborVariancePage))
 const TaxReturnFormPage = lazyPage(() => import('@/features/tax/tax-return').then((m) => m.TaxReturnFormPage))
 const IvaBooksPage = lazyPage(() => import('@/features/tax/iva-books-page').then((m) => m.IvaBooksPage))
+const ObligationsPage = lazyPage(() => import('@/features/tax/obligations-page').then((m) => m.ObligationsPage))
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -237,6 +238,7 @@ export const router = createBrowserRouter(
                 { path: 'impuestos/declaraciones/nueva', element: <TaxReturnFormPage /> },
                 { path: 'impuestos/declaraciones/:number', element: <DocumentPage key="dj" docType="TAX_RETURN" /> },
                 { path: 'impuestos/libros-iva', element: <IvaBooksPage /> },
+                { path: 'impuestos/vencimientos', element: <ObligationsPage /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

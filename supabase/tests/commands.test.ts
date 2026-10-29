@@ -3552,6 +3552,13 @@ describe('paridad de comandos', () => {
           (b) => b.api.laborVariance(companyPg, period),
           (u) => Q.laborVariance(mock, u, company, period),
         )
+      for (const period of [month(-2), month(-1)])
+        await sameRead(
+          `vencimientos de ${period} ${label}`,
+          'tesoreria',
+          (b) => b.api.obligations(companyPg, period),
+          (u) => Q.obligationsCalendar(mock, u, company, period),
+        )
     }
     await reads('al empezar')
 
@@ -3839,6 +3846,12 @@ describe('paridad de comandos', () => {
         'contabilidad',
         (b) => b.api.ivaBook(companyPg, month(-1), false),
         (u) => Q.ivaBook(mock, u, company, month(-1), false),
+      )
+      await sameRead(
+        `vencimientos del mes pasado ${label}`,
+        'contabilidad',
+        (b) => b.api.obligations(companyPg, month(-1)),
+        (u) => Q.obligationsCalendar(mock, u, company, month(-1)),
       )
     }
     await reads('al empezar')

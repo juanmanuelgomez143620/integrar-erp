@@ -47,6 +47,8 @@ export type {
   IssuedCheque,
   IvaBook,
   IvaBookRow,
+  ObligationRow,
+  ObligationsCalendar,
   JobCategoryRow,
   LaborAgreementRow,
   JournalBook,
@@ -255,6 +257,7 @@ const mockApi = {
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
   employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
   /** El libro IVA ventas (sales) o compras de un mes (aaaa-mm). */
+  obligations: (companyId: string, period: string) => query((db, u) => Q.obligationsCalendar(db, u, companyId, period)),
   ivaBook: (companyId: string, period: string, sales: boolean) =>
     query((db, u) => Q.ivaBook(db, u, companyId, period, sales)),
   /** La mano de obra del taller de un mes (aaaa-mm), por centro: la aplicada contra la real. */

@@ -56,6 +56,8 @@ import {
   productionOrderLines,
   productionOrderOperations,
   chargesDue,
+  nextMonthDay,
+  taxDueDate,
   payrollCharges,
   payrollLines,
   payrollLiquidators,
@@ -4407,6 +4409,122 @@ export function ivaBook(db: DB, userId: string, companyId: string, period: strin
     no_credit: total((e) => e.no_credit),
     perception: total((e) => e.perception),
     total: total((e) => e.total),
+  }
+}
+
+/** Una obligación del calendario de vencimientos (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §3). */
+export interface ObligationRow {
+  kind: 'SUELDOS' | 'CARGAS_SOCIALES' | 'IIBB' | 'IVA'
+  label: string
+  due_date: string
+  /** Pendiente (sin declarar o sin liquidar, o con el documento sin presentar o sin autorizar), a pagar o cumplida. */
+  status: 'PENDIENTE' | 'A_PAGAR' | 'CUMPLIDA'
+  /** Pasó su vencimiento sin cumplirse. */
+  overdue: boolean
+  detail: string
+  /** Lo del documento (los netos, las cargas o el saldo de la declaración); null si todavía no hay documento. */
+  amount: number | null
+  document: { id: string; display_number: string; path: string } | null
+}
+
+export interface ObligationsCalendar {
+  period: string
+  rows: ObligationRow[]
+}
+
+const OBLIGATION_ORDER: ObligationRow['kind'][] = ['SUELDOS', 'CARGAS_SOCIALES', 'IIBB', 'IVA']
+
+/**
+ * Las obligaciones de un mes, ordenadas por vencimiento, con su estado según los documentos
+ * (Fase 7b): los sueldos y las cargas sociales de su liquidación (las ve quien ve las
+ * liquidaciones), y los ingresos brutos y el IVA de sus declaraciones.
+ */
+export function obligationsCalendar(db: DB, userId: string, companyId: string, period: string): ObligationsCalendar {
+  assertPerm(db, userId, companyId, 'tax_return.read')
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) fail('DATO_INVALIDO', 'El período es un mes: aaaa-mm.')
+  const company = db.companies.find((c) => c.id === companyId)!
+  if (period < company.start_date.slice(0, 7))
+    fail(
+      'DATO_INVALIDO',
+      `La empresa empezó sus actividades el ${date(company.start_date)}: no hay obligaciones antes.`,
+    )
+  const today = todayAR()
+  const month = periodLabel(period)
+  const ref = (d: T.Document) => ({ id: d.id, display_number: d.display_number, path: docPath(db, d) })
+  const rows: Omit<ObligationRow, 'overdue'>[] = []
+  if (can(effectivePermissions(db, userId, companyId), 'payroll.read')) {
+    const payroll = db.documents.find(
+      (d) =>
+        d.company_id === companyId && d.doc_type === 'PAYROLL' && d.status !== 'ANULADA' && d.py!.period === period,
+    )
+    // Lo que falta antes de pagar: liquidarla o que Gerencia la autorice.
+    const waiting = !payroll
+      ? 'Sin liquidar'
+      : payroll.status === 'BORRADOR'
+        ? `${payroll.display_number} en borrador`
+        : payroll.status === 'PENDIENTE_APROBACION'
+          ? `${payroll.display_number} espera la autorización de Gerencia`
+          : null
+    const salariesPaid = payroll?.status === 'SUELDOS_PAGADOS' || payroll?.status === 'PAGADA'
+    rows.push({
+      kind: 'SUELDOS',
+      label: `Sueldos de ${month}`,
+      due_date: payroll ? payroll.py!.payment_date : nextMonthDay(period, 4),
+      status: waiting ? 'PENDIENTE' : salariesPaid ? 'CUMPLIDA' : 'A_PAGAR',
+      detail:
+        waiting ??
+        (salariesPaid ? `Pagados el ${date(payroll!.py!.salaries_paid_on)}` : 'Autorizada: falta pagar los sueldos'),
+      amount: payroll ? payroll.total : null,
+      document: payroll ? ref(payroll) : null,
+    })
+    rows.push({
+      kind: 'CARGAS_SOCIALES',
+      label: `Cargas sociales de ${month}`,
+      due_date: chargesDue(period),
+      status: waiting ? 'PENDIENTE' : payroll!.status === 'PAGADA' ? 'CUMPLIDA' : 'A_PAGAR',
+      detail:
+        waiting ??
+        (payroll!.status === 'PAGADA' ? `Pagadas el ${date(payroll!.py!.charges_paid_on)}` : 'Falta pagarlas'),
+      amount: payroll ? payrollCharges(db, payroll.id) : null,
+      document: payroll ? ref(payroll) : null,
+    })
+  }
+  for (const tax of ['IIBB', 'IVA'] as const) {
+    const dj = db.documents.find(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'TAX_RETURN' &&
+        d.status !== 'ANULADA' &&
+        d.tr!.tax === tax &&
+        d.tr!.period === period,
+    )
+    rows.push({
+      kind: tax,
+      label: `${tax === 'IVA' ? 'IVA' : 'Ingresos brutos'} de ${month}`,
+      due_date: taxDueDate(tax, period),
+      status: !dj || dj.status === 'BORRADOR' ? 'PENDIENTE' : dj.status === 'PRESENTADA' ? 'A_PAGAR' : 'CUMPLIDA',
+      detail: !dj
+        ? 'Sin declarar'
+        : dj.status === 'BORRADOR'
+          ? `${dj.display_number} en borrador`
+          : dj.status === 'PRESENTADA'
+            ? 'Presentada: falta pagarla'
+            : dj.status === 'SIN_SALDO'
+              ? 'Presentada sin saldo a pagar'
+              : `Pagada el ${date(dj.tr!.paid_on)}`,
+      amount: dj ? dj.total : null,
+      document: dj ? ref(dj) : null,
+    })
+  }
+  return {
+    period,
+    rows: rows
+      .sort(
+        (a, b) =>
+          (a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0) ||
+          OBLIGATION_ORDER.indexOf(a.kind) - OBLIGATION_ORDER.indexOf(b.kind),
+      )
+      .map((r) => ({ ...r, overdue: r.due_date < today && r.status !== 'CUMPLIDA' })),
   }
 }
 

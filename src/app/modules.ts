@@ -16,6 +16,7 @@ import {
   CalendarRange,
   ClipboardCheck,
   BookCheck,
+  CalendarClock,
   FileCheck,
   ClipboardList,
   Coins,
@@ -198,6 +199,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: 'Declaraciones', path: 'impuestos/declaraciones', icon: FileCheck, permission: 'tax_return.read' },
       { label: 'Libros IVA', path: 'impuestos/libros-iva', icon: BookCheck, permission: 'tax_return.read' },
+      { label: 'Vencimientos', path: 'impuestos/vencimientos', icon: CalendarClock, permission: 'tax_return.read' },
     ],
   },
   {

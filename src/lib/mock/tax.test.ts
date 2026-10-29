@@ -20,10 +20,14 @@ import {
   cmdPayTaxReturn,
   cmdPresentTaxReturn,
   cmdUpdateCompanySettings,
+  cmdApprovePayroll,
+  cmdCreatePayroll,
+  cmdPayPayrollSalaries,
+  cmdSubmitPayroll,
   type Ctx,
   type TaxReturnInput,
 } from './engine'
-import { cashFlow, cashProjection, documentDetail, ivaBook } from './queries'
+import { cashFlow, cashProjection, documentDetail, ivaBook, obligationsCalendar } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -466,5 +470,81 @@ describe('ingresos brutos (Fase 7b): percepciones, retenciones y declaración', 
       upgraded.postingRules.filter((r) => r.company_id === company && (r.event === 'IIBB' || r.event === 'PAGO_IIBB')),
     ).toHaveLength(4)
     expect(upgraded.documents.filter((d) => d.si).every((d) => d.si!.perception === 0)).toBe(true)
+  })
+})
+
+describe('calendario de vencimientos (Fase 7b.2)', () => {
+  const calendar = (username = 'contabilidad') =>
+    obligationsCalendar(db, userId(username), companyId(), '2027-04').rows.map((r) => [
+      r.kind,
+      r.due_date,
+      r.status,
+      r.overdue,
+      r.detail,
+    ])
+
+  it('las cuatro obligaciones del mes por vencimiento, con su estado según los documentos', () => {
+    // Hoy es el 14/05: los sueldos (día 4) y las cargas sociales (día 10) ya vencieron.
+    expect(calendar()).toEqual([
+      ['SUELDOS', '2027-05-04', 'PENDIENTE', true, 'Sin liquidar'],
+      ['CARGAS_SOCIALES', '2027-05-10', 'PENDIENTE', true, 'Sin liquidar'],
+      ['IIBB', '2027-05-15', 'PENDIENTE', false, 'Sin declarar'],
+      ['IVA', '2027-05-20', 'PENDIENTE', false, 'Sin declarar'],
+    ])
+    const { id, display_number } = cmdCreatePayroll(ctx('rrhh'), companyId(), {
+      period: '2027-04',
+      payment_date: '2027-05-05',
+      notes: '',
+    })
+    expect(calendar()[0]).toEqual(['SUELDOS', '2027-05-05', 'PENDIENTE', true, `${display_number} en borrador`])
+    cmdSubmitPayroll(ctx('rrhh'), id)
+    expect(calendar()[1]).toEqual([
+      'CARGAS_SOCIALES',
+      '2027-05-10',
+      'PENDIENTE',
+      true,
+      `${display_number} espera la autorización de Gerencia`,
+    ])
+    cmdApprovePayroll(ctx('gerencia'), id, '')
+    cmdPayPayrollSalaries(ctx('tesoreria'), id, account('1.1.01.03'))
+    const rows = obligationsCalendar(db, userId('contabilidad'), companyId(), '2027-04').rows
+    expect(rows[0]).toMatchObject({
+      kind: 'SUELDOS',
+      status: 'CUMPLIDA',
+      overdue: false,
+      detail: 'Pagados el 14/05/2027',
+      amount: byNumber(display_number).total,
+      document: { display_number },
+    })
+    expect(rows[1]).toMatchObject({
+      kind: 'CARGAS_SOCIALES',
+      status: 'A_PAGAR',
+      overdue: true,
+      detail: 'Falta pagarlas',
+    })
+    // El IVA de abril, sin ventas: presentado sin saldo, cumplido.
+    const dj = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input({ period: '2027-04' }))
+    expect(calendar()[3]).toEqual(['IVA', '2027-05-20', 'PENDIENTE', false, 'DJ-00001 en borrador'])
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    expect(calendar()[3]).toEqual(['IVA', '2027-05-20', 'CUMPLIDA', false, 'Presentada sin saldo a pagar'])
+  })
+
+  it('quién lo ve: los sueldos, sólo quien ve las liquidaciones; el mes, bien escrito', () => {
+    expect(() => obligationsCalendar(db, userId('ventas'), companyId(), '2027-04')).toThrow('Tu rol no tiene acceso')
+    const imp = db.sectors.find((s) => s.company_id === companyId() && s.code === 'IMP')!.id
+    cmdAssignRole(ctx('docente'), companyId(), userId('ventas'), 'IMPUESTOS', imp)
+    expect(calendar('ventas').map((r) => r[0])).toEqual(['IIBB', 'IVA'])
+    expect(
+      expectBusinessError(
+        () => obligationsCalendar(db, userId('contabilidad'), companyId(), '2027-4'),
+        'DATO_INVALIDO',
+      ),
+    ).toBe('El período es un mes: aaaa-mm.')
+    expect(
+      expectBusinessError(
+        () => obligationsCalendar(db, userId('contabilidad'), companyId(), '2015-02'),
+        'DATO_INVALIDO',
+      ),
+    ).toBe('La empresa empezó sus actividades el 02/03/2015: no hay obligaciones antes.')
   })
 })

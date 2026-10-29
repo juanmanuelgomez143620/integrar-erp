@@ -287,6 +287,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     employees: (companyId) => rpc('employees_list', company(companyId)),
     laborVariance: (companyId, period) => rpc('labor_variance', { ...company(companyId), p_period: period }),
     ivaBook: (companyId, period, sales) => rpc('iva_book', { ...company(companyId), p_period: period, p_sales: sales }),
+    obligations: (companyId, period) => rpc('obligations_calendar', { ...company(companyId), p_period: period }),
     productionNeeds: (companyId, documentIds = null) =>
       rpc('production_needs', { ...company(companyId), p_document_ids: documentIds }),
     accounts: (companyId) => rpc('accounts_list', company(companyId)),
