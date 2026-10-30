@@ -4,7 +4,7 @@ Diseño corto. Sigue [ROADMAP.md](../ROADMAP.md) (Fase 8, "entorno vivo"), [DATA
 
 Hasta ahora el banco y el fisco no existen como tales: Tesorería paga y cobra y el saldo del banco es el del libro mayor; en la conciliación, el saldo del extracto se escribe a mano; Impuestos presenta una declaración y nadie la recibe. En esta fase son dos **entidades del entorno** de cada empresa del aula, y los estudiantes de una isla nueva las **operan**: el banco procesa lo que ordena la empresa, cobra sus cargos, emite el extracto y evalúa los préstamos; el fisco lleva el padrón, habilita los puntos de venta, autoriza las facturas, recibe y controla las declaraciones, imputa los pagos e intima. El resto de la empresa trata con ellos como con los reales: espera que el banco procese, concilia contra su extracto, pide un préstamo, recibe una observación o una intimación y la responde.
 
-Referencias del propio autor: **Banco Aula** (simulador de homebanking para pymes: se revisa cuando estén sus archivos, `referencias/banco-aula` de la carpeta de trabajo) y **TRIBUT.AR** (simulador fiscal de GEST-AR, `juanjmg1436/tributar2026nuevo`): se toman sus conceptos y las reglas que ya validó, no su código (INTEGR-AR no depende de GEST-AR y tiene otro modelo: empresa con roles y lógica en la base).
+Referencias del propio autor: **Banco Aula** (simulador de homebanking para pymes, revisado el 29/10: `referencias/banco-aula` de la carpeta de trabajo) y **TRIBUT.AR** (simulador fiscal de GEST-AR, `juanjmg1436/tributar2026nuevo`): se toman sus conceptos y las reglas que ya validó, no su código (INTEGR-AR no depende de GEST-AR y tiene otro modelo: empresa con roles y lógica en la base).
 
 Límites: banco y fisco son simulados (sin conexión con entidades reales); nombres, números y códigos tienen formato propio y lo dicen; nada imita logos, formularios ni numeraciones oficiales; tasas, cargos y plazos son propuestas **a validar**; lo impreso lleva la leyenda de simulación.
 
@@ -63,7 +63,7 @@ Módulos nuevos **`bank`** ("Banco") y **`fisco`** ("Fisco"), que el docente pue
 ## 6. Qué se toma de TRIBUT.AR y de Banco Aula
 
 - De TRIBUT.AR: el circuito punto de venta habilitado → comprobante autorizado (no se emite sin habilitación), la validación del CUIT, el recargo por mora con tasa mensual simple, el estado de cuenta con su pago, el domicilio fiscal electrónico como bandeja, las reglas del IVA ya corregidas (la factura B con el IVA incluido genera débito igual; el saldo técnico se distingue del de retenciones y percepciones) y lo particular de ingresos brutos en Misiones. No se toman los nombres de formularios oficiales.
-- De Banco Aula: sus pantallas y operaciones, para la vista de la empresa (homebanking) y los cargos, cuando estén sus archivos.
+- De Banco Aula (su motor, `bank-core.js`, lleva los importes en centavos): la doble firma de las órdenes del homebanking (quien carga no autoriza); el ECHEQ con su ciclo (emitido, depositado y acreditado a las 48 h hábiles, endosado, descontado con su tasa, rechazado por falta de fondos); el préstamo por sistema francés con su cronograma (la misma fórmula: interés de cada cuota redondeado y la última ajusta el capital); los débitos automáticos de servicios e impuestos al vencimiento; el libro banco conciliado por cuenta e importe, y el avance de la fecha de práctica que dispara vencimientos y acreditaciones. No se copian su interfaz ni su guardado en el navegador.
 
 ## 7. Fuera de esta fase
 

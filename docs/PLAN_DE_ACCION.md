@@ -10,9 +10,9 @@ Objetivo: que INTEGR-AR tenga todos sus módulos desarrollados y funcionando, so
 | A2 | Aplicar en Supabase esa corrección y las migraciones de Contabilidad, revisar los perfiles creados antes y hacer la prueba de humo con `VITE_BACKEND=supabase` | Migraciones aplicadas y perfiles revisados (16/10); falta la prueba de humo con cuentas reales (la hace el usuario) |
 | A3 | Subir las ramas a GitHub (respaldo) | Hecho (16/10; el repo es público) |
 | A4 | Llevar `mejoras/integracion` a `main` | Hecho (16/10): `main` se publica en GitHub Pages contra Supabase |
-| A6 | Revocar el token personal de Supabase usado el 16/10 y rotar las claves del proyecto | Lo hace el usuario |
+| A6 | Revocar los tokens personales de Supabase usados el 16/10 y el 29/10 y rotar las claves del proyecto | Lo hace el usuario |
 | A5 | Decidir la rama del módulo "Seguimiento y Evaluación" (sin commitear en la carpeta principal) | Decide el usuario |
-| A7 | Publicar la corrección de las bases guardadas (29/10): la versión de `main` (Fase 6, en Vercel) no abre un navegador con datos de la Fase 5 ("La base guardada está incompleta") porque no reconoce las colecciones nuevas del personal; está corregido en `mejoras/integracion` y llega al actualizar `main` | Necesita la autorización del usuario |
+| A7 | Publicar la corrección de las bases guardadas (29/10): la versión de `main` de la Fase 6 no abría un navegador con datos de la Fase 5 | Hecho (29/10): `main` pasó a la Fase 7c con la corrección incluida |
 
 ## Etapa B — Datos de demostración más ricos
 
@@ -32,6 +32,8 @@ Objetivo: que INTEGR-AR tenga todos sus módulos desarrollados y funcionando, so
 | C5 | Motor de imputación (`posting_rules`) listo para que la Fase 3 genere asientos automáticos | Hecho (en la Fase 3a) |
 
 ## Etapa D — Módulos siguientes (roadmap 2027)
+
+El 29/10 se aplicaron en Supabase todas las migraciones pendientes (de la 3c a la 7c.2) y `main` pasó a la Fase 7c, con la autorización del usuario: donde una fila dice que falta aplicar sus migraciones o publicar, ya está hecho.
 
 Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 producción y costos → Fase 6 RRHH y sueldos → Fase 7 impuestos (fisco simulado), logística y control → Fase 8 escenarios y entorno vivo (banco de casos con plantillas, aprobación del docente, IA sólo por fuera de la app).
 
