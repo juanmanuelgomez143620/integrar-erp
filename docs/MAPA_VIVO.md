@@ -9,13 +9,13 @@ reglas de negocio ni datos nuevos: usa las lecturas que ya existen en `src/lib/a
 - **La empresa en 3D (gemelo digital)**: la planta con Proveedores a la izquierda, Depósito
   de materias primas, Producción (con la cinta que corre si hay órdenes de producción
   abiertas), Depósito de terminados y Clientes a la derecha; las oficinas atrás, con Gerencia
-  en el centro, y el Banco afuera. Cámara orbital (girar, acercar, desplazar; "Vista general"
-  vuelve al inicio). En cada sector: sus personas (se mueven si hay tareas pendientes), el
-  cartel con documentos abiertos y tareas, y una pila de sobres: un sobre por documento
+  en el centro, y afuera el Banco y el Fisco. Cámara orbital (girar, acercar, desplazar; "Vista
+  general" vuelve al inicio). En cada sector: su personal (se mueve si hay tareas pendientes),
+  el cartel con documentos abiertos y tareas, y una pila de sobres: un sobre por documento
   abierto, del color de su familia (compras, ventas, producción, dinero). Cuando un documento
-  cambia de estado y de sector, su sobre viaja. Las estanterías tienen el stock real (altura
-  y color de cobertura; tapa oscura si hay reserva). Los camiones son las OC enviadas que
-  Depósito espera y los remitos en preparación. Clic en un sector o en un sobre abre su
+  cambia de estado y de sector, su sobre viaja. Los depósitos muestran cada producto con su
+  forma y su cantidad, y los camiones son las OC en camino y las hojas de ruta (ver §5). Clic
+  en un sector, un sobre o un camión abre su
   detalle al costado; desde el detalle, "Ver su recorrido en 3D" hace saltar un sobre grande
   por los sectores de cada evento de auditoría del documento, paso a paso, y termina donde
   espera hoy.
@@ -40,10 +40,14 @@ Todo sale de lecturas existentes:
 | Tareas | `api.tasks(companyId, 'all')` |
 | Actividad | `api.audit(companyId)` |
 | Stock | `api.stock(companyId)` |
+| Personal (con `employee.read`) | `api.employees(companyId)` |
+| Vehículos propios (con `carrier.read`) | `api.vehicles(companyId)` |
+| Saldo de los bancos (con `treasury.read`) | `api.treasuryAccounts(companyId)` |
 
 - Sólo se consultan los tipos de documento que el rol puede leer (`*.read`). Si el rol no
   tiene `stock.read`, no se muestra el depósito. `api.tasks` y `api.audit` ya recortan lo que
-  cada usuario puede ver.
+  cada usuario puede ver. El legajo, los vehículos y los saldos se piden sólo si el rol los
+  puede leer; si no, quedan figuras genéricas, sin vehículos estacionados ni saldo del Banco.
 - La pantalla se refresca cada 20 segundos mientras la pestaña está visible. No usa
   `realtime.subscribe` para no multiplicar consultas.
 - No toca el motor, las RPC ni las migraciones: no hay cambios de paridad.
@@ -55,7 +59,8 @@ Todo sale de lecturas existentes:
   lo avisa y quedan el circuito y el depósito en 2D, que muestran lo mismo. Dibuja a 30
   cuadros por segundo, respeta "reducir movimiento" del sistema y en pantallas angostas
   arranca más cerca y oculta los carteles secundarios. Lo que dibuja sale de funciones puras
-  en `twin-model.ts` (planta, caminos, camiones, estanterías y recorrido), con pruebas.
+  en `twin-model.ts` (planta, caminos, personal, camiones, banco y fisco, formas y cantidades
+  de los productos, lo que está en proceso y recorrido), con pruebas.
 - **El mapa no inventa movimientos.** Cada ficha está donde el documento dice que está según
   su estado. El “recorrido” ilumina el sector que actuó en cada evento de auditoría.
 - **Posiciones estables del depósito.** Las cajas se ubican por el orden del código de
@@ -68,13 +73,52 @@ Todo sale de lecturas existentes:
 - Una lectura agregada `flowMap(companyId)` en el simulador y en Supabase, para no hacer una
   consulta por tipo de documento.
 - Reconstrucción completa del estado en el tiempo (hoy el recorrido sólo resalta al actor).
-- Hoja de ruta y entregas de la Fase 7c para animar el tramo Depósito → cliente (hoy el
-  camión de salida espera en Clientes mientras el remito está en preparación).
 - Seguir una operación entera (SC → OC → recepción → factura → pago) y no sólo un documento:
   hace falta leer el vínculo entre documentos.
 - Modo docente con preguntas guiadas (“¿qué falta para que esta OC llegue al depósito?”).
 
-## 5. A validar
+## 5. Más realismo (pedido del usuario, 29/10)
+
+El gemelo 3D pasa a mostrar la empresa como es, con lo que ya está en la base (sigue sin RPC ni
+migraciones nuevas; cada parte se ve si el rol puede leerla):
+
+- **El personal real.** Una figura por cada empleado activo del legajo, en su sector (el
+  taller, en el centro de trabajo de cada uno; el operario de depósito, en terminados), con su
+  nombre y categoría al pasar el mouse, y la cantidad en el cartel del sector. El chofer va en
+  el camión mientras su hoja de ruta está en camino. Sin `employee.read` quedan las figuras
+  genéricas de antes, y la referencia lo dice.
+- **El transporte.** Las hojas de ruta son camiones: cargando en el muelle de terminados en
+  preparación y yendo y viniendo por la ruta hacia Clientes mientras están en camino, con su
+  número, el transporte y la cantidad de remitos. El camión propio que no sale espera
+  estacionado frente al depósito (con `carrier.read`). Los remitos en preparación son bultos en
+  el muelle; las órdenes de compra en camino siguen siendo los camiones que llegan de
+  Proveedores.
+- **El banco y el fisco.** El Banco muestra el saldo de los bancos (con `treasury.read`). Un
+  edificio nuevo, **Fisco**, recibe las declaraciones de Impuestos y los pagos de Tesorería, y
+  muestra las declaraciones presentadas que falta pagar, con el importe y el vencimiento más
+  próximo (con `tax_return.read`). En la Fase 8 los dos pasan a ser sectores operados por
+  estudiantes.
+- **Los productos con su forma y su cantidad.** En Depósito PT cada producto se ve con su
+  forma (mesas, sillas, placards, camas, colchones) y una figura por unidad hasta un tope; el
+  cartel dice la cantidad real ("Silla · 22"). En Depósito MP las placas, que se cuentan por
+  unidad, van una por una (hasta 12); las tablas y tirantes son atados, los barnices y la cola
+  son latas, los herrajes y la lija son cajas y el film son rollos, con una altura que compara
+  la cantidad con el doble de su stock mínimo (cuánto hay respecto de lo habitual; sin mínimo,
+  con el que más tiene de su forma); una etiqueta al frente de cada pila dice la cantidad y la
+  unidad ("1.200 PIE"). Los carteles de los productos aparecen al acercar la cámara (por
+  ejemplo, al elegir un sector): en la vista general se pisarían. En Producción, las órdenes en
+  proceso se ven en la mesa de armado (la forma y la cantidad, sin terminar), con los
+  operarios frente a su máquina. El color de la base sigue marcando la cobertura del mínimo.
+- Los sobres suman las liquidaciones de sueldos, las declaraciones de impuestos y las hojas de
+  ruta, cada una en el sector donde espera.
+
+Decisiones **(a validar)**: la forma sale del nombre y la categoría del producto (sin un campo
+nuevo); el tope de figuras por producto (8 muebles, 6 colchones, 12 placas) y de personas por
+sector (8); los materiales a granel (pies, kilos, litros, cajas, rollos) se dibujan en hasta
+seis niveles según el doble del stock mínimo, no por unidad; los carteles de los productos se
+ven a menos de 28 unidades de distancia de la cámara.
+
+## 6. A validar
 
 - El umbral de cobertura (menos de 1,5 veces el mínimo = atención) y los colores.
 - El intervalo de actualización (20 s) y la cantidad de documentos visibles por sector.

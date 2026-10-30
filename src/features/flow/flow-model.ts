@@ -79,7 +79,7 @@ export const NODES: Record<NodeId, NodeMeta> = {
     short: 'Logística',
     code: 'LOG',
     lane: 'support',
-    description: 'Armará las hojas de ruta y seguirá las entregas (Fase 7c).',
+    description: 'Arma las hojas de ruta con los remitos despachados y rinde cada entrega.',
   },
   CGE: {
     label: 'Control de Gestión',
@@ -133,6 +133,9 @@ export const FLOW_DOC_TYPES: DocType[] = [
   'SUPPLIER_INVOICE',
   'PAYMENT_ORDER',
   'CUSTOMER_RECEIPT',
+  'PAYROLL',
+  'TAX_RETURN',
+  'ROUTE_SHEET',
 ]
 
 const NODE_BY_SECTOR_CODE: Record<string, NodeId> = {
@@ -209,6 +212,16 @@ export function documentNode(doc: DocumentListItem): NodeId {
       return 'TES'
     case 'CUSTOMER_RECEIPT':
       return 'TES'
+    // La liquidación: la prepara RRHH, la autoriza Gerencia y la paga Tesorería.
+    case 'PAYROLL':
+      if (doc.status === 'BORRADOR') return 'RRH'
+      if (doc.status === 'PENDIENTE_APROBACION') return 'GER'
+      return 'TES'
+    // La declaración: la prepara Impuestos y, presentada, la paga Tesorería.
+    case 'TAX_RETURN':
+      return doc.status === 'BORRADOR' ? 'IMP' : 'TES'
+    case 'ROUTE_SHEET':
+      return 'LOG'
     default:
       return 'CON'
   }

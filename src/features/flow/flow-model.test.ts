@@ -35,6 +35,18 @@ describe('mapa vivo: ubicación de documentos', () => {
     expect(documentNode(doc({ doc_type: 'PURCHASE_REQUISITION', status: 'SOLICITADO' }))).toBe('COM')
   })
 
+  it('sigue la liquidación, la declaración y la hoja de ruta por los sectores que las atienden', () => {
+    const at = (doc_type: DocumentListItem['doc_type'], status: string) => documentNode(doc({ doc_type, status }))
+    expect([
+      at('PAYROLL', 'BORRADOR'),
+      at('PAYROLL', 'PENDIENTE_APROBACION'),
+      at('PAYROLL', 'CONFIRMADA'),
+      at('TAX_RETURN', 'BORRADOR'),
+      at('TAX_RETURN', 'PRESENTADA'),
+      at('ROUTE_SHEET', 'EN_CAMINO'),
+    ]).toEqual(['RRH', 'GER', 'TES', 'IMP', 'TES', 'LOG'])
+  })
+
   it('manda a Gerencia lo que espera aprobación', () => {
     expect(documentNode(doc({ doc_type: 'PURCHASE_ORDER', status: 'PENDIENTE_APROBACION' }))).toBe('GER')
     expect(documentNode(doc({ doc_type: 'SALES_ORDER', status: 'PENDIENTE_APROBACION' }))).toBe('GER')

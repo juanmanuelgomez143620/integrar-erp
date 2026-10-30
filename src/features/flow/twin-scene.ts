@@ -6,7 +6,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import type { DocumentListItem } from '@/lib/api'
-import { qty } from '@/lib/format'
+import { date, moneyShort, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { documentNode, type NodeId } from './flow-model'
 import {
@@ -15,10 +15,16 @@ import {
   PLACES,
   ROUTES,
   type DocFamily,
+  type FiscoInfo,
+  type Place,
   type PlaceId,
-  type RackSlot,
   type RouteKind,
+  type RouteTruck,
+  type ShapeKind,
+  type StaffFigure,
+  type StockPile,
   type Truck,
+  type WorkInProgress,
 } from './twin-model'
 
 export interface TwinState {
@@ -26,7 +32,17 @@ export interface TwinState {
   docCounts: Partial<Record<NodeId, number>>
   taskCounts: Partial<Record<NodeId, number>>
   trucks: Truck[]
-  racks: RackSlot[]
+  /** Las hojas de ruta abiertas, los vehículos estacionados y los remitos en preparación. */
+  routes: RouteTruck[]
+  parked: { id: string; label: string }[]
+  packages: { docId: string; label: string }[]
+  piles: StockPile[]
+  wip: WorkInProgress[]
+  /** El personal del legajo; null si el rol no puede leerlo (quedan figuras genéricas). */
+  staff: StaffFigure[] | null
+  /** Saldo de los bancos y deuda con el fisco; null si el rol no los puede leer. */
+  bank: number | null
+  fisco: FiscoInfo | null
   focus: NodeId | null
   activeNode: NodeId | null
   selectedDocId: string | null
@@ -62,6 +78,19 @@ const C = {
   machine: 0x7d8796,
   belt: 0x4a5261,
   wood: 0xa97b4f,
+  carrier: 0x0f8a7e,
+  pallet: 0xb08d57,
+  cardboard: 0xc9a46c,
+  pine: 0xd9b382,
+  eucalyptus: 0xa0613a,
+  mdf: 0xe6dccb,
+  phenolic: 0x6b4f3a,
+  mattress: 0xf1f4f8,
+  stripe: 0x7fa9d6,
+  metal: 0x9aa3ad,
+  film: 0xdfe7ef,
+  fisco: 0xd8cfbf,
+  column: 0xf3efe6,
 }
 
 const FAMILY_COLORS: Record<DocFamily, number> = {
@@ -101,6 +130,10 @@ interface PlaceView {
   label: HTMLButtonElement | HTMLDivElement
   docsBadge: HTMLSpanElement | null
   tasksBadge: HTMLSpanElement | null
+  /** Personas del legajo en el sector. */
+  staffBadge: HTMLSpanElement | null
+  /** Lo que muestran el Banco y el Fisco (saldo, deuda). */
+  infoEl: HTMLSpanElement | null
   people: THREE.Object3D[]
 }
 
@@ -136,8 +169,18 @@ export class TwinScene {
   private envelopePlace = new Map<string, NodeId>()
   private truckGroup = new THREE.Group()
   private truckKey = ''
-  private rackGroup = new THREE.Group()
-  private rackKey = ''
+  private pileGroup = new THREE.Group()
+  private pileKey = ''
+  private pileLabels: CSS2DObject[] = []
+  /** Si la cámara está cerca: recién ahí se ven los carteles de cada producto. */
+  private near = false
+  private staffGroup = new THREE.Group()
+  private staffKey: string | null = null
+  private routeGroup = new THREE.Group()
+  private routeKey = ''
+  private wipGroup = new THREE.Group()
+  private wipKey = ''
+  private movingTrucks: { group: THREE.Group; x0: number; x1: number; offset: number }[] = []
   private beltBoxes: THREE.Mesh[] = []
   private producing = false
   private pulse: THREE.Mesh
@@ -203,7 +246,7 @@ export class TwinScene {
     this.buildRoutes()
     for (const id of PLACE_IDS) this.buildPlace(id)
     this.buildBelt()
-    this.scene.add(this.truckGroup, this.rackGroup)
+    this.scene.add(this.truckGroup, this.pileGroup, this.staffGroup, this.routeGroup, this.wipGroup)
 
     this.pulse = new THREE.Mesh(
       new THREE.RingGeometry(0.9, 1, 48),
@@ -257,7 +300,9 @@ export class TwinScene {
 
   /** Vuelca el estado actual de la empresa en la escena. */
   update(state: TwinState) {
+    this.syncStaff(state.staff)
     for (const [id, view] of this.places) {
+      if (id === 'BAN' || id === 'FIS') this.updateOutside(id, view, state)
       if (!isNode(id)) continue
       const docs = state.docCounts[id] ?? 0
       const tasks = state.taskCounts[id] ?? 0
@@ -275,7 +320,9 @@ export class TwinScene {
     }
     this.syncEnvelopes(state)
     this.syncTrucks(state.trucks)
-    this.syncRacks(state.racks)
+    this.syncRoutes(state.routes, state.parked, state.packages)
+    this.syncPiles(state.piles)
+    this.syncWip(state.wip)
     this.producing = state.docs.some((doc) => doc.doc_type === 'PRODUCTION_ORDER')
     for (const box of this.beltBoxes) box.visible = this.producing
 
@@ -430,22 +477,13 @@ export class TwinScene {
       }
     }
 
-    const people: THREE.Object3D[] = []
+    // Los muebles del sector; a las personas las pone syncStaff, con el legajo.
     if (place.kind === 'office') {
-      const desks = place.w >= 6 ? 2 : 1
-      for (let i = 0; i < desks; i++) {
-        const x = place.x + (desks === 1 ? -0.6 : -1.4 + i * 2.2)
-        this.addDesk(x, place.z - 0.6)
-        people.push(this.addPerson(x, place.z + 0.3))
-      }
+      for (const x of deskSpots(place)) this.addDesk(x, place.z - 0.6)
     } else if (place.kind === 'plant') {
-      this.addMachine(place.x - 2.5, place.z - 1.6)
-      this.addMachine(place.x + 2.5, place.z - 1.6)
-      people.push(this.addPerson(place.x - 2.5, place.z - 0.1), this.addPerson(place.x + 2.5, place.z - 0.1))
-    } else if (place.kind === 'warehouse') {
-      people.push(this.addPerson(place.x + place.w / 2 - 1.2, place.z + place.d / 2 - 1.6))
-    } else {
-      this.addBuilding(id, place.x, place.z - (id === 'BAN' ? 0 : place.d / 2 - 1.8))
+      for (const x of stationSpots(place)) this.addMachine(x, place.z - 1.6)
+    } else if (place.kind === 'outside') {
+      this.addBuilding(id, place.x, place.z - (id === 'BAN' || id === 'FIS' ? 0 : place.d / 2 - 1.8))
     }
 
     const label = document.createElement(isNode(id) ? 'button' : 'div') as HTMLButtonElement | HTMLDivElement
@@ -458,18 +496,27 @@ export class TwinScene {
     label.appendChild(name)
     let docsBadge: HTMLSpanElement | null = null
     let tasksBadge: HTMLSpanElement | null = null
+    let staffBadge: HTMLSpanElement | null = null
+    let infoEl: HTMLSpanElement | null = null
     if (isNode(id)) {
       docsBadge = badge('bg-[#185FA5] text-white', 'documentos abiertos')
       tasksBadge = badge('bg-amber-400 text-[#1C2B4A]', 'tareas pendientes')
-      label.append(docsBadge, tasksBadge)
+      staffBadge = badge('bg-slate-200 text-[#1C2B4A]', 'personas del legajo')
+      label.append(staffBadge, docsBadge, tasksBadge)
       label.addEventListener('click', () => this.callbacks.onSelectPlace(id))
       if (label instanceof HTMLButtonElement) label.type = 'button'
+    }
+    if (id === 'BAN' || id === 'FIS') {
+      infoEl = document.createElement('span')
+      infoEl.className = 'font-normal text-[#1C2B4A]'
+      infoEl.hidden = true
+      label.appendChild(infoEl)
     }
     const anchor = new CSS2DObject(label)
     anchor.position.set(place.x, place.kind === 'office' ? 2.2 : 3.6, place.z - place.d / 2 + 0.4)
     this.scene.add(anchor)
 
-    this.places.set(id, { floor, base, label, docsBadge, tasksBadge, people })
+    this.places.set(id, { floor, base, label, docsBadge, tasksBadge, staffBadge, infoEl, people: [] })
   }
 
   private addDesk(x: number, z: number) {
@@ -485,7 +532,8 @@ export class TwinScene {
     this.scene.add(screen)
   }
 
-  private addPerson(x: number, z: number) {
+  /** Una persona: el cartel dice quién es y un clic abre su sector. */
+  private makePerson(x: number, z: number, tip: string, placeId: NodeId) {
     const person = new THREE.Group()
     const body = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.22, 0.5, 4, 10),
@@ -497,11 +545,13 @@ export class TwinScene {
       new THREE.MeshStandardMaterial({ color: C.head }),
     )
     head.position.y = 1.08
-    for (const part of [body, head]) part.castShadow = true
+    for (const part of [body, head]) {
+      part.castShadow = true
+      part.userData = { placeId, tip }
+    }
     person.add(body, head)
     person.position.set(x, FLOOR_Y, z)
     person.userData = { busy: false, phase: Math.random() * Math.PI * 2 }
-    this.scene.add(person)
     return person
   }
 
@@ -522,14 +572,27 @@ export class TwinScene {
   }
 
   private addBuilding(id: PlaceId, x: number, z: number) {
-    const mat = new THREE.MeshStandardMaterial({ color: id === 'BAN' ? 0xb8c6d6 : 0xc2cad4 })
-    const body = new THREE.Mesh(new THREE.BoxGeometry(3.4, id === 'BAN' ? 2.6 : 2, 2.6), mat)
-    body.position.set(x, FLOOR_Y + (id === 'BAN' ? 1.3 : 1), z)
+    const tall = id === 'BAN' || id === 'FIS'
+    const mat = new THREE.MeshStandardMaterial({ color: id === 'BAN' ? 0xb8c6d6 : id === 'FIS' ? C.fisco : 0xc2cad4 })
+    const body = new THREE.Mesh(new THREE.BoxGeometry(3.4, tall ? 2.6 : 2, 2.6), mat)
+    body.position.set(x, FLOOR_Y + (tall ? 1.3 : 1), z)
     body.castShadow = true
+    if (id === 'BAN') body.userData = { tip: 'Banco: por acá pasan los pagos y los cobros' }
+    if (id === 'FIS') body.userData = { tip: 'Fisco: recibe las declaraciones de Impuestos y los pagos de Tesorería' }
     this.scene.add(body)
     const roof = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.25, 3), new THREE.MeshStandardMaterial({ color: C.navy }))
     roof.position.set(x, body.position.y * 2 + 0.12, z)
     this.scene.add(roof)
+    // El banco y el fisco tienen columnas al frente: no se confunden con un proveedor o un cliente.
+    if (tall) {
+      const columnMat = new THREE.MeshStandardMaterial({ color: C.column })
+      for (const dx of [-1.2, -0.4, 0.4, 1.2]) {
+        const column = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.4, 12), columnMat)
+        column.position.set(x + dx, FLOOR_Y + 1.2, z + 1.5)
+        column.castShadow = true
+        this.scene.add(column)
+      }
+    }
   }
 
   /** Cinta de Producción: de materias primas a terminados. Corre si hay órdenes abiertas. */
@@ -650,11 +713,15 @@ export class TwinScene {
   }
 
   private buildTruck(truck: Truck) {
+    const group = this.vehicleModel(truck.direction === 'in' ? C.truckIn : C.truckOut)
+    this.tagVehicle(group, `${truck.label}: mercadería en camino a Depósito`, truck.docId, truck.label)
+    return group
+  }
+
+  /** Un camión con caja: mira hacia +x (la cabina adelante). */
+  private vehicleModel(color: number) {
     const group = new THREE.Group()
-    const cargo = new THREE.Mesh(
-      new THREE.BoxGeometry(2.4, 1.2, 1.2),
-      new THREE.MeshStandardMaterial({ color: truck.direction === 'in' ? C.truckIn : C.truckOut }),
-    )
+    const cargo = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.2, 1.2), new THREE.MeshStandardMaterial({ color }))
     cargo.position.set(-0.4, 0.95, 0)
     const cab = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 1.15), new THREE.MeshStandardMaterial({ color: C.wall }))
     cab.position.set(1.3, 0.8, 0)
@@ -669,75 +736,285 @@ export class TwinScene {
         group.add(wheel)
       }
     }
-    const tip =
-      truck.direction === 'in'
-        ? `${truck.label}: mercadería en camino a Depósito`
-        : `${truck.label}: remito en preparación para despachar`
-    group.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        obj.castShadow = true
-        obj.userData = { docId: truck.docId, tip }
-      }
-    })
-    const label = document.createElement('div')
-    label.className = 'rounded bg-white/90 px-1.5 text-[10px] font-medium text-[#1C2B4A] shadow-sm'
-    label.textContent = truck.label
-    const anchor = new CSS2DObject(label)
-    anchor.position.set(0, 2, 0)
-    group.add(anchor)
     return group
   }
 
-  private syncRacks(slots: RackSlot[]) {
-    const key = slots.map((s) => `${s.key}:${s.level.toFixed(2)}:${s.tone}:${s.reserved}`).join(',')
-    if (key === this.rackKey) return
-    this.rackKey = key
-    this.clearGroup(this.rackGroup)
-    const postMat = new THREE.MeshStandardMaterial({ color: C.rack })
-    const toneMat = {
-      ok: new THREE.MeshStandardMaterial({ color: C.ok }),
-      warning: new THREE.MeshStandardMaterial({ color: C.warning }),
-      danger: new THREE.MeshStandardMaterial({ color: C.danger }),
+  /** El cartel y el texto al pasar el mouse; con documento, un clic lo abre. */
+  private tagVehicle(group: THREE.Group, tip: string, docId: string | null, text: string) {
+    group.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = true
+        obj.userData = docId ? { docId, tip } : { tip }
+      }
+    })
+    const label = document.createElement('div')
+    label.className = 'rounded bg-white/90 px-1.5 text-[10px] font-medium whitespace-nowrap text-[#1C2B4A] shadow-sm'
+    label.textContent = text
+    const anchor = new CSS2DObject(label)
+    anchor.position.set(0, 2, 0)
+    group.add(anchor)
+  }
+
+  /**
+   * El personal: una figura por persona del legajo en su sector (en el taller, junto a la
+   * máquina de su centro de trabajo). Sin acceso al legajo, figuras genéricas como antes.
+   */
+  private syncStaff(staff: StaffFigure[] | null) {
+    const key = staff === null ? 'genérico' : staff.map((p) => `${p.id}:${p.place}:${p.station ?? ''}`).join(',')
+    if (key === this.staffKey) return
+    this.staffKey = key
+    this.clearGroup(this.staffGroup)
+    for (const view of this.places.values()) view.people = []
+    const byPlace = new Map<NodeId, { tip: string; station: string | null }[]>()
+    if (staff === null) {
+      for (const id of PLACE_IDS) {
+        if (!isNode(id)) continue
+        const place = PLACES[id]
+        const n =
+          place.kind === 'office'
+            ? deskSpots(place).length
+            : place.kind === 'plant'
+              ? 2
+              : place.kind === 'warehouse'
+                ? 1
+                : 0
+        byPlace.set(
+          id,
+          Array.from({ length: n }, () => ({ tip: `${place.label}: personal del sector`, station: null })),
+        )
+      }
+    } else {
+      for (const person of staff) {
+        byPlace.set(person.place, [...(byPlace.get(person.place) ?? []), { tip: person.tip, station: person.station }])
+      }
     }
-    const capMat = new THREE.MeshStandardMaterial({ color: C.navy })
+    for (const [id, view] of this.places) {
+      if (!isNode(id)) continue
+      const list = byPlace.get(id) ?? []
+      const shown = list.slice(0, MAX_PEOPLE)
+      const atStation = new Map<number, number>()
+      shown.forEach((person, i) => {
+        const spot = staffSpot(PLACES[id], i, shown.length, person.station, atStation)
+        const figure = this.makePerson(spot.x, spot.z, person.tip, id)
+        this.staffGroup.add(figure)
+        view.people.push(figure)
+      })
+      if (view.staffBadge) {
+        view.staffBadge.textContent = `${list.length} pers.`
+        view.staffBadge.hidden = staff === null || list.length === 0
+      }
+    }
+  }
+
+  /** El Banco muestra el saldo de los bancos; el Fisco, las declaraciones que falta pagar. */
+  private updateOutside(id: 'BAN' | 'FIS', view: PlaceView, state: TwinState) {
+    const el = view.infoEl
+    if (!el) return
+    if (id === 'BAN') {
+      el.hidden = state.bank === null
+      if (state.bank !== null) el.textContent = `· saldo ${moneyShort(state.bank)}`
+      return
+    }
+    const fisco = state.fisco
+    el.hidden = !fisco
+    if (fisco) {
+      el.textContent = fisco.pending
+        ? `· ${fisco.pending} DJ por pagar (${moneyShort(fisco.amount)}), vence ${date(fisco.nextDue)}`
+        : '· al día'
+    }
+  }
+
+  /**
+   * El reparto: las hojas de ruta cargan en el muelle de terminados o van y vienen por la
+   * ruta hacia Clientes; el camión propio libre espera estacionado; los remitos en
+   * preparación son bultos en el muelle.
+   */
+  private syncRoutes(
+    routes: RouteTruck[],
+    parked: { id: string; label: string }[],
+    boxes: { docId: string; label: string }[],
+  ) {
+    const key = [
+      routes.map((r) => `${r.docId}:${r.moving}`).join(','),
+      parked.map((p) => p.id).join(','),
+      boxes.map((b) => b.docId).join(','),
+    ].join('|')
+    if (key === this.routeKey) return
+    this.routeKey = key
+    this.clearGroup(this.routeGroup)
+    this.movingTrucks = []
+    const dock = PLACES.DEP_PT
+    const front = dock.z + dock.d / 2
+    let loading = 0
+    routes.forEach((route, i) => {
+      const group = this.vehicleModel(route.own ? C.truckOut : C.carrier)
+      const stops = `${route.stops} ${route.stops === 1 ? 'remito' : 'remitos'}`
+      this.tagVehicle(
+        group,
+        `${route.label}: ${route.transport} · ${route.moving ? `en camino con ${stops}` : `cargando ${stops}`}`,
+        route.docId,
+        route.moving ? `${route.label} en camino` : `${route.label} · cargando`,
+      )
+      if (route.moving) {
+        const x0 = dock.x + 1
+        const x1 = PLACES.CLI.x - 1.5
+        group.position.set((x0 + x1) / 2, 0, front + 2.4 + this.movingTrucks.length * 1.6)
+        this.movingTrucks.push({ group, x0, x1, offset: i * 0.37 })
+      } else {
+        // De culata al depósito, la cabina hacia afuera.
+        group.rotation.y = -Math.PI / 2
+        group.position.set(dock.x - 3 + loading++ * 3, 0, front + 1.6)
+      }
+      this.routeGroup.add(group)
+    })
+    parked.forEach((vehicle, i) => {
+      const group = this.vehicleModel(C.truckOut)
+      this.tagVehicle(group, `${vehicle.label}: estacionado, sin hoja de ruta`, null, `${vehicle.label} · estacionado`)
+      group.position.set(dock.x - 3 + i * 3.2, 0, front + 5.4)
+      this.routeGroup.add(group)
+    })
+    const palletMat = new THREE.MeshStandardMaterial({ color: C.pallet })
+    const cartonMat = new THREE.MeshStandardMaterial({ color: C.cardboard })
+    boxes.forEach((box, i) => {
+      const group = new THREE.Group()
+      const pallet = new THREE.Mesh(new THREE.BoxGeometry(1, 0.12, 0.8), palletMat)
+      pallet.position.y = 0.06
+      group.add(pallet)
+      for (const [x, y, z] of [
+        [-0.22, 0.28, -0.17],
+        [0.22, 0.28, -0.17],
+        [0, 0.28, 0.2],
+        [0, 0.6, 0],
+      ]) {
+        const carton = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.32, 0.36), cartonMat)
+        carton.position.set(x, y, z)
+        group.add(carton)
+      }
+      group.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.castShadow = true
+          obj.userData = { docId: box.docId, tip: `${box.label}: remito en preparación` }
+        }
+      })
+      group.position.set(dock.x + 1 + i * 1.25, FLOOR_Y, front - 0.9)
+      this.routeGroup.add(group)
+    })
+  }
+
+  /**
+   * El stock con su forma: en terminados, una figura por unidad (hasta el tope) de cada
+   * mueble; en materias primas, una placa por unidad y atados, latas, cajas y rollos con una
+   * altura que sigue a la cantidad. La base marca la cobertura del mínimo; la barra oscura, la
+   * reserva. De cerca, cada producto muestra su cantidad (en terminados, con el nombre).
+   */
+  private syncPiles(piles: StockPile[]) {
+    const key = piles.map((p) => `${p.key}:${p.units}:${p.more}:${p.tone}:${p.reserved}`).join(',')
+    if (key === this.pileKey) return
+    this.pileKey = key
+    this.clearGroup(this.pileGroup)
+    this.pileLabels = []
+    const mat = materials()
+    const toneColor = { ok: C.ok, warning: C.warning, danger: C.danger }
     for (const placeId of ['DEP_MP', 'DEP_PT'] as const) {
       const place = PLACES[placeId]
-      const list = slots.filter((s) => s.place === placeId)
+      const list = piles.filter((p) => p.place === placeId)
       if (list.length === 0) continue
-      // Las estanterías ocupan la parte de atrás; adelante queda el muelle.
+      // Los productos ocupan la parte de atrás; adelante queda el muelle.
       const cols = Math.min(6, Math.max(2, Math.ceil(Math.sqrt(list.length * 1.6))))
       const rows = Math.ceil(list.length / cols)
-      const cell = Math.min((place.w - 1.2) / cols, 1.6)
-      const depth = Math.min((place.d - 3) / rows, 1.8)
-      list.forEach((slot, i) => {
-        const x = place.x - ((cols - 1) * cell) / 2 + (i % cols) * cell
-        const z = place.z - place.d / 2 + 1.1 + Math.floor(i / cols) * depth
-        const rack = new THREE.Group()
-        for (const dx of [-0.5, 0.5]) {
-          const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.6, 0.06), postMat)
-          post.position.set(dx * cell * 0.85, 1.3, 0)
-          rack.add(post)
+      const cell = Math.min((place.w - 1.2) / cols, placeId === 'DEP_PT' ? 2.6 : 1.6)
+      const depth = Math.min((place.d - 3) / rows, placeId === 'DEP_PT' ? 2.4 : 1.8)
+      list.forEach((pile, i) => {
+        const group = new THREE.Group()
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(cell * 0.92, 0.04, depth * 0.92), mat(toneColor[pile.tone]))
+        plinth.position.y = 0.02
+        group.add(plinth)
+        if (pile.reserved) {
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(cell * 0.5, 0.05, 0.08), mat(C.navy))
+          bar.position.set(0, 0.05, depth * 0.46)
+          group.add(bar)
         }
-        const boxes = slot.qty > 0 ? Math.max(1, Math.round(slot.level * 4)) : 0
-        for (let b = 0; b < boxes; b++) {
-          const box = new THREE.Mesh(new THREE.BoxGeometry(cell * 0.7, 0.5, 0.7), toneMat[slot.tone])
-          box.position.set(0, 0.3 + b * 0.58, 0)
-          box.castShadow = true
-          rack.add(box)
+        const color = productColor(pile.name, pile.shape)
+        const goods = new THREE.Group()
+        goods.position.y = 0.04
+        if (isFurniture(pile.shape)) {
+          arrangeUnits(goods, pile.shape, pile.units, cell * 0.88, depth * 0.88, () =>
+            furniture(pile.shape, mat, color),
+          )
+        } else {
+          bulk(goods, pile.shape, pile.units, cell, depth, mat, color)
         }
-        if (slot.reserved && boxes > 0) {
-          const cap = new THREE.Mesh(new THREE.BoxGeometry(cell * 0.72, 0.08, 0.72), capMat)
-          cap.position.set(0, 0.3 + (boxes - 1) * 0.58 + 0.29, 0)
-          rack.add(cap)
-        }
-        const tip = `${slot.code} · ${slot.name} · ${qty(slot.qty)}${slot.reserved ? ' · con reserva' : ''}`
-        rack.traverse((obj) => {
-          if (obj instanceof THREE.Mesh) obj.userData = { placeId, tip }
+        group.add(goods)
+        const shown = pile.more ? ` · se ven ${pile.units}` : ''
+        const tip = `${pile.code} · ${pile.name} · ${qty(pile.qty)} ${pile.uom}${shown}${pile.reserved ? ' · con reserva' : ''}`
+        group.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.castShadow = true
+            obj.userData = { placeId, tip }
+          }
         })
-        rack.position.set(x, FLOOR_Y, z)
-        this.rackGroup.add(rack)
+        const label = document.createElement('div')
+        const anchor = new CSS2DObject(label)
+        if (placeId === 'DEP_PT') {
+          label.className =
+            'rounded bg-white/90 px-1 text-[10px] font-medium whitespace-nowrap text-[#1C2B4A] shadow-sm'
+          label.textContent = `${pile.name.split(' ')[0]} · ${qty(pile.qty)}`
+          anchor.position.set(0, 1.9, 0)
+        } else {
+          // Las celdas son chicas: una etiqueta en el piso, al frente de cada pila, con la
+          // cantidad (el producto, al pasar el mouse), para no tapar lo que hay detrás.
+          label.className =
+            'rounded-sm bg-white/85 px-0.5 text-[9px] leading-3 font-medium whitespace-nowrap text-[#1C2B4A]'
+          label.textContent = `${qty(pile.qty)} ${pile.uom}`
+          anchor.position.set(0, 0.05, depth * 0.46)
+        }
+        anchor.visible = this.near
+        group.add(anchor)
+        this.pileLabels.push(anchor)
+        group.position.set(
+          place.x - ((cols - 1) * cell) / 2 + (i % cols) * cell,
+          FLOOR_Y,
+          place.z - place.d / 2 + 0.2 + depth / 2 + Math.floor(i / cols) * depth,
+        )
+        this.pileGroup.add(group)
       })
     }
+  }
+
+  /** Lo que se está fabricando: en la mesa de armado, la forma y la cantidad, todavía sin terminar. */
+  private syncWip(list: WorkInProgress[]) {
+    const key = list.map((w) => `${w.docId}:${w.units}`).join(',')
+    if (key === this.wipKey) return
+    this.wipKey = key
+    this.clearGroup(this.wipGroup)
+    const place = PLACES.PRO
+    const mat = materials(0.6)
+    list.forEach((work, i) => {
+      const group = new THREE.Group()
+      const bench = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.06, 1.3), mat(0xd8cfc2))
+      bench.position.y = 0.03
+      group.add(bench)
+      const goods = new THREE.Group()
+      goods.position.y = 0.06
+      if (isFurniture(work.shape)) {
+        arrangeUnits(goods, work.shape, work.units, 3.4, 1.2, () => furniture(work.shape, mat, C.wood))
+      } else {
+        bulk(goods, work.shape, Math.min(work.units, 6), 3.4, 1.2, mat, C.wood)
+      }
+      group.add(goods)
+      const tip = `${work.label}: ${work.product} · ${qty(work.quantity)} en proceso${work.more ? ` (se ven ${work.units})` : ''}`
+      group.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) obj.userData = { docId: work.docId, tip }
+      })
+      const label = document.createElement('div')
+      label.className = 'rounded bg-white/90 px-1 text-[10px] font-medium whitespace-nowrap text-[#1C2B4A] shadow-sm'
+      label.textContent = `${work.label} · ${qty(work.quantity)} en proceso`
+      const anchor = new CSS2DObject(label)
+      anchor.position.set(0, 1.5, 0)
+      group.add(anchor)
+      group.position.set(place.x - 2.2 + i * 4.4, FLOOR_Y, place.z + 0.75)
+      this.wipGroup.add(group)
+    })
   }
 
   // --- animación ------------------------------------------------------------
@@ -817,12 +1094,26 @@ export class TwinScene {
           box.position.x = from + (to - from) * ((t / 14 + offset) % 1)
         }
       }
+      for (const truck of this.movingTrucks) {
+        const k = (t / 9 + truck.offset) % 2
+        const going = k < 1
+        const p = going ? k : 2 - k
+        const e = p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2
+        truck.group.position.x = truck.x0 + (truck.x1 - truck.x0) * e
+        truck.group.rotation.y = going ? 0 : Math.PI
+      }
       if (this.replayEnvelope.visible) this.replayEnvelope.rotation.y = Math.sin(t * 2) * 0.25
     } else if (this.pulse.visible) {
       this.pulse.scale.setScalar((this.pulse.userData.size as number) ?? 4)
     }
 
     this.controls.update()
+    // En la vista general los carteles de los productos se pisan: aparecen al acercarse.
+    const near = this.camera.position.distanceTo(this.controls.target) < NEAR_LABELS
+    if (near !== this.near) {
+      this.near = near
+      for (const anchor of this.pileLabels) anchor.visible = near
+    }
     this.renderer.render(this.scene, this.camera)
     this.labels.render(this.scene, this.camera)
   }
@@ -929,7 +1220,7 @@ export class TwinScene {
 }
 
 function isNode(id: PlaceId): id is NodeId {
-  return id !== 'SUP' && id !== 'CLI' && id !== 'BAN'
+  return id !== 'SUP' && id !== 'CLI' && id !== 'BAN' && id !== 'FIS'
 }
 
 /** Posición del sobre `index` en la bandeja del sector: pilas de seis. */
@@ -957,4 +1248,207 @@ function badge(classes: string, title: string) {
   el.title = title
   el.hidden = true
   return el
+}
+
+/** Los escritorios de una oficina: dos en las grandes, uno en las chicas. */
+function deskSpots(place: Place) {
+  return place.w >= 6 ? [place.x - 1.4, place.x + 0.8] : [place.x - 0.6]
+}
+
+/** Los centros de trabajo del taller, en el orden de sus máquinas. */
+const STATIONS = ['CORTE', 'ARMADO', 'TERMINACION']
+
+/** Las tres máquinas del taller, una por centro de trabajo. */
+function stationSpots(place: Place) {
+  return [place.x - 3.2, place.x, place.x + 3.2]
+}
+
+/** Personas que se dibujan por sector como mucho (el cartel dice cuántas hay, a validar). */
+const MAX_PEOPLE = 8
+
+/** Distancia de la cámara desde la que se ven los carteles de cada producto (al enfocar un sector, unas 20). */
+const NEAR_LABELS = 28
+
+/** Dónde va la persona `i` de `n`: en su escritorio, junto a la máquina de su centro o cerca del muelle. */
+function staffSpot(place: Place, i: number, n: number, station: string | null, atStation: Map<number, number>) {
+  if (place.kind === 'plant') {
+    const known = station ? STATIONS.indexOf(station) : -1
+    const index = known >= 0 ? known : i % STATIONS.length
+    const k = atStation.get(index) ?? 0
+    atStation.set(index, k + 1)
+    // Frente a su máquina, de a tres por fila, sin tapar la mesa de armado.
+    return { x: stationSpots(place)[index] + [0, -0.7, 0.7][k % 3], z: place.z - 0.5 + Math.floor(k / 3) * 0.45 }
+  }
+  if (place.kind === 'warehouse') return { x: place.x + place.w / 2 - 1.2 - i * 0.7, z: place.z + place.d / 2 - 1.6 }
+  const desks = deskSpots(place)
+  if (n <= desks.length) return { x: desks[i], z: place.z + 0.3 }
+  // Más personas que escritorios: en fila, y si no entran, una segunda fila.
+  const cols = Math.min(n, 4)
+  return { x: place.x - ((cols - 1) * 1.1) / 2 + (i % 4) * 1.1, z: place.z + 0.3 + Math.floor(i / 4) * 0.8 }
+}
+
+type Mats = (color: number) => THREE.Material
+
+/** Materiales compartidos dentro de una misma actualización (con transparencia, lo que está sin terminar). */
+function materials(opacity = 1): Mats {
+  const cache = new Map<number, THREE.Material>()
+  return (color) => {
+    let material = cache.get(color)
+    if (!material) {
+      material = new THREE.MeshStandardMaterial({ color, transparent: opacity < 1, opacity })
+      cache.set(color, material)
+    }
+    return material
+  }
+}
+
+/** Medidas de cada mueble (ancho, profundidad, alto) y cuántos se apilan. */
+const SHAPE_SIZE: Record<
+  'table' | 'chair' | 'wardrobe' | 'bed' | 'mattress',
+  { w: number; d: number; h: number; stack: number; step: number }
+> = {
+  table: { w: 1.1, d: 0.7, h: 0.62, stack: 2, step: 0.62 },
+  chair: { w: 0.42, d: 0.42, h: 0.85, stack: 4, step: 0.16 },
+  wardrobe: { w: 0.8, d: 0.45, h: 1.5, stack: 1, step: 0 },
+  bed: { w: 1, d: 1.35, h: 0.55, stack: 2, step: 0.55 },
+  mattress: { w: 0.95, d: 1.3, h: 0.18, stack: 6, step: 0.18 },
+}
+
+function isFurniture(shape: ShapeKind): shape is keyof typeof SHAPE_SIZE {
+  return shape in SHAPE_SIZE
+}
+
+/** El color de un producto por su madera o su material. */
+function productColor(name: string, shape: ShapeKind) {
+  const text = name.toLowerCase()
+  if (shape === 'mattress') return C.mattress
+  if (/mdf/.test(text)) return C.mdf
+  if (/fen[oó]lic/.test(text)) return C.phenolic
+  if (/eucalipto/.test(text)) return C.eucalyptus
+  if (/pino/.test(text)) return C.pine
+  return C.wood
+}
+
+/** Un mueble con su forma, apoyado en y = 0 y centrado. */
+function furniture(shape: ShapeKind, mat: Mats, color: number) {
+  const group = new THREE.Group()
+  if (!isFurniture(shape)) return group
+  const { w, d, h } = SHAPE_SIZE[shape]
+  const box = (bw: number, bh: number, bd: number, x: number, y: number, z: number, c = color) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), mat(c))
+    mesh.position.set(x, y, z)
+    group.add(mesh)
+  }
+  const legs = (height: number, inset: number, size: number) => {
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) box(size, height, size, sx * (w / 2 - inset), height / 2, sz * (d / 2 - inset))
+    }
+  }
+  switch (shape) {
+    case 'table':
+      box(w, 0.06, d, 0, h - 0.03, 0)
+      legs(h - 0.06, 0.07, 0.06)
+      break
+    case 'chair':
+      box(w, 0.05, d, 0, 0.45, 0)
+      legs(0.45, 0.04, 0.04)
+      box(w, 0.4, 0.04, 0, 0.67, -d / 2 + 0.02)
+      break
+    case 'wardrobe':
+      box(w, h, d, 0, h / 2, 0)
+      box(0.015, h * 0.9, 0.01, 0, h / 2, d / 2 + 0.006, C.navy)
+      break
+    case 'bed':
+      box(w, 0.25, d, 0, 0.125, 0)
+      box(w * 0.94, 0.12, d * 0.88, 0, 0.31, 0.04, C.mattress)
+      box(w, 0.55, 0.06, 0, 0.275, -d / 2 + 0.03)
+      break
+    case 'mattress':
+      box(w, h, d, 0, h / 2, 0)
+      box(w + 0.01, 0.03, d + 0.01, 0, h / 2, 0, C.stripe)
+      break
+  }
+  return group
+}
+
+/** Ubica `units` muebles en pilas sobre un área, a la escala que haga falta para que entren. */
+function arrangeUnits(
+  parent: THREE.Group,
+  shape: ShapeKind,
+  units: number,
+  areaW: number,
+  areaD: number,
+  make: () => THREE.Group,
+) {
+  if (!isFurniture(shape) || units <= 0) return
+  const size = SHAPE_SIZE[shape]
+  const stacks = Math.ceil(units / size.stack)
+  const cols = Math.ceil(Math.sqrt(stacks))
+  const rows = Math.ceil(stacks / cols)
+  const scale = Math.min(1, areaW / (cols * size.w * 1.15), areaD / (rows * size.d * 1.15))
+  for (let i = 0; i < units; i++) {
+    const stack = Math.floor(i / size.stack)
+    const unit = make()
+    unit.scale.setScalar(scale)
+    unit.position.set(
+      ((stack % cols) - (cols - 1) / 2) * size.w * 1.15 * scale,
+      (i % size.stack) * size.step * scale,
+      (Math.floor(stack / cols) - (rows - 1) / 2) * size.d * 1.15 * scale,
+    )
+    parent.add(unit)
+  }
+}
+
+/** Los materiales: atados de tablas, pilas de placas (una por placa), latas, cajas de herrajes y rollos. */
+function bulk(
+  parent: THREE.Group,
+  shape: ShapeKind,
+  units: number,
+  cellW: number,
+  cellD: number,
+  mat: Mats,
+  color: number,
+) {
+  const add = (geo: THREE.BufferGeometry, c: number, x: number, y: number, z: number, lying = false) => {
+    const mesh = new THREE.Mesh(geo, mat(c))
+    mesh.position.set(x, y, z)
+    if (lying) mesh.rotation.x = Math.PI / 2
+    parent.add(mesh)
+  }
+  const grid = (k: number) => ((k % 3) - 1) * 0.3
+  switch (shape) {
+    case 'planks': {
+      const geo = new THREE.BoxGeometry(cellW * 0.85, 0.08, 0.16)
+      for (let layer = 0; layer < units; layer++) {
+        for (let k = 0; k < 4; k++) add(geo, color, 0, 0.04 + layer * 0.09, (k - 1.5) * 0.19)
+      }
+      break
+    }
+    case 'boards': {
+      const geo = new THREE.BoxGeometry(cellW * 0.85, 0.05, cellD * 0.55)
+      for (let k = 0; k < units; k++) add(geo, color, 0, 0.025 + k * 0.06, 0)
+      break
+    }
+    case 'cans': {
+      const geo = new THREE.CylinderGeometry(0.12, 0.12, 0.28, 14)
+      for (let k = 0; k < units; k++) add(geo, C.metal, grid(k), 0.14 + Math.floor(k / 3) * 0.29, 0)
+      break
+    }
+    case 'hardware': {
+      const geo = new THREE.BoxGeometry(0.28, 0.2, 0.24)
+      for (let k = 0; k < units; k++) add(geo, C.cardboard, grid(k), 0.1 + Math.floor(k / 3) * 0.21, 0)
+      break
+    }
+    case 'rolls': {
+      const geo = new THREE.CylinderGeometry(0.11, 0.11, 0.5, 14)
+      for (let k = 0; k < units; k++) add(geo, C.film, grid(k) * 0.8, 0.11 + Math.floor(k / 3) * 0.21, 0, true)
+      break
+    }
+    default: {
+      // De a dos por nivel: a lo sumo tres niveles, como los demás materiales.
+      const geo = new THREE.BoxGeometry(cellW * 0.38, 0.24, cellD * 0.4)
+      for (let k = 0; k < units; k++)
+        add(geo, C.cardboard, ((k % 2) - 0.5) * cellW * 0.42, 0.12 + Math.floor(k / 2) * 0.25, 0)
+    }
+  }
 }

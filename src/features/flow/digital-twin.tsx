@@ -1,10 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2, Rotate3d } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { DocumentListItem, StockRow } from '@/lib/api'
+import type { DocumentListItem, EmployeeRow, StockRow, TreasuryAccountRow } from '@/lib/api'
+import type { Vehicle } from '@/lib/domain/types'
 import { cn } from '@/lib/utils'
 import type { FlowNodes, NodeId } from './flow-model'
-import { FAMILY_LABELS, rackSlots, trucks, type DocFamily } from './twin-model'
+import {
+  bankBalance,
+  FAMILY_LABELS,
+  fiscoInfo,
+  packages,
+  parkedVehicles,
+  routeTrucks,
+  staffFigures,
+  stockPiles,
+  trucks,
+  workInProgress,
+  type DocFamily,
+} from './twin-model'
 import type { TwinScene } from './twin-scene'
 
 const FAMILY_SWATCH: Record<DocFamily, string> = {
@@ -17,13 +30,18 @@ const FAMILY_SWATCH: Record<DocFamily, string> = {
 type Status = 'loading' | 'ready' | 'unsupported' | 'error'
 
 /**
- * Gemelo digital: la planta de la empresa en 3D con los documentos, las
- * tareas, el stock y los camiones reales. Three.js se carga sólo acá.
+ * Gemelo digital: la planta de la empresa en 3D con el personal, los documentos,
+ * las tareas, el stock con su forma, el reparto, el banco y el fisco reales.
+ * Three.js se carga sólo acá.
  */
 export function DigitalTwin({
   docs,
   nodes,
   stock,
+  employees,
+  vehicles,
+  treasury,
+  fiscoReadable,
   focus,
   activeNode,
   selectedDocId,
@@ -35,6 +53,13 @@ export function DigitalTwin({
   docs: DocumentListItem[]
   nodes: FlowNodes
   stock: StockRow[]
+  /** El legajo; null si el rol no lo puede leer (figuras genéricas). */
+  employees: EmployeeRow[] | null
+  vehicles: Vehicle[]
+  /** Las cajas y los bancos; null si el rol no los puede leer. */
+  treasury: TreasuryAccountRow[] | null
+  /** Si el rol puede leer las declaraciones de impuestos. */
+  fiscoReadable: boolean
   focus: NodeId | null
   activeNode: NodeId | null
   selectedDocId: string | null
@@ -89,8 +114,21 @@ export function DigitalTwin({
       docCounts[id] = stats.docs.length
       taskCounts[id] = stats.tasks.length
     }
-    return { docs, docCounts, taskCounts, trucks: trucks(docs), racks: rackSlots(stock) }
-  }, [docs, nodes, stock])
+    return {
+      docs,
+      docCounts,
+      taskCounts,
+      trucks: trucks(docs),
+      routes: routeTrucks(docs),
+      parked: parkedVehicles(vehicles, docs),
+      packages: packages(docs),
+      piles: stockPiles(stock),
+      wip: workInProgress(docs),
+      staff: employees ? staffFigures(employees, docs) : null,
+      bank: treasury ? bankBalance(treasury) : null,
+      fisco: fiscoReadable ? fiscoInfo(docs) : null,
+    }
+  }, [docs, nodes, stock, employees, vehicles, treasury, fiscoReadable])
 
   useEffect(() => {
     sceneRef.current?.update({ ...state, focus, activeNode, selectedDocId })
@@ -169,12 +207,23 @@ function TwinLegend() {
         </div>
         <p>Cada sobre es un documento abierto, apilado en el sector donde está. Cuando cambia de estado, viaja.</p>
         <p>
-          Estanterías: altura = cantidad; <span className="font-medium text-[#185FA5]">azul</span> cubre el mínimo,{' '}
+          Depósitos: cada producto con su forma (una figura por mueble, hasta 8, y por placa, hasta 12; tablas, latas,
+          cajas y rollos más altos cuanto más hay respecto del doble del mínimo). Al acercarse, cada producto muestra su
+          cantidad. La base: <span className="font-medium text-[#185FA5]">azul</span> cubre el mínimo,{' '}
           <span className="font-medium text-[#B07D1E]">ámbar</span> está cerca y{' '}
-          <span className="font-medium text-[#C0392B]">rojo</span> está por debajo; tapa oscura = hay reserva.
+          <span className="font-medium text-[#C0392B]">rojo</span> está por debajo; barra oscura = hay reserva.
         </p>
-        <p>Camiones: órdenes de compra en camino (izquierda) y remitos en preparación (derecha).</p>
-        <p>Las personas se mueven cuando su sector tiene tareas pendientes.</p>
+        <p>En Producción, la mesa de armado muestra lo que se está fabricando, con su forma y su cantidad.</p>
+        <p>
+          Camiones: órdenes de compra que llegan de Proveedores; hojas de ruta cargando en el muelle o en camino a
+          Clientes (azul, el propio; verde, un transportista); el propio sin hoja, estacionado. Los bultos del muelle
+          son remitos en preparación.
+        </p>
+        <p>
+          Personas: el personal del legajo en su sector (el nombre, al pasar el mouse); sin permiso para ver el legajo,
+          figuras genéricas. Se mueven cuando su sector tiene tareas pendientes.
+        </p>
+        <p>Banco: el saldo de las cuentas bancarias. Fisco: las declaraciones presentadas que falta pagar.</p>
       </div>
     </details>
   )

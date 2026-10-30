@@ -21,9 +21,16 @@ import { Button } from '@/components/ui/button'
 import { EmptyState, KpiCard, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, type DocumentListItem, type StockRow, type TaskItem } from '@/lib/api'
+import {
+  api,
+  type DocumentListItem,
+  type EmployeeRow,
+  type StockRow,
+  type TaskItem,
+  type TreasuryAccountRow,
+} from '@/lib/api'
 import { DOC_STATUSES, DOC_TYPES } from '@/lib/domain/catalog'
-import type { AuditEvent, DocType, Priority } from '@/lib/domain/types'
+import type { AuditEvent, DocType, Priority, Vehicle } from '@/lib/domain/types'
 import { dateTime, money, moneyShort, relative } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
@@ -46,6 +53,10 @@ interface FlowData {
   tasks: TaskItem[]
   audit: AuditEvent[]
   stock: StockRow[]
+  /** El legajo, los vehículos y las cajas y bancos: cada uno, si el rol lo puede leer. */
+  employees: EmployeeRow[] | null
+  vehicles: Vehicle[]
+  treasury: TreasuryAccountRow[] | null
 }
 
 /**
@@ -55,17 +66,21 @@ interface FlowData {
 export function LiveMapPage() {
   const company = useCompany()
   const readable = FLOW_DOC_TYPES.filter((type) => company.can(`${DOC_TYPES[type].resource}.read`))
+  const extras = (['employee.read', 'carrier.read', 'treasury.read'] as const).filter((perm) => company.can(perm))
 
   const { data, isLoading, error, isFetching, refetch, dataUpdatedAt } = useQuery<FlowData>({
-    queryKey: ['live-map', company.companyId, readable.join(',')],
+    queryKey: ['live-map', company.companyId, readable.join(','), extras.join(',')],
     queryFn: async () => {
-      const [docs, tasks, audit, stock] = await Promise.all([
+      const [docs, tasks, audit, stock, employees, vehicles, treasury] = await Promise.all([
         Promise.all(readable.map((type) => api.documents(company.companyId, type))),
         api.tasks(company.companyId, 'all'),
         api.audit(company.companyId),
         company.can('stock.read') ? api.stock(company.companyId) : Promise.resolve([] as StockRow[]),
+        extras.includes('employee.read') ? api.employees(company.companyId) : Promise.resolve(null),
+        extras.includes('carrier.read') ? api.vehicles(company.companyId) : Promise.resolve([] as Vehicle[]),
+        extras.includes('treasury.read') ? api.treasuryAccounts(company.companyId) : Promise.resolve(null),
       ])
-      return { docs: docs.flat(), tasks, audit, stock }
+      return { docs: docs.flat(), tasks, audit, stock, employees, vehicles, treasury }
     },
     // Veinte segundos es suficiente para un aula y evita una consulta por
     // tipo de documento en cada segundo.
@@ -255,13 +270,17 @@ function LiveMap({
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Section
           title="La empresa en 3D"
-          description="La planta con sus sectores: los sobres son los documentos abiertos, las estanterías tienen el stock real y los camiones esperan en los muelles. Hacé clic en un sector o en un sobre."
+          description="La planta con su personal real, los documentos abiertos (sobres), los productos con su forma y su cantidad, los camiones del reparto y, afuera, el Banco y el Fisco. Hacé clic en un sector, un sobre o un camión."
           bodyClassName="p-2 sm:p-3"
         >
           <DigitalTwin
             docs={openDocs}
             nodes={nodes}
             stock={data.stock}
+            employees={data.employees}
+            vehicles={data.vehicles}
+            treasury={data.treasury}
+            fiscoReadable={company.can('tax_return.read')}
             focus={focus}
             activeNode={activeNode}
             selectedDocId={selectedDocId}
