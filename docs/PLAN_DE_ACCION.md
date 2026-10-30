@@ -35,7 +35,7 @@ Objetivo: que INTEGR-AR tenga todos sus módulos desarrollados y funcionando, so
 
 El 29/10 se aplicaron en Supabase todas las migraciones pendientes (de la 3c a la 7c.2) y `main` pasó a la Fase 7c, con la autorización del usuario: donde una fila dice que falta aplicar sus migraciones o publicar, ya está hecho.
 
-Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 producción y costos → Fase 6 RRHH y sueldos → Fase 7 impuestos (fisco simulado), logística y control → Fase 8 escenarios y entorno vivo (banco de casos con plantillas, aprobación del docente, IA sólo por fuera de la app).
+Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 producción y costos → Fase 6 RRHH y sueldos → Fase 7 impuestos (fisco simulado), logística y control → Fase 8 escenarios y entorno vivo (banco de casos con plantillas, aprobación del docente, IA sólo por fuera de la app) → Fase 9 una segunda empresa plantilla, la foresto-industria.
 
 | Paso | Qué | Estado |
 |---|---|---|
@@ -55,6 +55,7 @@ Fase 3 compras completo y tesorería → Fase 4 ventas y clientes → Fase 5 pro
 | D14 | Fase 7: libros IVA y posición mensual, calendario de obligaciones, logística de entregas y tablero de control | En curso (diseño en `docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md`, 26/10): 7a (libros IVA y declaración de IVA) hecha el 27/10, con paridad; antes de la 7b va la 6d (convenios colectivos, pedida por el usuario: hecha el 28 y el 29/10); 7b (ingresos brutos con percepciones y retenciones, y calendario de vencimientos) hecha el 29/10, con paridad; 7c.1 (transportistas y vehículos) hecha el 29/10, con paridad; 7c.2 (hojas de ruta y estado de entrega de los remitos) hecha el 29/10, con paridad: la 7c está completa; la 7d (tablero de control) pasa a después de la 8f, para nacer con los indicadores del banco y del fisco |
 | D15 | Fase 8, banco y fisco operados por estudiantes (pedido del usuario el 29/10: que la isla de bancos y organismos fiscales opere esas lógicas con realismo; diseño en `docs/FASE_8_BANCO_Y_FISCO.md`): 8a cuenta, órdenes y extracto del banco con la conciliación; 8b cargos del mes y cheques; 8c préstamos; 8d padrón, puntos de venta y autorización de facturas; 8e recepción de declaraciones, cuenta corriente tributaria y pago por el banco; 8f domicilio fiscal electrónico e intimaciones; cada entidad, en modo automático o operada por la isla 9. Al final, 8g: escenarios con consignas, criterios de logro y progreso por isla | Pendiente: sigue la 8a |
 | D16 | Módulo **fisco simulado** (pedido del usuario el 27/10, al estilo de AFIP/ARCA) | Pasa a la Fase 8 (8d a 8f, D15). Referencia analizada el 29/10: TRIBUT.AR (`juanjmg1436/tributar2026nuevo`, app de GEST-AR): se toman sus conceptos y reglas validadas, no su código |
+| D17 | Fase 9, una segunda empresa plantilla: la foresto-industria (pedido del usuario el 30/10; va después de la Fase 8, decisión del usuario; diseño en `docs/FASE_9_FORESTOINDUSTRIA.md`): 9a varias plantillas y elección del rubro por curso, 9b la plantilla de primera transformación (playa de rollizos, aserradero, tableros) con el motor actual, 9c producción por desarme con coproductos y subproductos | Diseñada (30/10); pendiente después de la 8 |
 
 ## Reglas para quien ejecute el plan
 

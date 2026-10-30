@@ -32,7 +32,8 @@ gantt
   Fase 7 Impuestos, Logística y Control :f7, 2027-10-11, 2027-11-07
   section Pedagogía
   Fase 8 Banco, fisco y escenarios  :f8, 2027-11-08, 2027-12-12
-  Fase 9 Tutor IA piloto            :f9, 2028-02-01, 2028-03-15
+  Fase 9 Segunda empresa (foresto-industria) :f9, 2028-02-01, 2028-03-15
+  Fase 10 Tutor IA piloto           :f10, 2028-03-16, 2028-04-30
 ```
 
 Las fechas del receso invernal dependen del calendario escolar de la provincia.
@@ -98,7 +99,12 @@ Las fechas del receso invernal dependen del calendario escolar de la provincia.
 - Clonado de empresas desde plantilla y reinicio de escenarios.
 - Seguimiento de progreso y exportación de actividad para evaluación.
 
-### Fase 9 — Tutor IA (piloto, febrero – marzo 2028)
+### Fase 9 — Una segunda empresa: la foresto-industria (febrero – marzo 2028, a validar)
+- Varias empresas plantilla: el docente elige el rubro al crear la empresa de su curso; Forestal del Norte (mueblería) sigue igual ([docs/FASE_9_FORESTOINDUSTRIA.md](docs/FASE_9_FORESTOINDUSTRIA.md)).
+- Una foresto-industria ficticia de primera transformación (playa de rollizos, aserradero con secado y remanufactura, tableros) con el motor actual.
+- Producción por desarme: un rollizo da varios productos a la vez (coproductos y subproductos) y el costo se reparte entre ellos.
+
+### Fase 10 — Tutor IA (piloto, marzo – abril 2028; antes Fase 9, renumerada el 30/10)
 - Orientación contextual: qué hacer, qué significa un documento, por qué se bloqueó una acción.
 - Detección de errores frecuentes a partir de `user_errors` y la auditoría.
 - Preguntas guía; **nunca resuelve la actividad ni ejecuta acciones por el estudiante**.
