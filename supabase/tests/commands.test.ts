@@ -134,6 +134,7 @@ async function linkDocument(mockDocId: string, pgDocId: string) {
     ['production_order_lines', mock.prdLines],
     ['production_order_operations', mock.prdOperations],
     ['payroll_lines', mock.pyLines],
+    ['route_sheet_lines', mock.rsLines],
   ]
   for (const [table, lines] of tables) {
     const rows = await db.admin<{ id: string; line_no: number }>(
@@ -4036,6 +4037,166 @@ describe('paridad de comandos', () => {
     await reads('con el vehículo')
   })
 
+  it('hojas de ruta: armar, salir, rendir y anular; el remito dice si se entregó y no se anula en reparto', async () => {
+    const companyPg = pg(company)
+    const candidates = Q.routeSheetCandidates(mock, mockId('deposito'), company)
+    expect(candidates.length, 'remitos despachados pendientes de entrega').toBeGreaterThanOrEqual(2)
+    const [n1, n2] = candidates.map((c) => c.id)
+    const vehicle = mock.vehicles.find((v) => v.company_id === company && v.code === 'CAM-01')!
+    const carrier = mock.carriers.find((c) => c.company_id === company && c.code === 'TR-002')!
+    const driver = mock.employees.find((e) => e.company_id === company && e.status === 'ACTIVO')!
+    const reads = async (label: string) => {
+      for (const username of ['deposito', 'ventas', 'gerencia', 'contabilidad']) {
+        await sameRead(
+          `hojas de ruta ${label} (${username})`,
+          username,
+          (b) => b.api.documents(companyPg, 'ROUTE_SHEET'),
+          (u) => Q.listDocuments(mock, u, company, 'ROUTE_SHEET'),
+        )
+        await sameRead(
+          `remitos a repartir ${label} (${username})`,
+          username,
+          (b) => b.api.routeSheetCandidates(companyPg),
+          (u) => Q.routeSheetCandidates(mock, u, company),
+        )
+      }
+      await sameRead(
+        `choferes ${label}`,
+        'deposito',
+        (b) => b.api.drivers(companyPg),
+        (u) => Q.listDrivers(mock, u, company),
+      )
+      for (const id of [n1, n2]) {
+        const dn = mock.documents.find((d) => d.id === id)!
+        await sameRead(
+          `${dn.display_number} ${label}`,
+          'ventas',
+          (b) => b.api.document(companyPg, 'DELIVERY_NOTE', dn.display_number),
+          (u) => Q.documentDetail(mock, u, company, 'DELIVERY_NOTE', dn.display_number),
+        )
+      }
+      for (const d of mock.documents.filter((x) => x.company_id === company && x.doc_type === 'ROUTE_SHEET'))
+        await sameRead(
+          `${d.display_number} ${label}`,
+          'auditor',
+          (b) => b.api.document(companyPg, 'ROUTE_SHEET', d.display_number),
+          (u) => Q.documentDetail(mock, u, company, 'ROUTE_SHEET', d.display_number),
+        )
+    }
+    await reads('al empezar')
+
+    const input = (over: Partial<E.RouteSheetInput> = {}): E.RouteSheetInput => ({
+      document_date: todayAR(),
+      carrier_id: null,
+      vehicle_id: vehicle.id,
+      driver_id: driver.id,
+      notes: '',
+      delivery_note_ids: [n2, n1],
+      ...over,
+    })
+    const known = (id: string) => (mock.documents.some((d) => d.id === id) ? pg(id) : id)
+    const toPg = (i: E.RouteSheetInput) => ({
+      ...i,
+      carrier_id: i.carrier_id && pg(i.carrier_id),
+      vehicle_id: i.vehicle_id && pg(i.vehicle_id),
+      driver_id: i.driver_id && pg(i.driver_id),
+      delivery_note_ids: i.delivery_note_ids.map(known),
+    })
+    const create = (label: string, username: string, i: E.RouteSheetInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCreateRouteSheet(c, company, i),
+        (b) => b.commands.createRouteSheet(companyPg, toPg(i)),
+      )
+    expect(await create('Ventas no arma hojas de ruta', 'ventas', input())).toBeNull()
+    for (const [label, over] of [
+      ['una fecha pasada', { document_date: addDays(todayAR(), -1) }],
+      ['una fecha que no existe', { document_date: '2027-02-30' }],
+      ['sin transporte', { vehicle_id: null, driver_id: null }],
+      ['transportista y vehículo', { carrier_id: carrier.id }],
+      ['sin chofer', { driver_id: null }],
+      ['sin remitos', { delivery_note_ids: [] }],
+      ['un remito repetido', { delivery_note_ids: [n1, n1] }],
+      ['un remito que no existe', { delivery_note_ids: [crypto.randomUUID()] }],
+    ] as [string, Partial<E.RouteSheetInput>][])
+      expect(await create(label, 'deposito', input(over)), label).toBeNull()
+    const viaCarrier = { carrier_id: carrier.id, vehicle_id: null, driver_id: null }
+    const sheet = await created(
+      'armar la hoja con el camión',
+      'deposito',
+      (c) => E.cmdCreateRouteSheet(c, company, input()),
+      (b) => b.commands.createRouteSheet(companyPg, toPg(input())),
+    )
+    expect(
+      await create(
+        'el remito programado no entra en otra hoja',
+        'deposito',
+        input({ ...viaCarrier, delivery_note_ids: [n1] }),
+      ),
+    ).toBeNull()
+    const cancelNote = (label: string, id: string) =>
+      step(
+        label,
+        'gerencia',
+        (c) => E.cmdCancelDeliveryNote(c, id, 'Error de carga'),
+        (b) => b.commands.cancelDeliveryNote(pg(id), 'Error de carga'),
+      )
+    expect(await cancelNote('no se anula el remito programado', n1)).toBeNull()
+    await reads('con la hoja armada')
+
+    expect(
+      await step(
+        'salir a repartir',
+        'deposito',
+        (c) => E.cmdDepartRouteSheet(c, sheet),
+        (b) => b.commands.departRouteSheet(pg(sheet)),
+      ),
+    ).not.toBeNull()
+    const cancelSheet = (label: string, id: string) =>
+      step(
+        label,
+        'deposito',
+        (c) => E.cmdCancelRouteSheet(c, id, 'Se suspendió el reparto'),
+        (b) => b.commands.cancelRouteSheet(pg(id), 'Se suspendió el reparto'),
+      )
+    expect(await cancelSheet('no se anula en camino', sheet)).toBeNull()
+    await reads('en camino')
+
+    const [l1, l2] = mock.rsLines.filter((l) => l.document_id === sheet).sort((a, b) => a.line_no - b.line_no)
+    const close = (label: string, outcomes: E.RouteSheetOutcome[]) =>
+      step(
+        label,
+        'deposito',
+        (c) => E.cmdCloseRouteSheet(c, sheet, outcomes),
+        (b) =>
+          b.commands.closeRouteSheet(
+            pg(sheet),
+            outcomes.map((o) => ({ ...o, line_id: pg(o.line_id) })),
+          ),
+      )
+    const delivered = (line_id: string, received_by: string) => ({ line_id, delivered: true, received_by, reason: '' })
+    const notDelivered = (line_id: string, reason: string) => ({ line_id, delivered: false, received_by: '', reason })
+    expect(await close('falta un resultado', [delivered(l1.id, 'Ana López')])).toBeNull()
+    expect(await close('sin quién recibió', [delivered(l1.id, 'Al'), notDelivered(l2.id, 'Cerrado')])).toBeNull()
+    expect(await close('sin motivo', [delivered(l1.id, 'Ana López'), notDelivered(l2.id, '')])).toBeNull()
+    expect(
+      await close('rendirla', [notDelivered(l1.id, 'El local estaba cerrado'), delivered(l2.id, 'Ana López')]),
+    ).not.toBeNull()
+    expect(await cancelNote('no se anula el remito entregado', n1)).toBeNull()
+    await reads('rendida')
+
+    // El que no se entregó vuelve a estar pendiente: otra hoja, que se anula en preparación.
+    const second = await created(
+      'otra hoja con el transportista',
+      'deposito',
+      (c) => E.cmdCreateRouteSheet(c, company, input({ ...viaCarrier, delivery_note_ids: [n2] })),
+      (b) => b.commands.createRouteSheet(companyPg, toPg(input({ ...viaCarrier, delivery_note_ids: [n2] }))),
+    )
+    expect(await cancelSheet('anularla en preparación', second)).not.toBeNull()
+    await reads('con la anulada')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -4058,6 +4219,7 @@ describe('paridad de comandos', () => {
       'PRODUCTION_ORDER',
       'PAYROLL',
       'TAX_RETURN',
+      'ROUTE_SHEET',
     ]
     const year = Number(todayAR().slice(0, 4))
     const taskKey = (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`

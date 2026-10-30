@@ -53,6 +53,7 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   },
   PAYROLL: { area: 'RRHH', newLabel: 'Nueva liquidación', createPerm: 'payroll.create' },
   TAX_RETURN: { area: 'Impuestos', newLabel: 'Nueva declaración', createPerm: 'tax_return.create' },
+  ROUTE_SHEET: { area: 'Logística', newLabel: 'Nueva hoja de ruta', createPerm: 'route_sheet.create' },
 }
 
 const PRIORITY_BADGE = { BAJA: 'neutral', NORMAL: 'neutral', ALTA: 'warning', URGENTE: 'danger' } as const
@@ -376,6 +377,17 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       },
     )
   }
+  if (docType === 'ROUTE_SHEET') {
+    columns.push(
+      { key: 'transport', header: 'Transporte', sort: (d) => d.summary, cell: (d) => d.summary },
+      {
+        key: 'notes',
+        header: 'Remitos',
+        cell: (d) => <span className="font-mono text-xs">{d.reference_label ?? '—'}</span>,
+      },
+      { key: 'stops', header: 'Entregas', align: 'right', sort: (d) => d.line_count, cell: (d) => d.line_count },
+    )
+  }
   if (docType === 'TAX_RETURN') {
     columns.push(
       { key: 'period', header: 'Impuesto y mes', sort: (d) => d.tr!.period, cell: (d) => d.summary },
@@ -559,11 +571,15 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
             ? 'Buscar por número o leyenda…'
             : docType === 'PRODUCTION_ORDER'
               ? 'Buscar por número o producto…'
-              : docType === 'PAYROLL' || docType === 'TAX_RETURN'
-                ? 'Buscar por número o mes…'
-                : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(docType)
-                  ? 'Buscar por número, cliente, producto…'
-                  : 'Buscar por número, proveedor, producto…'
+              : docType === 'ROUTE_SHEET'
+                ? 'Buscar por número, transporte o remito…'
+                : docType === 'PAYROLL' || docType === 'TAX_RETURN'
+                  ? 'Buscar por número o mes…'
+                  : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(
+                        docType,
+                      )
+                    ? 'Buscar por número, cliente, producto…'
+                    : 'Buscar por número, proveedor, producto…'
         }
         onRowClick={(d) => navigate(d.path)}
         empty={`Todavía no hay ${info.plural.toLowerCase()}.`}

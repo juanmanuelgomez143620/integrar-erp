@@ -77,6 +77,7 @@ export interface DB {
   laborAgreements: T.LaborAgreement[]
   carriers: T.Carrier[]
   vehicles: T.Vehicle[]
+  rsLines: T.RouteSheetLine[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -94,7 +95,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 20
+export const DB_VERSION = 21
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -153,6 +154,7 @@ const COLLECTIONS = [
   'laborAgreements',
   'carriers',
   'vehicles',
+  'rsLines',
   'jobCategories',
   'employees',
   'pyLines',
@@ -202,6 +204,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   laborAgreements: 18,
   carriers: 20,
   vehicles: 20,
+  rsLines: 21,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -438,6 +441,10 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       insertCarriers(ctx, company.id, DEMO_CARRIERS)
       insertVehicles(ctx, company.id, DEMO_VEHICLES)
     }
+  },
+  // v20 → v21: hojas de ruta (Fase 7c.2): los remitos de cada hoja.
+  20: (db) => {
+    db.rsLines ??= []
   },
 }
 

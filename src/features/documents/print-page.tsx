@@ -6,6 +6,7 @@ import { Loading } from '@/components/common/blocks'
 import { api, type ComparisonQuote } from '@/lib/api'
 import {
   ADJUSTMENT_REASONS,
+  DELIVERY_STATUSES,
   DOC_TYPES,
   JOURNAL_ORIGINS,
   PAYMENT_METHODS,
@@ -362,6 +363,33 @@ export function PrintPage() {
                 <b>Despachado:</b>{' '}
                 {data.delivery.dispatched_at ? dateTime(data.delivery.dispatched_at) : 'en preparación'}
               </div>
+              {data.delivery.delivery_status && (
+                <div>
+                  <b>Entrega:</b> {DELIVERY_STATUSES[data.delivery.delivery_status].label}
+                  {data.delivery.route_sheet ? ` (${data.delivery.route_sheet.display_number})` : ''}
+                  {data.delivery.outcome === 'ENTREGADO' ? `, recibió ${data.delivery.received_by}` : ''}
+                </div>
+              )}
+            </>
+          )}
+          {doc.doc_type === 'ROUTE_SHEET' && data.route_sheet && (
+            <>
+              <div>
+                <b>Sale el:</b> {date(doc.document_date)}
+              </div>
+              <div>
+                <b>Transporte:</b> {data.route_sheet.transport}
+              </div>
+              {data.route_sheet.carrier && (
+                <div>
+                  <b>CUIT del transportista (simulado):</b> {data.route_sheet.carrier.tax_id}
+                </div>
+              )}
+              {data.route_sheet.driver && (
+                <div>
+                  <b>Chofer:</b> {data.route_sheet.driver.name} (legajo {data.route_sheet.driver.file_number})
+                </div>
+              )}
             </>
           )}
           {doc.doc_type === 'SALES_INVOICE' && doc.fv && (
@@ -575,7 +603,7 @@ export function PrintPage() {
             </div>
           ))}
 
-        {!journal && !payment && !receipt && !transfer && !reconciliation && (
+        {!journal && !payment && !receipt && !transfer && !reconciliation && !data.route_sheet && (
           <table className="mt-4 w-full border-collapse">
             <thead>
               <tr>
@@ -632,6 +660,43 @@ export function PrintPage() {
                     </>
                   )}
                   {rfq && <td className={td}>{l.notes || '—'}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {data.route_sheet && (
+          <table className="mt-4 w-full border-collapse">
+            <thead>
+              <tr>
+                <th className={th}>#</th>
+                <th className={th}>Remito</th>
+                <th className={th}>Cliente y domicilio</th>
+                <th className={th}>Pedido</th>
+                <th className={th}>Recibió (firma y aclaración) o motivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.route_sheet.stops.map((s) => (
+                <tr key={s.id}>
+                  <td className={td}>{s.line_no}</td>
+                  <td className={`${td} font-mono`}>{s.delivery_note.display_number}</td>
+                  <td className={td}>
+                    {s.customer.legal_name}
+                    <div className="text-slate-600">
+                      {s.customer.address_line}, {s.customer.city}
+                      {s.customer.phone ? ` · Tel. ${s.customer.phone}` : ''}
+                    </div>
+                  </td>
+                  <td className={`${td} font-mono`}>{s.sales_order}</td>
+                  <td className={`${td} h-12 w-56`}>
+                    {s.outcome === 'ENTREGADO'
+                      ? `Entregado: ${s.received_by}`
+                      : s.outcome === 'NO_ENTREGADO'
+                        ? `No se entregó: ${s.reason}`
+                        : ''}
+                  </td>
                 </tr>
               ))}
             </tbody>

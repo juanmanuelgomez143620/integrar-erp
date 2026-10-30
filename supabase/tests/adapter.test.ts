@@ -76,7 +76,8 @@ beforeAll(async () => {
   const template = mock.companies.find((c) => c.is_template)!
   company = loaded.pg(template.id)
   slug = template.slug
-}, 60_000)
+  // Cargar todas las migraciones, con los demás archivos de base en paralelo, pasa del minuto en una PC cargada.
+}, 180_000)
 
 afterAll(async () => {
   await db.close()

@@ -285,6 +285,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     laborAgreements: (companyId) => rpc('labor_agreements_list', company(companyId)),
     carriers: (companyId) => rpc('carriers_list', company(companyId)),
     vehicles: (companyId) => rpc('vehicles_list', company(companyId)),
+    routeSheetCandidates: (companyId) => rpc('route_sheet_candidates', company(companyId)),
+    drivers: (companyId) => rpc('drivers_list', company(companyId)),
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
     employees: (companyId) => rpc('employees_list', company(companyId)),
     laborVariance: (companyId, period) => rpc('labor_variance', { ...company(companyId), p_period: period }),
@@ -453,6 +455,10 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     presentTaxReturn: (docId) => rpc('tax_return_present', doc(docId)),
     payTaxReturn: (docId, accountId) => rpc('tax_return_pay', { ...doc(docId), p_account_id: accountId }),
     cancelTaxReturn: (docId, reason) => rpc('tax_return_cancel', { ...doc(docId), p_reason: reason }),
+    createRouteSheet: (companyId, input) => rpc('rs_create', { ...company(companyId), p_input: input }),
+    departRouteSheet: (docId) => rpc('rs_depart', doc(docId)),
+    closeRouteSheet: (docId, outcomes) => rpc('rs_close', { ...doc(docId), p_lines: outcomes }),
+    cancelRouteSheet: (docId, reason) => rpc('rs_cancel', { ...doc(docId), p_reason: reason }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

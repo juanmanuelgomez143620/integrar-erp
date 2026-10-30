@@ -114,6 +114,7 @@ export function buildSeed(): DB {
     laborAgreements: [],
     carriers: [],
     vehicles: [],
+    rsLines: [],
     jobCategories: [],
     employees: [],
     pyLines: [],

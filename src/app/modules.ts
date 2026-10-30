@@ -41,6 +41,7 @@ import {
   PackageOpen,
   PackageSearch,
   ReceiptText,
+  Route,
   Scale,
   ScrollText,
   ShoppingCart,
@@ -158,7 +159,10 @@ export const NAV: NavGroup[] = [
   },
   {
     label: 'Logística',
-    items: [{ label: 'Transporte', path: 'logistica/transporte', icon: Van, permission: 'carrier.read' }],
+    items: [
+      { label: 'Hojas de ruta', path: 'logistica/hojas-de-ruta', icon: Route, permission: 'route_sheet.read' },
+      { label: 'Transporte', path: 'logistica/transporte', icon: Van, permission: 'carrier.read' },
+    ],
   },
   {
     label: 'Producción',

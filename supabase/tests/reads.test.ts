@@ -57,6 +57,7 @@ const DOC_TYPES: DocType[] = [
   'PRODUCTION_ORDER',
   'PAYROLL',
   'TAX_RETURN',
+  'ROUTE_SHEET',
 ]
 const userId = (username: string) => mock.profiles.find((p) => p.username === username)!.id
 

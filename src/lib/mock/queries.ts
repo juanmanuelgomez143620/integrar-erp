@@ -27,7 +27,10 @@ import {
   conversionCost,
   customerCreditUsed,
   deliveryNoteLines,
+  deliveryStatus,
   docPath,
+  routeSheetLines,
+  transportLabel,
   effectivePermissions,
   fail,
   fullName,
@@ -425,6 +428,8 @@ function lineCount(db: DB, doc: T.Document) {
       return db.pyLines.filter((l) => l.document_id === doc.id).length
     case 'TAX_RETURN':
       return 0
+    case 'ROUTE_SHEET':
+      return db.rsLines.filter((l) => l.document_id === doc.id).length
   }
 }
 
@@ -461,9 +466,10 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     // La orden se resume por lo que fabrica, no por sus materiales.
     case 'PRODUCTION_ORDER':
       return [{ product_id: doc.pd!.product_id }]
-    // La liquidación es de personas, no de productos; la declaración, de los libros del mes.
+    // La liquidación es de personas, no de productos; la declaración, de los libros del mes; la hoja de ruta, de remitos.
     case 'PAYROLL':
     case 'TAX_RETURN':
+    case 'ROUTE_SHEET':
       return []
   }
 }
@@ -505,9 +511,11 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
             ? `Sueldos de ${periodLabel(doc.py.period)}`
             : doc.tr
               ? taxReturnTitle(doc.tr)
-              : doc.pd
-                ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
-                : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+              : doc.rs
+                ? transportLabel(db, doc.rs)
+                : doc.pd
+                  ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
+                  : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -561,6 +569,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'SALES_QUOTE',
     'SALES_ORDER',
     'DELIVERY_NOTE',
+    'ROUTE_SHEET',
     'SALES_INVOICE',
     'CUSTOMER_RECEIPT',
     'PRODUCTION_ORDER',
@@ -1055,11 +1064,25 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: 'Depósito',
         text: 'Preparar la mercadería, controlarla contra el remito y despacharlo: baja el stock, se libera la reserva y se registra el costo de lo vendido.',
       }
-    case 'DELIVERY_NOTE:CONFIRMADO':
+    case 'DELIVERY_NOTE:CONFIRMADO': {
+      const delivery = deliveryStatus(db, doc.id)
+      const sheet = delivery.sheet?.display_number
+      if (delivery.status === 'PROGRAMADO')
+        return { who: 'Logística', text: `Está en la hoja de ruta ${sheet}, que todavía no salió.` }
+      if (delivery.status === 'EN_CAMINO')
+        return {
+          who: 'Logística',
+          text: `Va en camino al cliente con la hoja de ruta ${sheet}: al volver, Logística la rinde.`,
+        }
+      if (delivery.status === 'ENTREGADO')
+        return { who: '—', text: `Entregado con la hoja de ruta ${sheet}: lo recibió ${delivery.line!.received_by}.` }
       return {
-        who: '—',
-        text: 'La mercadería salió: bajó el stock (ver kardex), el costo de lo vendido está en el libro diario y Ventas fue notificada.',
+        who: 'Logística',
+        text: delivery.sheet
+          ? `No se entregó con ${sheet}: ${delivery.line!.reason}. Logística lo incluye en otra hoja de ruta.`
+          : 'La mercadería salió del depósito (bajó el stock y se registró el costo de lo vendido). Falta llevarla al cliente: Logística la incluye en una hoja de ruta.',
       }
+    }
     case 'PRODUCTION_ORDER:BORRADOR': {
       const shortages = productionShortages(db, doc)
       return {
@@ -1109,6 +1132,16 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       return {
         who: 'Tesorería',
         text: `Pagar las cargas sociales antes del ${date(chargesDue(doc.py!.period))}: ${money(payrollCharges(db, doc.id))} entre los aportes retenidos a los empleados, las contribuciones de la empresa y lo de los sindicatos.`,
+      }
+    case 'ROUTE_SHEET:BORRADOR':
+      return {
+        who: 'Logística',
+        text: 'Cargar la mercadería de los remitos en el orden de visita, controlar el transporte y salir a repartir: los remitos pasan a "en camino".',
+      }
+    case 'ROUTE_SHEET:EN_CAMINO':
+      return {
+        who: 'Logística',
+        text: 'Al volver, rendir la hoja: qué remitos se entregaron (y quién los recibió) y cuáles no (y por qué). Ventas recibe un aviso por cada uno.',
       }
     case 'TAX_RETURN:BORRADOR':
       return {
@@ -1390,12 +1423,41 @@ export interface ProductionOrderView {
   }[]
 }
 
-/** Remito: quién lo lleva, cuándo salió y a qué costo. */
+/** Remito: quién lo lleva, cuándo salió, a qué costo y si llegó al cliente. */
 export interface DeliveryView {
   carrier_name: string
   dispatched_at: string | null
   /** Costo de lo que salió del depósito, al promedio del despacho (0 mientras está en preparación). */
   cost_total: number
+  /** El estado de entrega (Fase 7c.2): null mientras está en preparación o si se anuló. */
+  delivery_status: T.DeliveryStatus | null
+  /** La última hoja de ruta que lo lleva (sin las anuladas) y cómo terminó la visita. */
+  route_sheet: { id: string; display_number: string; path: string } | null
+  outcome: T.DeliveryOutcome | null
+  received_by: string
+  delivery_reason: string
+  /** Cuándo se rindió esa hoja. */
+  closed_at: string | null
+}
+
+/** Hoja de ruta: con qué sale y los remitos en el orden de visita, con el resultado al rendirla. */
+export interface RouteSheetView {
+  transport: string
+  carrier: { id: string; code: string; legal_name: string; tax_id: string; phone: string } | null
+  vehicle: { id: string; code: string; plate: string; description: string } | null
+  driver: { id: string; file_number: number; name: string } | null
+  departed_at: string | null
+  closed_at: string | null
+  stops: {
+    id: string
+    line_no: number
+    delivery_note: { id: string; display_number: string; path: string }
+    sales_order: string
+    customer: { code: string; legal_name: string; address_line: string; city: string; phone: string }
+    outcome: T.DeliveryOutcome | null
+    received_by: string
+    reason: string
+  }[]
 }
 
 export interface DocumentDetail {
@@ -1413,6 +1475,7 @@ export interface DocumentDetail {
   production_order: ProductionOrderView | null
   payroll: PayrollView | null
   tax_return: TaxReturnView | null
+  route_sheet: RouteSheetView | null
   delivery: DeliveryView | null
   supplier: T.Supplier | null
   customer: T.Customer | null
@@ -1783,10 +1846,16 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
                                         { label: 'Preparó', ...firstBy(['CREATE']) },
                                         { label: 'Presentó', ...firstBy(['CONFIRM']) },
                                       ]
-                                    : [
-                                        { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
-                                        { label: 'Controló', name: '', sector: '', at: '' },
-                                      ]
+                                    : doc.doc_type === 'ROUTE_SHEET'
+                                      ? [
+                                          { label: 'Armó', ...firstBy(['CREATE']) },
+                                          { label: 'Salió', ...firstBy(['SEND']) },
+                                          { label: 'Rindió', ...firstBy(['CLOSE']) },
+                                        ]
+                                      : [
+                                          { label: 'Recibió / registró', ...firstBy(['CONFIRM', 'CREATE']) },
+                                          { label: 'Controló', name: '', sector: '', at: '' },
+                                        ]
   return {
     doc: listItem(db, doc),
     lines,
@@ -1802,6 +1871,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     production_order: doc.pd ? productionOrderView(db, doc) : null,
     payroll: doc.py ? payrollView(db, doc) : null,
     tax_return: doc.tr ? taxReturnView(db, doc) : null,
+    route_sheet: doc.rs ? routeSheetView(db, doc) : null,
     delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
     customer: db.customers.find((c) => c.id === doc.customer_id) ?? null,
@@ -2044,10 +2114,67 @@ function salesQuoteView(db: DB, doc: T.Document): SalesQuoteView {
 }
 
 function deliveryView(db: DB, doc: T.Document): DeliveryView {
+  const delivery = deliveryStatus(db, doc.id)
   return {
     carrier_name: doc.dn!.carrier_name,
     dispatched_at: doc.dn!.dispatched_at,
     cost_total: round2(deliveryNoteLines(db, doc.id).reduce((s, l) => s + round2(l.quantity * l.unit_cost), 0)),
+    delivery_status: doc.status === 'CONFIRMADO' ? delivery.status : null,
+    route_sheet: delivery.sheet
+      ? { id: delivery.sheet.id, display_number: delivery.sheet.display_number, path: docPath(db, delivery.sheet) }
+      : null,
+    outcome: delivery.line?.outcome ?? null,
+    received_by: delivery.line?.received_by ?? '',
+    delivery_reason: delivery.line?.reason ?? '',
+    closed_at: delivery.sheet?.rs!.closed_at ?? null,
+  }
+}
+
+const customerStop = (c: T.Customer | undefined) => ({
+  code: c?.code ?? '',
+  legal_name: c?.legal_name ?? '',
+  address_line: c?.address_line ?? '',
+  city: c?.city ?? '',
+  phone: c?.phone ?? '',
+})
+
+function routeSheetView(db: DB, doc: T.Document): RouteSheetView {
+  const rs = doc.rs!
+  const carrier = db.carriers.find((c) => c.id === rs.carrier_id)
+  const vehicle = db.vehicles.find((v) => v.id === rs.vehicle_id)
+  const driver = db.employees.find((e) => e.id === rs.driver_id)
+  return {
+    transport: transportLabel(db, rs),
+    carrier: carrier
+      ? {
+          id: carrier.id,
+          code: carrier.code,
+          legal_name: carrier.legal_name,
+          tax_id: carrier.tax_id,
+          phone: carrier.phone,
+        }
+      : null,
+    vehicle: vehicle
+      ? { id: vehicle.id, code: vehicle.code, plate: vehicle.plate, description: vehicle.description }
+      : null,
+    driver: driver
+      ? { id: driver.id, file_number: driver.file_number, name: `${driver.last_name}, ${driver.first_name}` }
+      : null,
+    departed_at: rs.departed_at,
+    closed_at: rs.closed_at,
+    stops: routeSheetLines(db, doc.id).map((l) => {
+      const dn = db.documents.find((d) => d.id === l.delivery_note_id)!
+      return {
+        id: l.id,
+        line_no: l.line_no,
+        delivery_note: { id: dn.id, display_number: dn.display_number, path: docPath(db, dn) },
+        sales_order: db.documents.find((d) => d.id === dn.dn!.sales_order_id)?.display_number ?? '',
+        customer: customerStop(db.customers.find((c) => c.id === dn.customer_id)),
+        outcome: l.outcome,
+        received_by: l.received_by,
+        reason: l.reason,
+      }
+    }),
   }
 }
 
@@ -4710,6 +4837,50 @@ export function listCarriers(db: DB, userId: string, companyId: string): T.Carri
 export function listVehicles(db: DB, userId: string, companyId: string): T.Vehicle[] {
   assertPerm(db, userId, companyId, 'carrier.read')
   return db.vehicles.filter((v) => v.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
+}
+
+/** Un remito que se puede llevar en una hoja de ruta nueva. */
+export interface RouteCandidate {
+  id: string
+  display_number: string
+  dispatched_at: string | null
+  sales_order: string
+  customer: { code: string; legal_name: string; address_line: string; city: string; phone: string }
+  /** La hoja anterior en que no se entregó, con el motivo (si la hubo). */
+  last_attempt: { display_number: string; reason: string } | null
+}
+
+/** Los remitos despachados pendientes de entrega, para armar una hoja de ruta: los más viejos primero. */
+export function routeSheetCandidates(db: DB, userId: string, companyId: string): RouteCandidate[] {
+  assertPerm(db, userId, companyId, 'route_sheet.create')
+  return db.documents
+    .filter((d) => d.company_id === companyId && d.doc_type === 'DELIVERY_NOTE' && d.status === 'CONFIRMADO')
+    .map((d) => ({ d, delivery: deliveryStatus(db, d.id) }))
+    .filter((x) => x.delivery.status === 'PENDIENTE')
+    .sort((a, b) => a.d.number - b.d.number)
+    .map(({ d, delivery }) => ({
+      id: d.id,
+      display_number: d.display_number,
+      dispatched_at: d.dn!.dispatched_at,
+      sales_order: db.documents.find((o) => o.id === d.dn!.sales_order_id)?.display_number ?? '',
+      customer: customerStop(db.customers.find((c) => c.id === d.customer_id)),
+      last_attempt: delivery.sheet
+        ? { display_number: delivery.sheet.display_number, reason: delivery.line!.reason }
+        : null,
+    }))
+}
+
+/** El personal activo, para elegir el chofer: sólo el legajo y el nombre (Logística no ve los sueldos). */
+export function listDrivers(
+  db: DB,
+  userId: string,
+  companyId: string,
+): { id: string; file_number: number; name: string }[] {
+  assertPerm(db, userId, companyId, 'route_sheet.create')
+  return db.employees
+    .filter((e) => e.company_id === companyId && e.status === 'ACTIVO')
+    .sort((a, b) => a.file_number - b.file_number)
+    .map((e) => ({ id: e.id, file_number: e.file_number, name: `${e.last_name}, ${e.first_name}` }))
 }
 
 export interface JobCategoryRow {

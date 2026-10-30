@@ -125,8 +125,9 @@ describe('persistencia de las operaciones', () => {
     [15, ['pyLines']],
     [18, ['laborAgreements']],
     [20, ['carriers', 'vehicles']],
+    [21, ['rsLines']],
   ]
-  it.each([13, 14, 17, 19])(
+  it.each([13, 14, 17, 19, 20])(
     'abre una base guardada en la v%i, sin las colecciones que llegaron después',
     async (version) => {
       const raw = JSON.parse(JSON.stringify(db.read((data) => data)))

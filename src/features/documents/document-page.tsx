@@ -48,6 +48,7 @@ import { ReconciliationLines } from '@/features/payables/reconciliation-views'
 import { PayrollSection, periodLabel } from '@/features/hr/payroll'
 import { PayrollPayDialog } from '@/features/hr/payroll-pay-dialog'
 import { TaxReturnPayDialog, TaxReturnSection, taxTitle } from '@/features/tax/tax-return'
+import { CloseRouteSheetDialog, DeliveryStatusInfo, RouteSheetSection } from '@/features/logistics/route-sheet'
 import {
   FinishDialog,
   IssueDialog,
@@ -156,6 +157,11 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     CONFIRM: (id) => commands.presentTaxReturn(id),
     CANCEL: (id, t) => commands.cancelTaxReturn(id, t),
   },
+  // Rendirla tiene su propio diálogo: hay que indicar el resultado de cada remito.
+  ROUTE_SHEET: {
+    SEND: (id) => commands.departRouteSheet(id),
+    CANCEL: (id, t) => commands.cancelRouteSheet(id, t),
+  },
 }
 
 const AREA: Record<DocType, string> = {
@@ -178,6 +184,7 @@ const AREA: Record<DocType, string> = {
   PRODUCTION_ORDER: 'Producción',
   PAYROLL: 'RRHH',
   TAX_RETURN: 'Impuestos',
+  ROUTE_SHEET: 'Logística',
 }
 
 export function DocumentPage({ docType }: { docType: DocType }) {
@@ -215,6 +222,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
   const [paying, setPaying] = useState(false)
   const [issuing, setIssuing] = useState(false)
   const [finishing, setFinishing] = useState(false)
+  const [closing, setClosing] = useState(false)
   const run = useCommand(
     (action: AvailableAction, text: string) => RUNNERS[doc.doc_type][action.action]!(doc.id, text),
     {
@@ -289,7 +297,9 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
                 ? setIssuing(true)
                 : a.action === 'FINISH'
                   ? setFinishing(true)
-                  : setPending(a)
+                  : a.action === 'CLOSE' && doc.doc_type === 'ROUTE_SHEET'
+                    ? setClosing(true)
+                    : setPending(a)
         }
       >
         {a.label}
@@ -455,6 +465,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
                 <PayrollSection detail={detail} />
               ) : detail.tax_return ? (
                 <TaxReturnSection detail={detail} />
+              ) : detail.route_sheet ? (
+                <RouteSheetSection detail={detail} />
               ) : (
                 <Lines detail={detail} />
               )}
@@ -575,6 +587,7 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
         ))}
       {issuing && <IssueDialog detail={detail} open={issuing} onOpenChange={setIssuing} />}
       {finishing && <FinishDialog detail={detail} open={finishing} onOpenChange={setFinishing} />}
+      {closing && <CloseRouteSheetDialog detail={detail} open={closing} onOpenChange={setClosing} />}
       {pending && (
         <ActionDialog
           open={!!pending}
@@ -979,6 +992,32 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
       </dl>
     )
   }
+  if (doc.doc_type === 'ROUTE_SHEET' && detail.route_sheet) {
+    const rs = detail.route_sheet
+    return (
+      <dl className={grid}>
+        <InfoRow label="Sale el">{date(doc.document_date)}</InfoRow>
+        <InfoRow label="Transporte">{rs.transport}</InfoRow>
+        {rs.carrier && (
+          <InfoRow label="Transportista">
+            CUIT {rs.carrier.tax_id}
+            {rs.carrier.phone ? ` · Tel. ${rs.carrier.phone}` : ''}
+          </InfoRow>
+        )}
+        {rs.driver && (
+          <InfoRow label="Chofer">
+            {rs.driver.name} (legajo {rs.driver.file_number})
+          </InfoRow>
+        )}
+        <InfoRow label="Salió">{rs.departed_at ? dateTime(rs.departed_at) : 'Todavía no'}</InfoRow>
+        <InfoRow label="Rendida">{rs.closed_at ? dateTime(rs.closed_at) : 'Todavía no'}</InfoRow>
+        <InfoRow label="Armó">
+          {doc.created_by_name} · {doc.sector_name}
+        </InfoRow>
+        {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
   if (doc.doc_type === 'TAX_RETURN' && detail.tax_return) {
     const tr = detail.tax_return
     return (
@@ -1209,6 +1248,11 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         <InfoRow label="Despachado">
           {delivery.dispatched_at ? dateTime(delivery.dispatched_at) : 'Todavía no (en preparación)'}
         </InfoRow>
+        {delivery.delivery_status && (
+          <InfoRow label="Entrega">
+            <DeliveryStatusInfo delivery={delivery} />
+          </InfoRow>
+        )}
         {delivery.dispatched_at && company.can('ledger.read') && (
           <InfoRow label="Costo de lo vendido">{money(delivery.cost_total)}</InfoRow>
         )}

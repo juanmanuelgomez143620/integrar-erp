@@ -66,7 +66,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | management | `dashboard.read` (tablero ejecutivo consolidado), `task.read` (todas las tareas de la empresa) |
 | hr (Fase 6) | `employee.read/create/update` (convenios, categorías y legajos del personal); desde la 6b, `payroll.read/create/cancel` (liquidaciones de sueldos); desde la 6c, `payroll.pay` (pagar los sueldos y las cargas sociales) y, desde la 6d, `payroll.approve` (Gerencia autoriza o devuelve la liquidación) |
 | tax (Fase 7) | `tax_return.read/create/cancel/pay` (libros IVA y declaraciones de impuestos) |
-| logistics (Fase 7c) | `carrier.read/create/update` (transportistas y vehículos propios: los mantiene Logística y los consultan Gerencia, Depósito y Auditoría) |
+| logistics (Fase 7c) | `carrier.read/create/update` (transportistas y vehículos propios: los mantiene Logística y los consultan Gerencia, Depósito y Auditoría); desde la 7c.2, `route_sheet.read/create/cancel` (hojas de ruta: las arma, las rinde y las anula Logística; las consultan Depósito, Ventas, Gerencia y Auditoría) |
 | audit | `audit.read`, `audit.export` |
 
 Implícitos para cualquier miembro: ver y tomar sus tareas, sus notificaciones, su perfil, y el historial de los documentos que puede leer.

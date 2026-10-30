@@ -70,6 +70,8 @@ export type {
   PendingRequisitionLine,
   PeriodView,
   TaxReturnView,
+  RouteCandidate,
+  RouteSheetView,
   PostingRuleRow,
   PriceListDetail,
   PriceListProduct,
@@ -132,6 +134,8 @@ export type {
   SupplierQuoteInput,
   StudentCredential,
   StudentInput,
+  RouteSheetInput,
+  RouteSheetOutcome,
   TeacherInput,
   WorkCenterInput,
   MasterKind,
@@ -256,6 +260,8 @@ const mockApi = {
   laborAgreements: (companyId: string) => query((db, u) => Q.listLaborAgreements(db, u, companyId)),
   carriers: (companyId: string) => query((db, u) => Q.listCarriers(db, u, companyId)),
   vehicles: (companyId: string) => query((db, u) => Q.listVehicles(db, u, companyId)),
+  routeSheetCandidates: (companyId: string) => query((db, u) => Q.routeSheetCandidates(db, u, companyId)),
+  drivers: (companyId: string) => query((db, u) => Q.listDrivers(db, u, companyId)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
   employees: (companyId: string) => query((db, u) => Q.listEmployees(db, u, companyId)),
   /** El libro IVA ventas (sales) o compras de un mes (aaaa-mm). */
@@ -452,6 +458,12 @@ const mockCommands = {
   presentTaxReturn: (docId: string) => command((c) => E.cmdPresentTaxReturn(c, docId)),
   payTaxReturn: (docId: string, accountId: string) => command((c) => E.cmdPayTaxReturn(c, docId, accountId)),
   cancelTaxReturn: (docId: string, reason: string) => command((c) => E.cmdCancelTaxReturn(c, docId, reason)),
+  createRouteSheet: (companyId: string, input: E.RouteSheetInput) =>
+    command((c) => E.cmdCreateRouteSheet(c, companyId, input)),
+  departRouteSheet: (docId: string) => command((c) => E.cmdDepartRouteSheet(c, docId)),
+  closeRouteSheet: (docId: string, outcomes: E.RouteSheetOutcome[]) =>
+    command((c) => E.cmdCloseRouteSheet(c, docId, outcomes)),
+  cancelRouteSheet: (docId: string, reason: string) => command((c) => E.cmdCancelRouteSheet(c, docId, reason)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

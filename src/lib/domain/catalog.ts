@@ -6,6 +6,7 @@ import type {
   AccountType,
   AdjustmentReason,
   Badge,
+  DeliveryStatus,
   DocType,
   JournalEntryOrigin,
   ModuleCode,
@@ -66,6 +67,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   payroll: 'hr',
   tax_return: 'tax',
   carrier: 'logistics',
+  route_sheet: 'logistics',
   supplier_invoice: 'purchasing',
   payable: 'payables',
   payment_order: 'payables',
@@ -151,7 +153,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'carrier.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'carrier.read', 'route_sheet.read',
     // Autoriza las liquidaciones de sueldos o las devuelve a RRHH (Fase 6d; SoD-11).
     'payroll.read', 'payroll.approve',
   ],
@@ -175,6 +177,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'sales_invoice.read', 'sales_invoice.create', 'sales_invoice.cancel', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'price_list.create', 'price_list.update',
     'sales_quote.read', 'sales_quote.create', 'sales_quote.cancel', 'production_order.read',
+    // Sigue la entrega de lo que vendió (Fase 7c.2).
+    'route_sheet.read',
   ],
   DEPOSITO: [
     ...CORE_READ,
@@ -186,8 +190,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'sales_order.read', 'delivery_note.read', 'delivery_note.create', 'delivery_note.cancel',
     // Entrega los materiales de las órdenes de producción liberadas.
     'bom.read', 'production_order.read', 'production_order.issue',
-    // Ve con qué transporte sale lo que despacha (Fase 7c).
-    'carrier.read',
+    // Ve con qué transporte sale lo que despacha y si se entregó (Fase 7c).
+    'carrier.read', 'route_sheet.read',
   ],
   PRODUCCION: [
     ...CORE_READ,
@@ -239,8 +243,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
     'sales_order.read', 'delivery_note.read',
-    // Organiza el reparto (Fase 7c): los transportistas y los vehículos.
-    'carrier.read', 'carrier.create', 'carrier.update',
+    // Organiza el reparto (Fase 7c): los transportistas, los vehículos y las hojas de ruta.
+    'carrier.read', 'carrier.create', 'carrier.update', 'route_sheet.read', 'route_sheet.create', 'route_sheet.cancel',
   ],
   AUDITOR: [
     ...CORE_READ,
@@ -253,7 +257,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
-    'payroll.read', 'tax_return.read', 'carrier.read',
+    'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read',
   ],
   DOCENTE: [],
 }
@@ -357,6 +361,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'PAYROLL', prefix: 'LIQ', name: 'Liquidación de sueldos', plural: 'Liquidaciones de sueldos',
     resource: 'payroll', module: 'hr', path: 'rrhh/liquidaciones',
     description: 'Los sueldos de un mes: las novedades de cada empleado, lo que cobra (el remunerativo menos sus aportes) y lo que le cuesta a la empresa (más las contribuciones). Simulada: sin validez legal.',
+  },
+  ROUTE_SHEET: {
+    code: 'ROUTE_SHEET', prefix: 'HR', name: 'Hoja de ruta', plural: 'Hojas de ruta',
+    resource: 'route_sheet', module: 'logistics', path: 'logistica/hojas-de-ruta',
+    description: 'El reparto de un día: con qué sale (un transportista o un vehículo propio con su chofer) y qué remitos lleva, en el orden de visita. Al rendirla, cada remito queda entregado o vuelve a estar pendiente.',
   },
   TAX_RETURN: {
     code: 'TAX_RETURN', prefix: 'DJ', name: 'Declaración de impuestos', plural: 'Declaraciones de impuestos',
@@ -499,6 +508,12 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     SIN_SALDO: { label: 'Presentada sin saldo a pagar', badge: 'success', final: true, description: 'Se presentó y no hay nada que pagar: el saldo a favor, si lo hay, se descuenta en la del mes siguiente.' },
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se presentó y se pagó el saldo al fisco (simulado).' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba presentada, un contraasiento revirtió el del impuesto.' },
+  },
+  ROUTE_SHEET: {
+    BORRADOR: { label: 'En preparación', badge: 'neutral', final: false, description: 'Logística la arma: todavía no salió.' },
+    EN_CAMINO: { label: 'En camino', badge: 'info', final: false, description: 'Salió a repartir: sus remitos van en camino a los clientes.' },
+    CERRADA: { label: 'Rendida', badge: 'success', final: true, description: 'Volvió: cada remito quedó entregado o pendiente para otra hoja.' },
+    ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: sus remitos siguen pendientes de entrega.' },
   },
   PRODUCTION_ORDER: {
     BORRADOR: { label: 'Planificada', badge: 'neutral', final: false, description: 'Producción la está planificando: todavía no reservó materiales.' },
@@ -690,7 +705,19 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('TAX_RETURN', 'PRESENTADA', 'PAY', 'PAGADA', 'tax_return.pay', 'Pagar', 'Paga el saldo al fisco (simulado) desde una caja o un banco: genera el asiento de pago.'),
   t('TAX_RETURN', 'PRESENTADA', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
   t('TAX_RETURN', 'SIN_SALDO', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
+  // Hoja de ruta (Fase 7c.2): rendirla tiene su propio diálogo, con el resultado de cada remito.
+  t('ROUTE_SHEET', 'BORRADOR', 'SEND', 'EN_CAMINO', 'route_sheet.create', 'Salir a repartir', 'Controla otra vez los remitos y el transporte: los remitos pasan a "en camino".'),
+  t('ROUTE_SHEET', 'BORRADOR', 'CANCEL', 'ANULADA', 'route_sheet.cancel', 'Anular', 'La hoja queda sin efecto: sus remitos siguen pendientes de entrega.', true, 'destructive'),
+  t('ROUTE_SHEET', 'EN_CAMINO', 'CLOSE', 'CERRADA', 'route_sheet.create', 'Rendir la hoja', 'Registra qué remitos se entregaron (y quién los recibió) y cuáles no (y por qué).'),
 ]
+
+/** El estado de entrega de un remito despachado (Fase 7c.2). */
+export const DELIVERY_STATUSES: Record<DeliveryStatus, { label: string; badge: Badge }> = {
+  PENDIENTE: { label: 'Pendiente de entrega', badge: 'warning' },
+  PROGRAMADO: { label: 'Programado', badge: 'info' },
+  EN_CAMINO: { label: 'En camino', badge: 'info' },
+  ENTREGADO: { label: 'Entregado', badge: 'success' },
+}
 
 export const ACTION_VERBS: Record<string, string> = {
   CREATE: 'Creó',
@@ -770,6 +797,8 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'PAYROLL', status: 'PENDIENTE_APROBACION', taskType: 'AUTORIZAR_LIQ', assignee: 'ROLE', role: 'GERENCIA', title: 'Autorizar la liquidación {number} por {total}', description: 'Revisar los recibos y los totales; autorizarla (se registra el asiento de sueldos) o devolverla a RRHH con el motivo.' },
   { docType: 'PAYROLL', status: 'CONFIRMADA', taskType: 'PAGAR_SUELDOS', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar los sueldos de {number} por {total}', description: 'Transferir los netos a los empleados en la fecha de pago y registrar el pago.' },
   { docType: 'TAX_RETURN', status: 'BORRADOR', taskType: 'PRESENTAR_DJ', assignee: 'CREATOR', title: 'Presentar {number}', description: 'Revisar los libros del mes y lo que sale a pagar o a favor, y presentar la declaración.' },
+  { docType: 'ROUTE_SHEET', status: 'BORRADOR', taskType: 'SALIR_HOJA', assignee: 'CREATOR', title: 'Salir con {number}', description: 'Cargar la mercadería de los remitos en el orden de visita, controlar el transporte y salir a repartir.' },
+  { docType: 'ROUTE_SHEET', status: 'EN_CAMINO', taskType: 'RENDIR_HOJA', assignee: 'CREATOR', title: 'Rendir {number}', description: 'Al volver, registrar qué remitos se entregaron (y quién los recibió) y cuáles no (y por qué).' },
   { docType: 'TAX_RETURN', status: 'PRESENTADA', taskType: 'PAGAR_DJ', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar el saldo de la declaración al fisco (simulado) antes del vencimiento y registrar el pago.' },
   { docType: 'PAYROLL', status: 'SUELDOS_PAGADOS', taskType: 'PAGAR_CARGAS_SOCIALES', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar las cargas sociales de {number}', description: 'Pagar los aportes retenidos y las contribuciones del mes antes del vencimiento, y registrar el pago.' },
   { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },

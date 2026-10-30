@@ -69,6 +69,7 @@ const TaxReturnFormPage = lazyPage(() => import('@/features/tax/tax-return').the
 const IvaBooksPage = lazyPage(() => import('@/features/tax/iva-books-page').then((m) => m.IvaBooksPage))
 const ObligationsPage = lazyPage(() => import('@/features/tax/obligations-page').then((m) => m.ObligationsPage))
 const TransportPage = lazyPage(() => import('@/features/logistics/transport-page').then((m) => m.TransportPage))
+const RouteSheetFormPage = lazyPage(() => import('@/features/logistics/route-sheet').then((m) => m.RouteSheetFormPage))
 const SalesInvoiceFormPage = lazyPage(() => import('@/features/sales/invoice-form').then((m) => m.SalesInvoiceFormPage))
 const CollectionFormPage = lazyPage(() => import('@/features/sales/collection-form').then((m) => m.CollectionFormPage))
 const ReceivablesPage = lazyPage(() => import('@/features/sales/receivables-pages').then((m) => m.ReceivablesPage))
@@ -241,6 +242,9 @@ export const router = createBrowserRouter(
                 { path: 'impuestos/libros-iva', element: <IvaBooksPage /> },
                 { path: 'impuestos/vencimientos', element: <ObligationsPage /> },
                 { path: 'logistica/transporte', element: <TransportPage /> },
+                { path: 'logistica/hojas-de-ruta', element: <DocumentListPage key="hr" docType="ROUTE_SHEET" /> },
+                { path: 'logistica/hojas-de-ruta/nueva', element: <RouteSheetFormPage /> },
+                { path: 'logistica/hojas-de-ruta/:number', element: <DocumentPage key="hr" docType="ROUTE_SHEET" /> },
                 { path: 'stock', element: <StockPage /> },
                 { path: 'stock/ajustes', element: <DocumentListPage key="sa" docType="STOCK_ADJUSTMENT" /> },
                 { path: 'stock/ajustes/nuevo', element: <AdjustmentFormPage /> },

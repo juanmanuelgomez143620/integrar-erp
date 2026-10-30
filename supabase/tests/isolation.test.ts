@@ -113,6 +113,8 @@ async function snapshot(company: string) {
     'tax_returns',
     'carriers',
     'vehicles',
+    'route_sheets',
+    'route_sheet_lines',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -164,7 +166,9 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
                                       ? B.payroll
                                       : fn.startsWith('tax_return_')
                                         ? B.taxReturn
-                                        : B.order
+                                        : fn.startsWith('rs_')
+                                          ? B.routeSheet
+                                          : B.order
   const input = {
     reason: 'Necesidad urgente de la empresa',
     priority: 'NORMAL',
@@ -227,6 +231,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     customer_id: B.customer,
     sales_order_id: B.salesOrder,
     carrier_name: 'Intruso',
+    carrier_id: B.carrier,
+    delivery_note_ids: [B.delivery],
     delivery_date: null,
     customer_reference: 'Intruso',
     payment_method: 'TRANSFERENCIA',
@@ -690,6 +696,17 @@ beforeAll(async () => {
   // El transporte de B: un transportista y el camión de la demo.
   B.carrier = (await one(`select id from public.carriers where company_id = $1 and code = 'TR-001'`, [B.id])).id
   B.vehicle = (await one(`select id from public.vehicles where company_id = $1 and code = 'CAM-01'`, [B.id])).id
+  // La hoja de ruta de B, con su remito despachado.
+  B.routeSheet = (
+    await rpc<{ id: string }>('docenteB', 'rs_create', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({
+        document_date: (await one('select private.business_date($1)::text as id', [B.id])).id,
+        carrier_id: B.carrier,
+        delivery_note_ids: [B.delivery],
+      }),
+    })
+  ).id
 
   bIds = new Set(
     (
@@ -736,6 +753,7 @@ beforeAll(async () => {
          union select id::text from public.payroll_lines where company_id = $1
          union select id::text from public.carriers where company_id = $1
          union select id::text from public.vehicles where company_id = $1
+         union select id::text from public.route_sheet_lines where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

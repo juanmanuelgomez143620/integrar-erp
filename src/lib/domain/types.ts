@@ -59,6 +59,7 @@ export type DocType =
   | 'PRODUCTION_ORDER'
   | 'PAYROLL'
   | 'TAX_RETURN'
+  | 'ROUTE_SHEET'
 
 /** Cómo se pagó una orden de pago o se cobró un recibo. */
 export type PaymentMethod = 'TRANSFERENCIA' | 'CHEQUE' | 'EFECTIVO'
@@ -379,6 +380,41 @@ export interface TaxReturnHeader {
   paid_on: string | null
   paid_account_id: string | null
 }
+
+/**
+ * Hoja de ruta (tabla route_sheets, 1 a 1 con documents; Fase 7c.2): el reparto de un día con
+ * un transportista o con un vehículo propio y su chofer. La fecha de salida es la del documento.
+ */
+export interface RouteSheetHeader {
+  /** El transportista; null si sale con un vehículo propio. */
+  carrier_id: string | null
+  vehicle_id: string | null
+  /** El chofer del vehículo propio: un empleado del legajo. */
+  driver_id: string | null
+  departed_at: string | null
+  closed_at: string | null
+}
+
+/** Cómo terminó la visita de un remito en la hoja de ruta. */
+export type DeliveryOutcome = 'ENTREGADO' | 'NO_ENTREGADO'
+
+/** Un remito de la hoja de ruta, en el orden de visita, y el resultado al rendirla (tabla route_sheet_lines). */
+export interface RouteSheetLine {
+  id: string
+  company_id: string
+  document_id: string
+  line_no: number
+  delivery_note_id: string
+  /** null hasta rendir la hoja. */
+  outcome: DeliveryOutcome | null
+  /** Quién lo recibió, si se entregó. */
+  received_by: string
+  /** Por qué no se entregó. */
+  reason: string
+}
+
+/** Estado de entrega de un remito despachado: el de la última hoja de ruta que lo lleva, sin las anuladas. */
+export type DeliveryStatus = 'PENDIENTE' | 'PROGRAMADO' | 'EN_CAMINO' | 'ENTREGADO'
 
 /** Lo de un empleado en una liquidación: sus novedades y los importes calculados. */
 export interface PayrollLine {
@@ -823,6 +859,7 @@ export interface Document extends Audited {
   pd?: ProductionOrderHeader
   py?: PayrollHeader
   tr?: TaxReturnHeader
+  rs?: RouteSheetHeader
 }
 
 export interface RequisitionLine {

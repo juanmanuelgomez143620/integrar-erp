@@ -4285,6 +4285,18 @@ export function cmdCancelDeliveryNote(ctx: Ctx, docId: string, reason: string) {
   const order = getDoc(db, doc.dn!.sales_order_id, 'SALES_ORDER')
   if (order.status === 'CERRADO')
     fail('TRANSICION_INVALIDA', `${order.display_number} está cerrado: el remito ya no puede anularse.`)
+  // Lo que se entregó, o está en una hoja de ruta en curso, no se anula (Fase 7c.2).
+  const delivery = deliveryStatus(db, doc.id)
+  if (delivery.status === 'ENTREGADO')
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} ya se entregó al cliente con ${delivery.sheet!.display_number}: no se anula.`,
+    )
+  if (delivery.status !== 'PENDIENTE')
+    fail(
+      'TRANSICION_INVALIDA',
+      `${doc.display_number} está en la hoja de ruta ${delivery.sheet!.display_number}: primero hay que rendirla o anularla.`,
+    )
   // Lo facturado nunca queda por encima de lo entregado.
   for (const line of deliveryNoteLines(db, doc.id)) {
     const sl = db.soLines.find((x) => x.id === line.so_line_id)!
@@ -5798,6 +5810,241 @@ export function insertVehicles(
       updated_by: ctx.userId,
     })
   }
+}
+
+// ============================================================ Hojas de ruta (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §4)
+
+export interface RouteSheetInput {
+  /** La fecha de salida: hoy o un día posterior. */
+  document_date: string
+  /** Un transportista o, si no, un vehículo propio con su chofer. */
+  carrier_id: string | null
+  vehicle_id: string | null
+  driver_id: string | null
+  notes: string
+  /** Los remitos, en el orden de visita. */
+  delivery_note_ids: string[]
+}
+
+/** Lo que pasó con un remito de la hoja, al rendirla. */
+export interface RouteSheetOutcome {
+  line_id: string
+  delivered: boolean
+  /** Quién lo recibió (si se entregó). */
+  received_by: string
+  /** Por qué no se entregó. */
+  reason: string
+}
+
+export const routeSheetLines = (db: DB, docId: string) =>
+  db.rsLines.filter((l) => l.document_id === docId).sort((a, b) => a.line_no - b.line_no)
+
+/** Con qué sale el reparto: "TR-001 Transportes Ruta 12 SRL" o "CAM-01 (AF 512 MS) con Ramón Ortiz". */
+export function transportLabel(db: DB, rs: T.RouteSheetHeader): string {
+  const carrier = db.carriers.find((c) => c.id === rs.carrier_id)
+  if (carrier) return carrierLabel(carrier)
+  const vehicle = db.vehicles.find((v) => v.id === rs.vehicle_id)
+  const driver = db.employees.find((e) => e.id === rs.driver_id)
+  return `${vehicle ? vehicleLabel(vehicle) : '—'}${driver ? ` con ${driver.first_name} ${driver.last_name}` : ''}`
+}
+
+/**
+ * El estado de entrega de un remito despachado: el de la última hoja de ruta que lo lleva, sin
+ * contar las anuladas. Sin hoja, o no entregado en la última, está pendiente.
+ */
+export function deliveryStatus(
+  db: DB,
+  deliveryNoteId: string,
+): { status: T.DeliveryStatus; sheet: T.Document | null; line: T.RouteSheetLine | null } {
+  let last: { sheet: T.Document; line: T.RouteSheetLine } | null = null
+  for (const line of db.rsLines) {
+    if (line.delivery_note_id !== deliveryNoteId) continue
+    const sheet = db.documents.find((d) => d.id === line.document_id)!
+    if (sheet.status === 'ANULADA') continue
+    if (!last || sheet.number > last.sheet.number) last = { sheet, line }
+  }
+  if (!last) return { status: 'PENDIENTE', sheet: null, line: null }
+  const status: T.DeliveryStatus =
+    last.sheet.status === 'BORRADOR'
+      ? 'PROGRAMADO'
+      : last.sheet.status === 'EN_CAMINO'
+        ? 'EN_CAMINO'
+        : last.line.outcome === 'ENTREGADO'
+          ? 'ENTREGADO'
+          : 'PENDIENTE'
+  return { status, ...last }
+}
+
+/** El transporte de la hoja (al armarla y al salir): un transportista activo, o un vehículo propio activo con un chofer activo. */
+function checkTransport(
+  db: DB,
+  companyId: string,
+  rs: Pick<RouteSheetInput, 'carrier_id' | 'vehicle_id' | 'driver_id'>,
+) {
+  if (rs.carrier_id) {
+    if (rs.vehicle_id || rs.driver_id)
+      fail('DATO_INVALIDO', 'Elegí un transportista o un vehículo propio con su chofer, no los dos.')
+    if (!db.carriers.find((c) => c.id === rs.carrier_id && c.company_id === companyId)?.is_active)
+      fail('DATO_INVALIDO', 'El transportista no existe o está desactivado.')
+    return
+  }
+  if (!rs.vehicle_id)
+    fail('DATO_INVALIDO', 'Elegí con qué sale el reparto: un transportista o un vehículo propio con su chofer.')
+  if (!db.vehicles.find((v) => v.id === rs.vehicle_id && v.company_id === companyId)?.is_active)
+    fail('DATO_INVALIDO', 'El vehículo no existe o está desactivado.')
+  if (db.employees.find((e) => e.id === rs.driver_id && e.company_id === companyId)?.status !== 'ACTIVO')
+    fail('DATO_INVALIDO', 'Elegí el chofer: un empleado activo del legajo.')
+}
+
+/** Un remito entra en la hoja si está despachado y pendiente de entrega (sin otra hoja en curso ni entregado). */
+function checkRoutedNote(db: DB, companyId: string, deliveryNoteId: string, sheetId: string | null): T.Document {
+  const dn = db.documents.find(
+    (d) => d.id === deliveryNoteId && d.company_id === companyId && d.doc_type === 'DELIVERY_NOTE',
+  )
+  if (!dn) fail('DATO_INVALIDO', 'Uno de los remitos no existe.')
+  if (dn.status !== 'CONFIRMADO')
+    fail('DATO_INVALIDO', `${dn.display_number} no está despachado: sólo se reparten los remitos despachados.`)
+  const current = deliveryStatus(db, dn.id)
+  if (current.status === 'ENTREGADO')
+    fail('DATO_INVALIDO', `${dn.display_number} ya se entregó con ${current.sheet!.display_number}.`)
+  if (current.status !== 'PENDIENTE' && current.sheet!.id !== sheetId)
+    fail('DATO_INVALIDO', `${dn.display_number} ya está en la hoja de ruta ${current.sheet!.display_number}.`)
+  return dn
+}
+
+const notesCount = (n: number) => `${n} ${n === 1 ? 'remito' : 'remitos'}`
+
+/** Logística arma la hoja de ruta de un día: el transporte y los remitos despachados, en el orden de visita. */
+export function cmdCreateRouteSheet(ctx: Ctx, companyId: string, input: RouteSheetInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'route_sheet.create')
+  const company = getCompany(db, companyId)
+  if (!isIsoDate(input.document_date)) fail('DATO_INVALIDO', 'La fecha de salida no es válida.')
+  if (input.document_date < businessDate(company))
+    fail('DATO_INVALIDO', 'La fecha de salida es hoy o un día posterior.')
+  const transport = {
+    carrier_id: input.carrier_id || null,
+    vehicle_id: input.vehicle_id || null,
+    driver_id: input.driver_id || null,
+  }
+  checkTransport(db, companyId, transport)
+  const notes = input.notes.trim()
+  if (notes.length > 500) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 500 caracteres.')
+  const ids = input.delivery_note_ids
+  if (!ids.length) fail('DATO_INVALIDO', 'Elegí los remitos despachados que lleva, en el orden de visita.')
+  if (ids.length > 30) fail('DATO_INVALIDO', 'Una hoja de ruta lleva hasta 30 remitos.')
+  if (new Set(ids).size !== ids.length) fail('DATO_INVALIDO', 'Un remito figura dos veces en la hoja.')
+  const notesToVisit = ids.map((id) => checkRoutedNote(db, companyId, id, null))
+  const doc = newDocument(ctx, companyId, 'ROUTE_SHEET', actor, {
+    document_date: input.document_date,
+    notes,
+    rs: { ...transport, departed_at: null, closed_at: null },
+  })
+  notesToVisit.forEach((dn, i) => {
+    db.rsLines.push({
+      id: uid(),
+      company_id: companyId,
+      document_id: doc.id,
+      line_no: i + 1,
+      delivery_note_id: dn.id,
+      outcome: null,
+      received_by: '',
+      reason: '',
+    })
+    link(ctx, companyId, dn.id, doc.id)
+  })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'route_sheet',
+    entity_id: doc.id,
+    entity_label: doc.display_number,
+    document_id: doc.id,
+    to_status: 'BORRADOR',
+    summary: `Armó ${doc.display_number} para el ${fmtDate(doc.document_date)}: ${notesCount(ids.length)} con ${transportLabel(db, doc.rs!)}`,
+  })
+  openTasksForStatus(ctx, doc, actor)
+  return { id: doc.id, display_number: doc.display_number }
+}
+
+/** Salir a repartir: se controlan otra vez el transporte y los remitos, que pasan a "en camino". */
+export function cmdDepartRouteSheet(ctx: Ctx, docId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'ROUTE_SHEET')
+  requireTransition(doc, 'SEND')
+  requirePermission(ctx, doc.company_id, 'route_sheet.create')
+  checkTransport(db, doc.company_id, doc.rs!)
+  const lines = routeSheetLines(db, doc.id)
+  for (const line of lines) checkRoutedNote(db, doc.company_id, line.delivery_note_id, doc.id)
+  transition(ctx, doc, 'SEND', {
+    summary: `Salió a repartir con ${doc.display_number}: ${notesCount(lines.length)} con ${transportLabel(db, doc.rs!)}`,
+  })
+  doc.rs = { ...doc.rs!, departed_at: ctx.now }
+}
+
+/**
+ * Rendir la hoja: cada remito queda entregado (con quién lo recibió) o no entregado (con el
+ * motivo), y entonces vuelve a estar pendiente para otra hoja. Ventas recibe un aviso por cada uno.
+ */
+export function cmdCloseRouteSheet(ctx: Ctx, docId: string, outcomes: RouteSheetOutcome[]) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'ROUTE_SHEET')
+  requireTransition(doc, 'CLOSE')
+  requirePermission(ctx, doc.company_id, 'route_sheet.create')
+  const lines = routeSheetLines(db, doc.id)
+  const byLine = new Map<string, RouteSheetOutcome>()
+  for (const o of outcomes) {
+    if (!lines.some((l) => l.id === o.line_id) || byLine.has(o.line_id))
+      fail('DATO_INVALIDO', 'Indicá el resultado de cada remito de la hoja, una sola vez.')
+    byLine.set(o.line_id, o)
+  }
+  const results = lines.map((line) => {
+    const dn = db.documents.find((d) => d.id === line.delivery_note_id)!
+    const o = byLine.get(line.id)
+    if (typeof o?.delivered !== 'boolean') fail('DATO_INVALIDO', `Indicá si ${dn.display_number} se entregó o no.`)
+    const receivedBy = o.delivered ? o.received_by.trim() : ''
+    const reason = o.delivered ? '' : o.reason.trim()
+    if (o.delivered && (receivedBy.length < 3 || receivedBy.length > 80))
+      fail('DATO_INVALIDO', `Indicá quién recibió ${dn.display_number}: nombre y apellido, de 3 a 80 caracteres.`)
+    if (!o.delivered && (reason.length < 3 || reason.length > 200))
+      fail('DATO_INVALIDO', `Indicá por qué no se entregó ${dn.display_number}: de 3 a 200 caracteres.`)
+    return { line, dn, delivered: o.delivered, receivedBy, reason }
+  })
+  for (const r of results)
+    Object.assign(r.line, {
+      outcome: r.delivered ? 'ENTREGADO' : 'NO_ENTREGADO',
+      received_by: r.receivedBy,
+      reason: r.reason,
+    })
+  const delivered = results.filter((r) => r.delivered).length
+  const actor = transition(ctx, doc, 'CLOSE', {
+    summary: `Rindió ${doc.display_number}: ${delivered} de ${notesCount(results.length)} entregados`,
+  })
+  doc.rs = { ...doc.rs!, closed_at: ctx.now }
+  for (const r of results) {
+    const customer = db.customers.find((c) => c.id === r.dn.customer_id)?.legal_name ?? 'El cliente'
+    notifyRoles(
+      ctx,
+      doc.company_id,
+      ['VENTAS'],
+      {
+        type: 'ENTREGA',
+        title: `${r.dn.display_number} ${r.delivered ? 'entregado' : 'no se entregó'}`,
+        body: r.delivered
+          ? `${customer} lo recibió (${r.receivedBy}) con ${doc.display_number}.`
+          : `${customer}: ${r.reason}. Vuelve a estar pendiente de entrega.`,
+        link_path: docPath(db, r.dn),
+        document_id: r.dn.id,
+      },
+      actor.user_id,
+    )
+  }
+}
+
+/** Una hoja en preparación se anula con el motivo: sus remitos siguen pendientes de entrega. */
+export function cmdCancelRouteSheet(ctx: Ctx, docId: string, reason: string) {
+  transition(ctx, getDoc(ctx.db, docId, 'ROUTE_SHEET'), 'CANCEL', { comment: reason })
 }
 
 // ============================================================ Órdenes de producción (docs/FASE_5_PRODUCCION_Y_COSTOS.md §3)
