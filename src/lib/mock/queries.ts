@@ -17,6 +17,7 @@ import { date, money, qty, todayAR } from '../format'
 import type { DB } from './db'
 import {
   accountBalance,
+  bankMode,
   accountLabel,
   activeBomOf,
   accountLinesUpTo,
@@ -3452,6 +3453,114 @@ export function paymentCandidates(db: DB, userId: string, companyId: string, sup
     })
 }
 
+// ============================================================ Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3)
+
+export interface BankMovementRow {
+  id: string
+  seq: number
+  origin: T.BankMovementOrigin
+  direction: T.BankDirection
+  amount: number
+  concept: string
+  status: T.BankMovementStatus
+  received_on: string
+  processed_on: string | null
+  transaction_number: string | null
+  processed_by_name: string | null
+  /** La operación de la empresa que la originó, si quien mira la puede leer. */
+  source: { id: string; display_number: string; path: string } | null
+  /** El saldo de la cuenta después del movimiento (sólo en los procesados). */
+  balance: number | null
+}
+
+export interface BankAccountView {
+  account: {
+    id: string
+    number: string
+    bank_key: string
+    alias: string
+    opened_on: string
+    overdraft_limit: number
+    ledger: { id: string; code: string; name: string }
+  }
+  mode: T.BankMode
+  /** Saldo según el banco: lo procesado. */
+  balance: number
+  /** Saldo según libros: el mayor de la cuenta contable que la refleja. */
+  book_balance: number
+  /** Lo que llegó al banco y todavía no procesó, en el orden de llegada. */
+  pending: BankMovementRow[]
+  /** Lo procesado, del más reciente al más viejo, con el saldo de cada momento. */
+  movements: BankMovementRow[]
+}
+
+/**
+ * La cuenta de la empresa en el Banco Aula (el homebanking y la bandeja del banco): el saldo según
+ * el banco al lado del de libros, lo pendiente y lo procesado. null si la empresa no tiene cuenta.
+ */
+export function bankAccountView(db: DB, userId: string, companyId: string): BankAccountView | null {
+  assertPerm(db, userId, companyId, 'bank.read')
+  const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (!account) return null
+  const eff = effectivePermissions(db, userId, companyId)
+  const ledger = db.accounts.find((a) => a.id === account.ledger_account_id)!
+  const row = (m: T.BankMovement, balance: number | null): BankMovementRow => {
+    const doc = m.source_document_id ? db.documents.find((d) => d.id === m.source_document_id) : undefined
+    return {
+      id: m.id,
+      seq: m.seq,
+      origin: m.origin,
+      direction: m.direction,
+      amount: m.amount,
+      concept: m.concept,
+      status: m.status,
+      received_on: m.received_on,
+      processed_on: m.processed_on,
+      transaction_number: m.transaction_number,
+      processed_by_name: m.processed_by ? nameOf(db, m.processed_by) : null,
+      source:
+        doc && can(eff, `${DOC_TYPES[doc.doc_type].resource}.read`)
+          ? { id: doc.id, display_number: doc.display_number, path: docPath(db, doc) }
+          : null,
+      balance,
+    }
+  }
+  const movements = db.bankMovements.filter((m) => m.bank_account_id === account.id)
+  // En el orden en que el banco los procesó: el saldo inicial primero, después por número de transacción.
+  const processed = movements
+    .filter((m) => m.status === 'PROCESADO')
+    .sort(
+      (a, b) =>
+        compareCodes(a.processed_on!, b.processed_on!) ||
+        Number(a.transaction_number !== null) - Number(b.transaction_number !== null) ||
+        compareCodes(a.transaction_number ?? '', b.transaction_number ?? ''),
+    )
+  let balance = 0
+  const rows = processed.map((m) => {
+    balance = round2(balance + (m.direction === 'CREDITO' ? m.amount : -m.amount))
+    return row(m, balance)
+  })
+  return {
+    account: {
+      id: account.id,
+      number: account.number,
+      bank_key: account.bank_key,
+      alias: account.alias,
+      opened_on: account.opened_on,
+      overdraft_limit: account.overdraft_limit,
+      ledger: { id: ledger.id, code: ledger.code, name: ledger.name },
+    },
+    mode: bankMode(db.companies.find((c) => c.id === companyId)!),
+    balance,
+    book_balance: accountBalance(db, ledger.id),
+    pending: movements
+      .filter((m) => m.status === 'PENDIENTE')
+      .sort((a, b) => a.seq - b.seq)
+      .map((m) => row(m, null)),
+    movements: rows.reverse(),
+  }
+}
+
 // ============================================================ Flujo de fondos (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7)
 
 export type CashConceptKey = 'APERTURA' | 'COBROS' | 'PAGOS' | 'SUELDOS' | 'IMPUESTOS' | 'TRANSFERENCIAS' | 'OTROS'
@@ -3843,7 +3952,13 @@ export function listTasks(
           mine,
           document_label: doc?.display_number ?? null,
           document_type: doc?.doc_type ?? null,
-          path: doc ? docPath(db, doc) : t.task_type === 'REPONER_STOCK' ? `/e/${company.slug}/stock` : null,
+          path: doc
+            ? docPath(db, doc)
+            : t.task_type === 'REPONER_STOCK'
+              ? `/e/${company.slug}/stock`
+              : t.task_type === 'PROCESAR_BANCO'
+                ? `/e/${company.slug}/banco/bandeja`
+                : null,
           assignee_label: t.assigned_user_id
             ? nameOf(db, t.assigned_user_id)
             : t.assigned_role

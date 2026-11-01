@@ -5,6 +5,7 @@
 // demo usan la contraseña DEMO_PASSWORD.
 
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
+import { ENVIRONMENT_ISLAND, ENVIRONMENT_SECTORS } from '../domain/catalog'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS } from '../domain/employees'
 import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
 import type * as T from '../domain/types'
@@ -35,6 +36,7 @@ import {
   insertLaborAgreements,
   insertVehicles,
   insertWorkCenters,
+  openBankAccount,
   scanStockAlerts,
   startAccounting,
   type Ctx,
@@ -55,6 +57,42 @@ function cuit(prefix: number, body: number): string {
 }
 
 let counter = 0
+/**
+ * El usuario demo del Banco Aula (Fase 8a), que opera el banco del entorno y no tiene roles en la
+ * empresa (SoD-12). También lo recibe la empresa demo de una base guardada antes de la Fase 8a.
+ */
+export function addDemoBankUser(db: DB, companyId: string, now: string) {
+  if (db.profiles.some((p) => p.username === 'banco')) return
+  const sector = db.sectors.find((s) => s.company_id === companyId && s.code === 'BAN')
+  const profile: T.Profile = {
+    id: 'usr-banco',
+    username: 'banco',
+    password: DEMO_PASSWORD,
+    first_name: 'Brenda',
+    last_name: 'Ibarra',
+    app_role: 'ESTUDIANTE',
+    is_active: true,
+    must_change_password: false,
+    created_at: now,
+  }
+  db.profiles.push(profile)
+  const member = {
+    id: id('mbr'),
+    company_id: companyId,
+    user_id: profile.id,
+    job_title: 'Oficial del Banco Aula',
+    is_active: true,
+  }
+  db.members.push(member)
+  db.memberRoles.push({
+    id: id('mro'),
+    company_id: companyId,
+    member_id: member.id,
+    role_code: 'BANCO',
+    sector_id: sector?.id ?? null,
+  })
+}
+
 const id = (prefix: string) => `${prefix}-${String(++counter).padStart(4, '0')}-${crypto.randomUUID().slice(0, 8)}`
 
 export function buildSeed(): DB {
@@ -115,6 +153,8 @@ export function buildSeed(): DB {
     carriers: [],
     vehicles: [],
     rsLines: [],
+    bankAccounts: [],
+    bankMovements: [],
     jobCategories: [],
     employees: [],
     pyLines: [],
@@ -171,6 +211,7 @@ export function buildSeed(): DB {
     'RRHH y Sueldos',
     'Producción y Costos',
     'Depósito y Logística',
+    ENVIRONMENT_ISLAND.name,
   ]
   const islands = islandNames.map((name, i) => ({ id: id('isl'), company_id: companyId, number: i + 1, name }))
   db.islands.push(...islands)
@@ -180,6 +221,7 @@ export function buildSeed(): DB {
     ['GER', 'Gerencia', 1], ['CGE', 'Control de Gestión', 1], ['COM', 'Compras', 2], ['VEN', 'Ventas', 3],
     ['CON', 'Contabilidad', 4], ['IMP', 'Impuestos', 4], ['TES', 'Tesorería y Finanzas', 5], ['RRH', 'RRHH y Sueldos', 6],
     ['PRO', 'Producción', 7], ['COS', 'Costos', 7], ['DEP', 'Depósito', 8], ['LOG', 'Logística', 8],
+    ...ENVIRONMENT_SECTORS.map(([code, name]): [string, string, number] => [code, name, ENVIRONMENT_ISLAND.number]),
   ]
   const sector: Record<string, string> = {}
   for (const [code, name, island] of sectorDefs) {
@@ -271,6 +313,7 @@ export function buildSeed(): DB {
     ],
     'Encargado de Depósito',
   )
+  addDemoBankUser(db, companyId, now)
 
   // ------------------------------------------------------------ Proveedores
   const audited = { created_at: now, created_by: null, updated_at: now, updated_by: null }
@@ -443,6 +486,8 @@ export function buildSeed(): DB {
 
   // ------------------------------------------------------------ Contabilidad: plan de cuentas, ejercicio y apertura
   startAccounting(ctx(null, 290), companyId)
+  // La cuenta en el Banco Aula, con el saldo inicial: lo que sigue mueve el banco con órdenes.
+  openBankAccount(ctx(null, 290), companyId)
 
   // ------------------------------------------------------------ Listas de materiales y centros de trabajo (a validar)
   insertWorkCenters(ctx(null, 289), companyId, DEMO_WORK_CENTERS)

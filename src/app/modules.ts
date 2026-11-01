@@ -49,8 +49,10 @@ import {
   Tags,
   TrendingUp,
   Truck,
+  University,
   Users,
   Van,
+  Vault,
   Wallet,
   Workflow,
   Wrench,
@@ -127,6 +129,8 @@ export const NAV: NavGroup[] = [
       { label: 'Órdenes de pago', path: 'pagos/ordenes', icon: Banknote, permission: 'payment_order.read' },
       { label: 'Recibos de cobro', path: 'pagos/cobros', icon: HandCoins, permission: 'customer_receipt.read' },
       { label: 'Cajas y bancos', path: 'pagos/cajas-y-bancos', icon: Landmark, permission: 'treasury.read' },
+      // La cuenta en el Banco Aula, vista desde el banco (Fase 8a).
+      { label: 'Banco Aula', path: 'pagos/banco-aula', icon: Vault, permission: 'bank.read' },
       {
         label: 'Transferencias',
         path: 'pagos/transferencias',
@@ -242,6 +246,11 @@ export const NAV: NavGroup[] = [
       { label: 'Proveedores', path: 'proveedores', icon: Truck, permission: 'supplier.read' },
       { label: 'Clientes', path: 'clientes', icon: Users, permission: 'customer.read' },
     ],
+  },
+  {
+    // El entorno de la empresa, que operan estudiantes con roles propios (Fase 8).
+    label: 'Entorno',
+    items: [{ label: 'Bandeja del banco', path: 'banco/bandeja', icon: University, permission: 'bank.operate' }],
   },
   {
     label: 'Control',

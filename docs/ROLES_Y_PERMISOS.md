@@ -9,7 +9,7 @@ La lista original de roles mezcla tres preguntas distintas. Separarlas simplific
 | Capa | Pregunta | Valores |
 |---|---|---|
 | Escuela (instancia) | ¿Quién sos en la escuela? | `SUPERADMIN`, `ADMIN`, `DOCENTE`, `ESTUDIANTE` |
-| Funcional (por empresa) | ¿Qué puesto ocupás en la empresa simulada? | `GERENCIA`, `COMPRAS`, `VENTAS`, `DEPOSITO`, `PRODUCCION`, `CONTABILIDAD`, `TESORERIA`, `RRHH`, `IMPUESTOS`, `LOGISTICA`, `AUDITOR`, `DOCENTE` (supervisor) |
+| Funcional (por empresa) | ¿Qué puesto ocupás en la empresa simulada? | `GERENCIA`, `COMPRAS`, `VENTAS`, `DEPOSITO`, `PRODUCCION`, `CONTABILIDAD`, `TESORERIA`, `RRHH`, `IMPUESTOS`, `LOGISTICA`, `AUDITOR`, `DOCENTE` (supervisor); del entorno (Fase 8): `BANCO` |
 | Organizacional | ¿En qué sector e isla trabajás? | Sectores e islas de cada empresa |
 
 - `ESTUDIANTE` **no otorga permisos por sí mismo**: es la identidad escolar. Los permisos surgen de los roles funcionales asignados en cada empresa.
@@ -43,6 +43,7 @@ Cada escuela tiene su propia instancia ([docs/INSTANCIAS.md](INSTANCIAS.md)); es
 | `COSTOS` *(Fase 5)* | Costos | 7 | Costos | Costeo de órdenes, previsto vs. real |
 | `DEPOSITO` | Depósito y Stock | 8 | Depósito | Recepciones, stock, ajustes, alertas de mínimo, SC de reposición |
 | `LOGISTICA` | Logística | 8 | Logística | Consulta recepciones y stock; transportistas y vehículos propios (Fase 7c.1); hojas de ruta y entregas (7c.2) |
+| `BANCO` *(Fase 8a)* | Banco Aula | 9 (entorno) | Banco Aula | Opera el banco del entorno: procesa las órdenes que le llegan de la empresa (pagos, cobros, depósitos y transferencias). No tiene roles de la empresa (SoD-12) |
 | `DOCENTE` | Docente (supervisor) | — | — | Todo, incluido aprobar como supervisor |
 
 `CONTROL_GESTION` podrá agregarse en la Fase 7 como rol de indicadores. Los roles son datos de catálogo: agregar uno no requiere cambiar código.
@@ -67,6 +68,7 @@ Formato `recurso.acción`. Acciones: `read` (consultar), `create` (crear/enviar)
 | hr (Fase 6) | `employee.read/create/update` (convenios, categorías y legajos del personal); desde la 6b, `payroll.read/create/cancel` (liquidaciones de sueldos); desde la 6c, `payroll.pay` (pagar los sueldos y las cargas sociales) y, desde la 6d, `payroll.approve` (Gerencia autoriza o devuelve la liquidación) |
 | tax (Fase 7) | `tax_return.read/create/cancel/pay` (libros IVA y declaraciones de impuestos) |
 | logistics (Fase 7c) | `carrier.read/create/update` (transportistas y vehículos propios: los mantiene Logística y los consultan Gerencia, Depósito y Auditoría); desde la 7c.2, `route_sheet.read/create/cancel` (hojas de ruta: las arma, las rinde y las anula Logística; las consultan Depósito, Ventas, Gerencia y Auditoría) |
+| bank (Fase 8a) | `bank.read` (la cuenta de la empresa en el Banco Aula: datos, saldo según el banco, lo pendiente y los movimientos; la ven Tesorería, Contabilidad, Gerencia, Auditoría y Banco) y `bank.operate` (procesar las órdenes de la bandeja: Banco) |
 | audit | `audit.read`, `audit.export` |
 
 Implícitos para cualquier miembro: ver y tomar sus tareas, sus notificaciones, su perfil, y el historial de los documentos que puede leer.
@@ -173,6 +175,7 @@ Se implementa como regla explícita porque es **contenido a enseñar**, no sólo
 | SoD-6 | Quien liquida los sueldos (prepara o envía a autorizar la liquidación) no los paga ni paga sus cargas sociales | Matriz + validación en `payroll_pay_salaries` y `payroll_pay_charges` | 6c |
 | SoD-10 | Quien liquida un impuesto (prepara o presenta la declaración) no lo paga | Matriz + validación en `tax_return_pay` | 7a |
 | SoD-11 | Quien prepara la liquidación de sueldos no la autoriza ni la devuelve | Validación en `payroll_approve` y `payroll_reject` | 6d |
+| SoD-12 | Quien opera el banco del entorno (rol `BANCO`) no tiene roles de la empresa, ni al revés; el docente queda afuera de la regla | Validación en `member_assign_role` | 8a |
 
 - Configuración por empresa: `settings.sod_enabled` (por defecto **activado**). Si una isla tiene un solo estudiante, el docente puede desactivarla o aprobar como supervisor.
 - Cuando una acción se bloquea por esta regla, la interfaz muestra el motivo y la explicación: el bloqueo es una oportunidad de aprendizaje.

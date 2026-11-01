@@ -239,12 +239,15 @@ async function sameRead(
 ) {
   let want: unknown
   try {
-    want = normalize(JSON.parse(JSON.stringify(simulated(mockId(username)) ?? null)))
+    want = renumber(normalize(JSON.parse(JSON.stringify(simulated(mockId(username)) ?? null))))
   } catch {
     await expect(real(await pgAs(username)), label).rejects.toBeInstanceOf(E.BusinessError)
     return
   }
-  let got = project(loaded.fromPg(await real(await pgAs(username))), want)
+  // Los id numéricos, por su orden antes de proyectar: si no, un evento de auditoría de la base se
+  // proyectaría sobre el del simulador que tiene su mismo número (las secuencias se separan cuando
+  // una operación falla en la base) y perdería las claves que el otro no tiene.
+  let got = project(renumber(loaded.fromPg(await real(await pgAs(username)))), want)
   if (ties) {
     want = settle(want, ties)
     got = settle(got, ties)
@@ -4197,6 +4200,111 @@ describe('paridad de comandos', () => {
     await reads('con la anulada')
   })
 
+  it('banco: órdenes de los asientos, la bandeja de Banco, el modo, la reversión al anular y la SoD-12', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const sector = (code: string) => mock.sectors.find((s) => s.company_id === company && s.code === code)!.id
+    const input: E.FundsTransferInput = {
+      from_account_id: account('1.1.01.01'),
+      to_account_id: account('1.1.01.03'),
+      amount: 1000,
+      reference: 'Boleta 0003-0001',
+      notes: '',
+    }
+    const pgInput = { ...input, from_account_id: pg(input.from_account_id), to_account_id: pg(input.to_account_id) }
+    const deposit = (label: string) =>
+      created(
+        label,
+        'tesoreria',
+        (c) => E.cmdCreateFundsTransfer(c, company, input, true),
+        (b) => b.commands.createFundsTransfer(companyPg, pgInput, true),
+      )
+    const cancel = (label: string, id: string) =>
+      step(
+        label,
+        'tesoreria',
+        (c) => E.cmdCancelFundsTransfer(c, id, 'Se cargó mal'),
+        (b) => b.commands.cancelFundsTransfer(pg(id), 'Se cargó mal'),
+      )
+    const mode = (label: string, bank_mode: CompanySettings['bank_mode']) =>
+      step(
+        label,
+        'docente',
+        (c) => E.cmdUpdateCompanySettings(c, company, { bank_mode }),
+        (b) => b.commands.updateCompanySettings(companyPg, { bank_mode }),
+      )
+    const view = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.bankAccount(companyPg),
+        (u) => Q.bankAccountView(mock, u, company),
+      )
+    const processOrders = (label: string, username: string, ids: string[]) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdProcessBankOrders(c, company, ids),
+        (b) => b.commands.processBankOrders(companyPg, ids.map(pg)),
+      )
+    /** La orden pendiente más vieja: el mismo registro en los dos lados. */
+    const pendingOrder = async () => {
+      const order = mock.bankMovements
+        .filter((m) => m.company_id === company && m.status === 'PENDIENTE')
+        .sort((a, b) => a.seq - b.seq)[0]
+      const [row] = await db.admin<{ id: string }>(
+        `select id from public.bank_movements where company_id = $1 and status = 'PENDIENTE' order by seq limit 1`,
+        [companyPg],
+      )
+      loaded.link(order.id, row.id)
+      return order.id
+    }
+
+    // Operado por estudiantes: la orden espera en la bandeja de Banco, con su tarea.
+    expect(await mode('un modo que no existe', 'OTRO' as never)).toBeNull()
+    expect(await mode('el banco lo operan estudiantes', 'ESTUDIANTES')).not.toBeNull()
+    await deposit('un depósito queda pendiente en el banco')
+    await view('la bandeja con la orden pendiente (banco)', 'banco')
+    await view('lo enviado sin procesar (tesorería)', 'tesoreria')
+    const first = await pendingOrder()
+    expect(await processOrders('Tesorería no procesa órdenes', 'tesoreria', [first])).toBeNull()
+    expect(await processOrders('sin órdenes', 'banco', [])).toBeNull()
+    expect(await processOrders('la misma orden dos veces', 'banco', [first, first])).toBeNull()
+    expect(await processOrders('Banco la procesa', 'banco', [first])).not.toBeNull()
+    expect(await processOrders('ya procesada', 'banco', [first])).toBeNull()
+
+    // Anular la operación: la orden pendiente se retira y la procesada se revierte.
+    const pending = await deposit('otro depósito pendiente')
+    expect(await cancel('anular el depósito pendiente', pending)).not.toBeNull()
+    expect(await mode('vuelve al sistema sin nada pendiente', 'AUTOMATICO')).not.toBeNull()
+    const processed = await deposit('en modo automático se procesa en el momento')
+    expect(await cancel('anular un depósito ya procesado', processed)).not.toBeNull()
+
+    // Al volver al sistema, lo pendiente se procesa con la fecha del día.
+    expect(await mode('otra vez estudiantes', 'ESTUDIANTES')).not.toBeNull()
+    await deposit('queda pendiente hasta volver al sistema')
+    expect(await mode('al volver al sistema se procesa', 'AUTOMATICO')).not.toBeNull()
+    await view('la cuenta al día (tesorería)', 'tesoreria')
+
+    // SoD-12: quien opera el banco no trabaja en la empresa, ni al revés.
+    expect(
+      await step(
+        'Tesorería no puede operar el banco',
+        'docente',
+        (c) => E.cmdAssignRole(c, company, mockId('tesoreria'), 'BANCO', sector('BAN')),
+        (b) => b.commands.assignRole(companyPg, pg(mockId('tesoreria')), 'BANCO', pg(sector('BAN'))),
+      ),
+    ).toBeNull()
+    expect(
+      await step(
+        'el banco no puede tener un rol de la empresa',
+        'docente',
+        (c) => E.cmdAssignRole(c, company, mockId('banco'), 'TESORERIA', sector('TES')),
+        (b) => b.commands.assignRole(companyPg, pg(mockId('banco')), 'TESORERIA', pg(sector('TES'))),
+      ),
+    ).toBeNull()
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -4241,6 +4349,7 @@ describe('paridad de comandos', () => {
       'contabilidad',
       'tesoreria',
       'ventas',
+      'banco',
     ]
     for (const username of users) {
       for (const type of types)
@@ -4360,6 +4469,12 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.treasuryAccounts(companyPg),
         (u) => Q.treasuryAccounts(mock, u, company),
+      )
+      await sameRead(
+        `la cuenta en el Banco Aula (${username})`,
+        username,
+        (b) => b.api.bankAccount(companyPg),
+        (u) => Q.bankAccountView(mock, u, company),
       )
       for (const code of ['PRV-001', 'PRV-010'])
         await sameRead(

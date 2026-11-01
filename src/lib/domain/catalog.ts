@@ -6,6 +6,8 @@ import type {
   AccountType,
   AdjustmentReason,
   Badge,
+  BankMode,
+  BankMovementStatus,
   DeliveryStatus,
   DocType,
   JournalEntryOrigin,
@@ -37,6 +39,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   accounting: { name: 'Contabilidad', lockable: true },
   management: { name: 'Tablero de gestión', lockable: true },
   audit: { name: 'Auditoría', lockable: true },
+  bank: { name: 'Banco Aula', lockable: true },
 }
 
 export const RESOURCE_MODULE: Record<string, ModuleCode> = {
@@ -82,6 +85,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   dashboard: 'management',
   task: 'management',
   audit: 'audit',
+  bank: 'bank',
 }
 
 export function permissionModule(permission: string): ModuleCode {
@@ -112,6 +116,7 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.' },
   LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Organiza el reparto de lo que despacha Depósito: transportistas, vehículos y hojas de ruta.' },
+  BANCO: { code: 'BANCO', name: 'Banco Aula', island: 9, defaultSector: 'BAN', isSupervisor: false, description: 'Opera el banco del entorno: procesa las órdenes que le llegan de la empresa. No tiene roles en la empresa (SoD-12).' },
   DOCENTE: { code: 'DOCENTE', name: 'Docente (supervisor)', island: null, defaultSector: null, isSupervisor: true, description: 'Todos los permisos en la empresa; puede actuar como supervisor.' },
 }
 
@@ -127,6 +132,7 @@ export const ROLE_ORDER: RoleCode[] = [
   'PRODUCCION',
   'DEPOSITO',
   'LOGISTICA',
+  'BANCO',
   'DOCENTE',
 ]
 
@@ -156,6 +162,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'carrier.read', 'route_sheet.read',
     // Autoriza las liquidaciones de sueldos o las devuelve a RRHH (Fase 6d; SoD-11).
     'payroll.read', 'payroll.approve',
+    // La cuenta en el Banco Aula: el homebanking de la empresa (Fase 8a).
+    'bank.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -215,6 +223,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
     'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read',
+    'bank.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -226,6 +235,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
     // Paga los sueldos y las cargas sociales (Fase 6c; SoD-6: no los que liquidó) y los impuestos (7a).
     'payroll.read', 'payroll.pay', 'tax_return.read', 'tax_return.pay',
+    // Opera contra el Banco Aula: ve su cuenta, lo que el banco procesó y lo que todavía no (Fase 8a).
+    'bank.read',
   ],
   // Legajos y categorías del personal (Fase 6a).
   RRHH: [
@@ -257,8 +268,10 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
-    'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read',
+    'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read', 'bank.read',
   ],
+  // El banco del entorno (Fase 8a): procesa las órdenes que le llegan de la empresa.
+  BANCO: [...CORE_READ, 'bank.read', 'bank.operate'],
   DOCENTE: [],
 }
 
@@ -839,7 +852,45 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   PRESENTAR_DJ: 'Presentar declaración',
   PAGAR_DJ: 'Pagar impuesto',
   REPONER_STOCK: 'Evaluar reposición',
+  PROCESAR_BANCO: 'Procesar órdenes del banco',
   CONSIGNA: 'Consigna del docente',
+}
+
+// ---------------------------------------------------------------- Banco Aula (Fase 8a)
+
+/** La isla 9: el entorno de la empresa, que operan estudiantes con roles propios (a validar). */
+export const ENVIRONMENT_ISLAND = { number: 9, name: 'Entorno: banco y fisco' }
+export const ENVIRONMENT_SECTORS: [code: string, name: string][] = [
+  ['BAN', 'Banco Aula'],
+  ['FIS', 'Fisco simulado'],
+]
+/** Los roles del entorno: no se combinan con los de la empresa (SoD-12). */
+export const ENVIRONMENT_ROLES: RoleCode[] = ['BANCO']
+
+export const BANK_MODES: Record<BankMode, { label: string; description: string }> = {
+  AUTOMATICO: {
+    label: 'Lo opera el sistema',
+    description: 'El banco procesa cada orden en el momento en que la empresa la envía.',
+  },
+  ESTUDIANTES: {
+    label: 'Lo operan estudiantes',
+    description: 'Cada orden espera en la bandeja del Banco Aula hasta que la procesa alguien con el rol Banco.',
+  },
+}
+
+/** La cuenta de cada empresa en el Banco Aula: datos de formato propio, iguales en todas (a validar). */
+export const BANK_ACCOUNT_DEFAULTS = {
+  ledger_code: '1.1.01.03',
+  number: 'CC 0001-000001',
+  bank_key: 'SIM0001000000000017',
+  /** Acuerdo de descubierto (se usa desde la Fase 8b). */
+  overdraft_limit: 1_000_000,
+}
+
+export const BANK_MOVEMENT_STATUSES: Record<BankMovementStatus, { label: string; badge: Badge }> = {
+  PENDIENTE: { label: 'Pendiente', badge: 'warning' },
+  PROCESADO: { label: 'Procesada', badge: 'success' },
+  ANULADO: { label: 'Anulada', badge: 'neutral' },
 }
 
 // ---------------------------------------------------------------- Notificaciones

@@ -15,6 +15,8 @@ export type RoleCode =
   | 'IMPUESTOS'
   | 'LOGISTICA'
   | 'AUDITOR'
+  /** El oficial del Banco Aula (Fase 8a): opera el banco del entorno, no la empresa. */
+  | 'BANCO'
   | 'DOCENTE'
 
 export type ModuleCode =
@@ -31,9 +33,10 @@ export type ModuleCode =
   | 'accounting'
   | 'management'
   | 'audit'
+  | 'bank'
 
 export type PermissionAction =
-  'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award' | 'issue'
+  'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award' | 'issue' | 'operate'
 
 export type VatCondition = 'RESPONSABLE_INSCRIPTO' | 'MONOTRIBUTO' | 'EXENTO' | 'CONSUMIDOR_FINAL'
 
@@ -143,7 +146,12 @@ export interface CompanySettings {
   payroll?: Partial<PayrollRates>
   /** La alícuota de ingresos brutos (Fase 7b); sin ella, IIBB_DEFAULT_PCT. */
   iibb_pct?: number
+  /** Quién opera el Banco Aula (Fase 8a); sin el dato, el sistema. */
+  bank_mode?: BankMode
 }
+
+/** El Banco Aula lo opera el sistema (responde en el momento) o lo operan estudiantes con el rol Banco. */
+export type BankMode = 'AUTOMATICO' | 'ESTUDIANTES'
 
 /** Porcentajes de la liquidación de sueldos (a validar: sin pretensión de exactitud legal). */
 export interface PayrollRates {
@@ -321,6 +329,61 @@ export interface Vehicle extends Audited {
   plate: string
   description: string
   is_active: boolean
+}
+
+/**
+ * La cuenta de la empresa en el Banco Aula (tabla bank_accounts, Fase 8a): la cuenta corriente,
+ * vinculada a la cuenta contable que la refleja en los libros.
+ */
+export interface BankAccount extends Audited {
+  id: string
+  company_id: string
+  /** Banco cuenta corriente: la cuenta contable de la empresa para esta cuenta. */
+  ledger_account_id: string
+  /** Formato propio del Banco Aula: CC 0001-000001. */
+  number: string
+  /** Clave bancaria simulada: SIM y 16 dígitos (no la de 22). */
+  bank_key: string
+  alias: string
+  opened_on: string
+  /** Acuerdo de descubierto: se usa desde la Fase 8b. */
+  overdraft_limit: number
+  is_active: boolean
+}
+
+/** El saldo inicial, una orden que llega de una operación de la empresa o (desde la 8b) un cargo del banco. */
+export type BankMovementOrigin = 'APERTURA' | 'ORDEN' | 'BANCO'
+
+/** Como en un extracto: crédito, entra dinero a la cuenta; débito, sale. */
+export type BankDirection = 'CREDITO' | 'DEBITO'
+
+export type BankMovementStatus = 'PENDIENTE' | 'PROCESADO' | 'ANULADO'
+
+/** Un movimiento de la cuenta en el Banco Aula (tabla bank_movements). */
+export interface BankMovement {
+  id: string
+  company_id: string
+  bank_account_id: string
+  /** Orden de llegada dentro de la cuenta. */
+  seq: number
+  origin: BankMovementOrigin
+  direction: BankDirection
+  amount: number
+  concept: string
+  /** La operación de la empresa que la originó: el pago, el cobro, la transferencia. */
+  source_document_id: string | null
+  /** La línea del libro mayor que la refleja en los libros. */
+  journal_line_id: string | null
+  /** La orden que revierte (al anular una operación que el banco ya procesó). */
+  reverses_id: string | null
+  status: BankMovementStatus
+  /** Cuándo llegó al banco. */
+  received_on: string
+  processed_on: string | null
+  /** SIM-000001: correlativo de la cuenta, al procesarla. */
+  transaction_number: string | null
+  processed_by: string | null
+  created_at: string
 }
 
 export interface WorkCenter extends Audited {

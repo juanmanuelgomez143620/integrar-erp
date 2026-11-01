@@ -261,6 +261,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
       rpc('supplier_account', { ...company(companyId), p_supplier_id: supplierId }),
     postingRules: (companyId) => rpc('posting_rules_list', company(companyId)),
     treasuryAccounts: (companyId) => rpc('treasury_accounts', company(companyId)),
+    bankAccount: (companyId) => rpc('bank_account_view', company(companyId)),
     cashFlow: (companyId, from, to) => rpc('cash_flow', { ...company(companyId), p_from: from, p_to: to }),
     cashProjection: (companyId) => rpc('cash_projection', company(companyId)),
     issuedCheques: (companyId) => rpc('issued_cheques', company(companyId)),
@@ -459,6 +460,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     departRouteSheet: (docId) => rpc('rs_depart', doc(docId)),
     closeRouteSheet: (docId, outcomes) => rpc('rs_close', { ...doc(docId), p_lines: outcomes }),
     cancelRouteSheet: (docId, reason) => rpc('rs_cancel', { ...doc(docId), p_reason: reason }),
+    processBankOrders: (companyId, ids) => rpc('bank_orders_process', { ...company(companyId), p_ids: ids }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

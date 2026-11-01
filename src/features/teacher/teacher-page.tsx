@@ -19,7 +19,7 @@ import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { AuditTimeline } from '@/components/common/audit-timeline'
 import { api, commands, type MemberView } from '@/lib/api'
-import { MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
+import { BANK_MODES, MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
 import type { ModuleCode, RoleCode } from '@/lib/domain/types'
 import { relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
@@ -230,6 +230,22 @@ export function TeacherPage() {
                   disabled={setSettings.isPending}
                   checked={company.company.settings.allow_negative_stock}
                   onCheckedChange={(v) => setSettings.mutate([{ allow_negative_stock: v }])}
+                />
+              </li>
+              <li className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium">Banco Aula operado por estudiantes</div>
+                  <div className="text-xs text-muted-foreground">
+                    {BANK_MODES[company.company.settings.bank_mode ?? 'AUTOMATICO'].description} Para que lo operen
+                    estudiantes, asigná el rol Banco Aula (sin roles de la empresa). Al volver al sistema, lo pendiente
+                    se procesa con la fecha de hoy.
+                  </div>
+                </div>
+                <Switch
+                  aria-label="Banco Aula operado por estudiantes"
+                  disabled={setSettings.isPending}
+                  checked={company.company.settings.bank_mode === 'ESTUDIANTES'}
+                  onCheckedChange={(v) => setSettings.mutate([{ bank_mode: v ? 'ESTUDIANTES' : 'AUTOMATICO' }])}
                 />
               </li>
             </ul>

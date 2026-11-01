@@ -335,6 +335,11 @@ describe('tesorería', () => {
       await same(u, () => Q.treasuryAccounts(mock, userId(u), company), 'treasury_accounts', [companyPg])
   })
 
+  it('la cuenta en el Banco Aula: saldos, lo pendiente y lo procesado (y quién lo ve)', async () => {
+    for (const u of [...USERS, 'banco'])
+      await same(u, () => Q.bankAccountView(mock, userId(u), company), 'bank_account_view', [companyPg])
+  })
+
   it('cheques emitidos y movimientos para conciliar', async () => {
     const year = new Date().getFullYear()
     const accountId = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id

@@ -278,6 +278,37 @@ const vehicles = async (company: string) =>
     .map((r) => r.line)
     .sort()
 
+/** La cuenta en el Banco Aula de la demo y su saldo inicial (Fase 8a). */
+const mockBank = (() => {
+  const account = seed.bankAccounts.find((b) => b.company_id === mockTemplate.id)!
+  const start = seed.bankMovements.find((m) => m.bank_account_id === account.id && m.origin === 'APERTURA')!
+  return {
+    account: {
+      number: account.number,
+      bank_key: account.bank_key,
+      alias: account.alias,
+      opened_on: account.opened_on,
+      overdraft_limit: account.overdraft_limit,
+    },
+    start: { origin: start.origin, direction: start.direction, amount: start.amount, status: start.status },
+  }
+})()
+
+/** La cuenta en el Banco Aula de una empresa y sus movimientos, en el orden de llegada. */
+async function bank(company: string) {
+  const [account] = await db.admin<Record<string, unknown>>(
+    `select b.number, b.bank_key, b.alias, b.opened_on::text as opened_on, b.overdraft_limit::float as overdraft_limit
+       from public.bank_accounts b where b.company_id = $1`,
+    [company],
+  )
+  const movements = await db.admin<Record<string, unknown>>(
+    `select m.origin, m.direction, m.amount::float as amount, m.status from public.bank_movements m
+      where m.company_id = $1 order by m.seq`,
+    [company],
+  )
+  return { account, movements }
+}
+
 const createFor = async (user: string, courseId: string) =>
   (
     await db.as<{ r: { id: string; slug: string } }>(u[user], 'select public.company_create_from_template($1) as r', [
@@ -479,6 +510,13 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await vehicles(template)).toEqual(mockVehicles)
   })
 
+  it('abre su cuenta en el Banco Aula con el saldo inicial de la apertura, como la demo', async () => {
+    const { account, movements } = await bank(template)
+    expect(account).toEqual(mockBank.account)
+    // La plantilla no tiene las operaciones de ejemplo de la demo: sólo el saldo inicial.
+    expect(movements).toEqual([mockBank.start])
+  })
+
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
     const before = await count('documents', template)
     const [{ id }] = await db.admin<{ id: string }>('select private.seed_demo_company() as id')
@@ -549,6 +587,21 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await staff(created.id)).toEqual(mockStaff)
     expect(await carriers(created.id)).toEqual(mockCarriers)
     expect(await vehicles(created.id)).toEqual(mockVehicles)
+  })
+
+  it('abre su cuenta en el Banco Aula con la apertura y trae la isla del entorno', async () => {
+    const { account, movements } = await bank(created.id)
+    expect(account).toMatchObject({ number: mockBank.account.number, alias: 'FORESTAL.NORTE.BA' })
+    expect(movements).toEqual([mockBank.start])
+    const sectors = await db.admin<{ code: string; island: number }>(
+      `select s.code, i.number as island from public.sectors s join public.islands i on i.id = s.island_id
+        where s.company_id = $1 and s.code in ('BAN', 'FIS') order by s.code`,
+      [created.id],
+    )
+    expect(sectors).toEqual([
+      { code: 'BAN', island: 9 },
+      { code: 'FIS', island: 9 },
+    ])
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

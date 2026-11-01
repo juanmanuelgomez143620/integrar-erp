@@ -258,7 +258,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_company_id: company,
     p_document_id: doc,
     p_task_id: B.task,
-    p_ids: `{${B.notification}}`,
+    // La bandeja del banco recibe un movimiento de la cuenta de B; los avisos, uno de B.
+    p_ids: fn === 'bank_orders_process' ? `{${B.bankMovement}}` : `{${B.notification}}`,
     p_user_id: u.alumnoB,
     p_user_ids: `{${u.alumnoB}}`,
     p_member_role_id: B.memberRole,
@@ -696,6 +697,7 @@ beforeAll(async () => {
   // El transporte de B: un transportista y el camión de la demo.
   B.carrier = (await one(`select id from public.carriers where company_id = $1 and code = 'TR-001'`, [B.id])).id
   B.vehicle = (await one(`select id from public.vehicles where company_id = $1 and code = 'CAM-01'`, [B.id])).id
+  B.bankMovement = (await one(`select id from public.bank_movements where company_id = $1 limit 1`, [B.id])).id
   // La hoja de ruta de B, con su remito despachado.
   B.routeSheet = (
     await rpc<{ id: string }>('docenteB', 'rs_create', {

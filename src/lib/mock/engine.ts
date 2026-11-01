@@ -6,9 +6,15 @@
 import {
   ACTION_VERBS,
   ADJUSTMENT_REASONS,
+  BANK_ACCOUNT_DEFAULTS,
+  BANK_MODES,
+  BANK_MOVEMENT_STATUSES,
   BOM_COMPONENT_TYPES,
   DOC_STATUSES,
   DOC_TYPES,
+  ENVIRONMENT_ISLAND,
+  ENVIRONMENT_ROLES,
+  ENVIRONMENT_SECTORS,
   MODULES,
   IIBB_DEFAULT_PCT,
   PAYROLL_DEFAULT_RATES,
@@ -2088,6 +2094,9 @@ function postEntry(ctx: Ctx, doc: T.Document, summary?: (entryNumber: number) =>
     summary: summary?.(number) ?? `Registró ${doc.display_number} como asiento N.º ${number} del libro diario`,
   })
   doc.je = { ...doc.je!, fiscal_year_id: period.fiscal_year_id, entry_number: number, posted_at: ctx.now }
+  // El banco (Fase 8a): los automáticos mandan sus órdenes desde postEvent, con su operación.
+  if (doc.je.origin === 'MANUAL') sendBankOrders(ctx, doc, doc)
+  else if (doc.je.origin === 'CONTRAASIENTO') reverseBankOrders(ctx, doc)
 }
 
 export function cmdCreateJournalEntry(ctx: Ctx, companyId: string, input: JournalEntryInput, confirm: boolean) {
@@ -2500,6 +2509,7 @@ function postEvent(
     actor,
   )
   link(ctx, source.company_id, source.id, entry.id)
+  sendBankOrders(ctx, source, entry)
   return entry
 }
 
@@ -3649,6 +3659,367 @@ export function cmdCancelBankReconciliation(ctx: Ctx, docId: string, reason: str
   if (doc.status === 'CONFIRMADA' && last && last.id !== doc.id)
     fail('TRANSICION_INVALIDA', `Sólo se anula la última conciliación de la cuenta (${last.display_number}).`)
   transition(ctx, doc, 'CANCEL', { comment: reason })
+}
+
+// ============================================================ Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3)
+
+/** El banco lo opera el sistema, salvo que el docente diga que lo operan estudiantes. */
+export const bankMode = (company: T.Company): T.BankMode => company.settings.bank_mode ?? 'AUTOMATICO'
+
+/** La cuenta del Banco Aula que refleja una cuenta contable, si la hay. */
+const bankAccountFor = (db: DB, ledgerAccountId: string) =>
+  db.bankAccounts.find((b) => b.ledger_account_id === ledgerAccountId && b.is_active)
+
+/** "FORESTAL.NORTE.BA": el alias de la cuenta, con las dos primeras palabras del nombre de la empresa. */
+export function bankAlias(slug: string) {
+  const words = slug.split('-').filter((w) => /^[a-z]{4,}$/.test(w))
+  return `${(words.length ? words.slice(0, 2).join('.') : 'empresa').toUpperCase().slice(0, 17)}.BA`
+}
+
+type BankOrderInput = Pick<
+  T.BankMovement,
+  'origin' | 'direction' | 'amount' | 'concept' | 'source_document_id' | 'journal_line_id' | 'reverses_id'
+>
+
+/** Un movimiento que llega a la cuenta, pendiente, con el número que sigue en el orden de llegada. */
+function addBankMovement(ctx: Ctx, account: T.BankAccount, input: BankOrderInput, on: string) {
+  const seq = ctx.db.bankMovements.reduce(
+    (max, m) => (m.bank_account_id === account.id ? Math.max(max, m.seq) : max),
+    0,
+  )
+  const movement: T.BankMovement = {
+    id: uid(),
+    company_id: account.company_id,
+    bank_account_id: account.id,
+    seq: seq + 1,
+    ...input,
+    status: 'PENDIENTE',
+    received_on: on,
+    processed_on: null,
+    transaction_number: null,
+    processed_by: null,
+    created_at: ctx.now,
+  }
+  ctx.db.bankMovements.push(movement)
+  return movement
+}
+
+/** El banco procesa un movimiento: queda en el extracto con su fecha y el número de transacción que sigue. */
+function processBankMovement(db: DB, movement: T.BankMovement, on: string, userId: string | null) {
+  const count = db.bankMovements.filter(
+    (m) => m.bank_account_id === movement.bank_account_id && m.transaction_number !== null,
+  ).length
+  movement.status = 'PROCESADO'
+  movement.processed_on = on
+  movement.transaction_number = `SIM-${String(count + 1).padStart(6, '0')}`
+  movement.processed_by = userId
+}
+
+/** La orden de una línea del mayor: al debe entra dinero (crédito en el extracto); al haber, sale (débito). */
+const lineOrder = (line: T.JournalEntryLine) =>
+  line.debit > 0
+    ? { direction: 'CREDITO' as const, amount: line.debit }
+    : { direction: 'DEBITO' as const, amount: line.credit }
+
+/** El concepto de la orden: la descripción del asiento, sin el punto final. */
+const entryConcept = (entry: T.Document) => entry.je!.description.replace(/\.$/, '')
+
+/** La operación que originó un asiento automático (la que lo enlaza); la de un manual es el asiento mismo. */
+function entrySource(db: DB, entry: T.Document) {
+  const sources = new Set(db.docLinks.filter((l) => l.to_document_id === entry.id).map((l) => l.from_document_id))
+  return db.documents.find((d) => sources.has(d.id) && d.doc_type !== 'JOURNAL_ENTRY') ?? entry
+}
+
+/**
+ * Las órdenes que un asiento registrado manda al banco: una por cada línea en la cuenta contable
+ * de un banco del Banco Aula. En esta simulación, registrar un pago o un depósito es hacerlo.
+ */
+function sendBankOrders(ctx: Ctx, source: T.Document, entry: T.Document) {
+  const { db } = ctx
+  const company = getCompany(db, entry.company_id)
+  const today = businessDate(company)
+  const sent: T.BankMovement[] = []
+  for (const line of db.jeLines.filter((l) => l.document_id === entry.id).sort((a, b) => a.line_no - b.line_no)) {
+    const account = bankAccountFor(db, line.account_id)
+    if (!account) continue
+    sent.push(
+      addBankMovement(
+        ctx,
+        account,
+        {
+          origin: 'ORDEN',
+          ...lineOrder(line),
+          concept: entryConcept(entry),
+          source_document_id: source.id,
+          journal_line_id: line.id,
+          reverses_id: null,
+        },
+        today,
+      ),
+    )
+  }
+  if (sent.length) settleBankOrders(ctx, company, sent)
+}
+
+/**
+ * Al anular un asiento (o la operación que lo generó), el contraasiento retira la orden que el
+ * banco todavía no procesó y, si ya la procesó, le manda la orden inversa (a validar).
+ */
+function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
+  const { db } = ctx
+  const original = db.documents.find((d) => d.id === reversal.je!.reverses_id)
+  if (!original) return
+  const lines = db.jeLines.filter((l) => l.document_id === original.id)
+  const company = getCompany(db, reversal.company_id)
+  const today = businessDate(company)
+  const sent: T.BankMovement[] = []
+  let withdrawn = false
+  for (const order of db.bankMovements.filter(
+    (m) => m.origin === 'ORDEN' && m.reverses_id === null && lines.some((l) => l.id === m.journal_line_id),
+  )) {
+    if (order.status === 'PENDIENTE') {
+      order.status = 'ANULADO'
+      withdrawn = true
+      continue
+    }
+    if (order.status !== 'PROCESADO') continue
+    const line = lines.find((l) => l.id === order.journal_line_id)!
+    const mirror = db.jeLines.find(
+      (l) =>
+        l.document_id === reversal.id &&
+        l.account_id === line.account_id &&
+        l.debit === line.credit &&
+        l.credit === line.debit,
+    )
+    sent.push(
+      addBankMovement(
+        ctx,
+        db.bankAccounts.find((b) => b.id === order.bank_account_id)!,
+        {
+          origin: 'ORDEN',
+          direction: order.direction === 'CREDITO' ? 'DEBITO' : 'CREDITO',
+          amount: order.amount,
+          concept: `Reversión de ${order.transaction_number}: ${order.concept}`,
+          source_document_id: order.source_document_id,
+          journal_line_id: mirror?.id ?? null,
+          reverses_id: order.id,
+        },
+        today,
+      ),
+    )
+  }
+  if (sent.length) settleBankOrders(ctx, company, sent)
+  else if (withdrawn) syncBankTask(ctx, company.id)
+}
+
+/** Lo que llega al banco: en modo automático se procesa en el momento; si no, espera en la bandeja. */
+function settleBankOrders(ctx: Ctx, company: T.Company, orders: T.BankMovement[]) {
+  if (bankMode(company) === 'AUTOMATICO') {
+    const today = businessDate(company)
+    for (const order of orders) processBankMovement(ctx.db, order, today, null)
+  }
+  syncBankTask(ctx, company.id)
+}
+
+/** Mientras haya órdenes pendientes, Banco tiene una tarea abierta para procesarlas. */
+function syncBankTask(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const pending = db.bankMovements.some((m) => m.company_id === companyId && m.status === 'PENDIENTE')
+  const open = db.tasks.find(
+    (t) =>
+      t.company_id === companyId &&
+      t.task_type === 'PROCESAR_BANCO' &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+  )
+  if (!pending) {
+    if (open) {
+      open.status = 'RESUELTA'
+      open.completed_by = ctx.userId
+      open.completed_at = ctx.now
+    }
+    return
+  }
+  if (open) return
+  const company = getCompany(db, companyId)
+  const task: T.Task = {
+    id: uid(),
+    company_id: companyId,
+    document_id: null,
+    task_type: 'PROCESAR_BANCO',
+    title: 'Procesar las órdenes del Banco Aula',
+    description:
+      'La empresa envió órdenes al banco (pagos, cobros, depósitos o transferencias): procesalas desde la bandeja.',
+    origin_status: null,
+    context: {},
+    assigned_role: 'BANCO',
+    assigned_user_id: null,
+    status: 'PENDIENTE',
+    priority: 'NORMAL',
+    source: 'SISTEMA',
+    claimed_by: null,
+    claimed_at: null,
+    completed_by: null,
+    completed_at: null,
+    created_by: null,
+    created_at: ctx.now,
+  }
+  db.tasks.push(task)
+  notifyRoles(ctx, companyId, ['BANCO'], {
+    type: 'NUEVA_TAREA',
+    title: 'Órdenes en el Banco Aula',
+    body: 'La empresa envió órdenes al banco: procesalas desde la bandeja.',
+    link_path: `/e/${company.slug}/banco/bandeja`,
+    task_id: task.id,
+  })
+}
+
+/**
+ * Abre la cuenta corriente de la empresa en el Banco Aula, vinculada a Banco cuenta corriente.
+ * El saldo inicial es el del asiento de apertura y, en una empresa que ya operaba, lo que movió el
+ * banco queda procesado con la fecha de cada asiento (como si el banco hubiera estado siempre).
+ * No hace nada si la empresa ya tiene su cuenta.
+ */
+export function openBankAccount(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  if (db.bankAccounts.some((b) => b.company_id === companyId)) return
+  const ledger = db.accounts.find((a) => a.company_id === companyId && a.code === BANK_ACCOUNT_DEFAULTS.ledger_code)
+  if (!ledger) return
+  const company = getCompany(db, companyId)
+  const history = accountLinesUpTo(db, ledger.id, '9999-12-31')
+  const opening = history.filter(({ doc }) => doc.je!.origin === 'APERTURA')
+  const firstYear = db.fiscalYears
+    .filter((y) => y.company_id === companyId)
+    .sort((a, b) => (a.start_date < b.start_date ? -1 : a.start_date > b.start_date ? 1 : 0))[0]
+  const openedOn = opening[0]?.doc.document_date ?? firstYear?.start_date ?? businessDate(company)
+  const account: T.BankAccount = {
+    id: uid(),
+    company_id: companyId,
+    ledger_account_id: ledger.id,
+    number: BANK_ACCOUNT_DEFAULTS.number,
+    bank_key: BANK_ACCOUNT_DEFAULTS.bank_key,
+    alias: bankAlias(company.slug),
+    opened_on: openedOn,
+    overdraft_limit: BANK_ACCOUNT_DEFAULTS.overdraft_limit,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.bankAccounts.push(account)
+  const balance = round2(opening.reduce((sum, { line }) => sum + line.debit - line.credit, 0))
+  const start = addBankMovement(
+    ctx,
+    account,
+    {
+      origin: 'APERTURA',
+      direction: balance < 0 ? 'DEBITO' : 'CREDITO',
+      amount: Math.abs(balance),
+      concept: 'Saldo inicial de la cuenta',
+      source_document_id: null,
+      journal_line_id: opening[0]?.line.id ?? null,
+      reverses_id: null,
+    },
+    openedOn,
+  )
+  // El saldo inicial no es una transacción: no lleva número.
+  start.status = 'PROCESADO'
+  start.processed_on = openedOn
+  for (const { line, doc } of history) {
+    const origin = doc.je!.origin
+    if (origin === 'APERTURA') continue
+    if (origin !== 'CONTRAASIENTO') {
+      const order = addBankMovement(
+        ctx,
+        account,
+        {
+          origin: 'ORDEN',
+          ...lineOrder(line),
+          concept: entryConcept(doc),
+          source_document_id: entrySource(db, doc).id,
+          journal_line_id: line.id,
+          reverses_id: null,
+        },
+        doc.document_date,
+      )
+      processBankMovement(db, order, doc.document_date, null)
+      continue
+    }
+    const reversed = db.jeLines.find(
+      (l) =>
+        l.document_id === doc.je!.reverses_id &&
+        l.account_id === line.account_id &&
+        l.debit === line.credit &&
+        l.credit === line.debit,
+    )
+    const order = reversed && db.bankMovements.find((m) => m.journal_line_id === reversed.id && m.reverses_id === null)
+    if (!order) continue
+    const reverse = addBankMovement(
+      ctx,
+      account,
+      {
+        origin: 'ORDEN',
+        direction: order.direction === 'CREDITO' ? 'DEBITO' : 'CREDITO',
+        amount: order.amount,
+        concept: `Reversión de ${order.transaction_number}: ${order.concept}`,
+        source_document_id: order.source_document_id,
+        journal_line_id: line.id,
+        reverses_id: order.id,
+      },
+      doc.document_date,
+    )
+    processBankMovement(db, reverse, doc.document_date, null)
+  }
+}
+
+/** La isla 9 (el entorno: banco y fisco) y sus sectores, si la empresa todavía no los tiene. */
+export function insertEnvironment(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  let island = db.islands.find((i) => i.company_id === companyId && i.number === ENVIRONMENT_ISLAND.number)
+  if (!island) {
+    island = { id: uid(), company_id: companyId, number: ENVIRONMENT_ISLAND.number, name: ENVIRONMENT_ISLAND.name }
+    db.islands.push(island)
+  }
+  for (const [code, name] of ENVIRONMENT_SECTORS) {
+    if (db.sectors.some((s) => s.company_id === companyId && s.code === code)) continue
+    db.sectors.push({ id: uid(), company_id: companyId, code, name, island_id: island.id })
+  }
+}
+
+/** Banco procesa órdenes pendientes con la fecha del día, en el orden en que llegaron. */
+export function cmdProcessBankOrders(ctx: Ctx, companyId: string, ids: string[]) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bank.operate')
+  if (!ids.length) fail('DATO_INVALIDO', 'Elegí las órdenes que procesa el banco.')
+  if (new Set(ids).size !== ids.length) fail('DATO_INVALIDO', 'Una orden está dos veces.')
+  const orders = ids
+    .map((id) => {
+      const order = db.bankMovements.find((m) => m.id === id && m.company_id === companyId && m.origin === 'ORDEN')
+      if (!order) fail('DATO_INVALIDO', 'Una de las órdenes no es de esta empresa.')
+      if (order.status !== 'PENDIENTE')
+        fail(
+          'TRANSICION_INVALIDA',
+          `La orden N.º ${order.seq} ya está ${BANK_MOVEMENT_STATUSES[order.status].label.toLowerCase()}.`,
+        )
+      return order
+    })
+    .sort((a, b) => a.seq - b.seq)
+  const today = businessDate(getCompany(db, companyId))
+  for (const order of orders) processBankMovement(db, order, today, ctx.userId)
+  syncBankTask(ctx, companyId)
+  const account = db.bankAccounts.find((b) => b.id === orders[0].bank_account_id)!
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'PROCESS',
+    entity_type: 'bank_account',
+    entity_id: account.id,
+    entity_label: `Banco Aula ${account.number}`,
+    summary: `Procesó ${orders.length === 1 ? 'la orden' : `${orders.length} órdenes`} del Banco Aula: ${orders
+      .map((o) => `${o.transaction_number} (${o.direction === 'CREDITO' ? 'crédito' : 'débito'} de ${money(o.amount)})`)
+      .join(', ')}`,
+  })
+  return { processed: orders.length }
 }
 
 // ============================================================ Pedidos de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2)
@@ -8059,6 +8430,23 @@ export function cmdAssignRole(ctx: Ctx, companyId: string, userId: string, role:
   if (db.memberRoles.some((r) => r.member_id === member.id && r.role_code === role && r.sector_id === sectorId)) {
     fail('DATO_INVALIDO', 'Esa asignación ya existe.')
   }
+  if (getCompany(db, companyId).settings.sod_enabled && role !== 'DOCENTE') {
+    const environment = ENVIRONMENT_ROLES.includes(role)
+    const clash = db.memberRoles.find(
+      (r) =>
+        r.member_id === member.id &&
+        r.role_code !== 'DOCENTE' &&
+        ENVIRONMENT_ROLES.includes(r.role_code) !== environment,
+    )
+    if (clash)
+      fail(
+        'SEPARACION_FUNCIONES',
+        environment
+          ? `${fullName(profile)} tiene el rol ${ROLES[clash.role_code].name} en la empresa: no puede operar el ${ROLES[role].name}.`
+          : `${fullName(profile)} opera el ${ROLES[clash.role_code].name}: no puede tener un rol de la empresa.`,
+        'Separación de funciones (SoD-12): quien opera el banco o el fisco del entorno no trabaja en la empresa.',
+      )
+  }
   db.memberRoles.push({ id: uid(), company_id: companyId, member_id: member.id, role_code: role, sector_id: sectorId })
   logAudit(ctx, {
     company_id: companyId,
@@ -8272,11 +8660,13 @@ const comparable = (settings: T.CompanySettings) => ({
   ...settings,
   payroll: settings.payroll ?? null,
   iibb_pct: settings.iibb_pct ?? null,
+  bank_mode: settings.bank_mode ?? null,
 })
 
 /**
  * El docente cambia el control interno (separación de funciones, stock negativo),
- * los porcentajes de la liquidación de sueldos o la alícuota de ingresos brutos de la empresa.
+ * los porcentajes de la liquidación de sueldos, la alícuota de ingresos brutos o quién opera el
+ * Banco Aula: al volver al sistema, el banco procesa lo pendiente con la fecha del día.
  */
 export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: Partial<T.CompanySettings>) {
   const actor = requireSupervisor(ctx, companyId)
@@ -8302,7 +8692,17 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
       fail('DATO_INVALIDO', 'La alícuota de ingresos brutos va de 0 a 100, con hasta 2 decimales.')
     after.iibb_pct = value
   }
+  if (settings.bank_mode !== undefined) {
+    if (!Object.hasOwn(BANK_MODES, settings.bank_mode)) fail('DATO_INVALIDO', 'Elegí quién opera el Banco Aula.')
+    after.bank_mode = settings.bank_mode
+  }
   company.settings = after
+  if (bankMode(company) === 'AUTOMATICO') {
+    const pending = ctx.db.bankMovements
+      .filter((m) => m.company_id === companyId && m.status === 'PENDIENTE')
+      .sort((a, b) => a.seq - b.seq)
+    if (pending.length) settleBankOrders(ctx, company, pending)
+  }
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -8314,13 +8714,16 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
       ? 'Cambió los porcentajes de la liquidación de sueldos'
       : settings.iibb_pct !== undefined
         ? 'Cambió la alícuota de ingresos brutos'
-        : 'Cambió la configuración de control interno de la empresa',
+        : settings.bank_mode !== undefined
+          ? `Cambió quién opera el Banco Aula: ${BANK_MODES[after.bank_mode!].label.toLowerCase()}`
+          : 'Cambió la configuración de control interno de la empresa',
     // Sin porcentajes configurados, la base los compara como null.
     changes: diff(comparable(before), comparable(company.settings), [
       'sod_enabled',
       'allow_negative_stock',
       'payroll',
       'iibb_pct',
+      'bank_mode',
     ]),
   })
 }
@@ -8636,6 +9039,7 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   }
   scanStockAlerts(system, companyId)
   startAccounting(system, companyId)
+  openBankAccount(system, companyId)
   return { id: companyId, slug }
 }
 

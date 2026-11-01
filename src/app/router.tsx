@@ -106,6 +106,8 @@ const SupplierAccountPage = lazyPage(() =>
   import('@/features/payables/payables-pages').then((m) => m.SupplierAccountPage),
 )
 const TreasuryPage = lazyPage(() => import('@/features/payables/payables-pages').then((m) => m.TreasuryPage))
+const HomeBankingPage = lazyPage(() => import('@/features/bank/bank-pages').then((m) => m.HomeBankingPage))
+const BankTrayPage = lazyPage(() => import('@/features/bank/bank-pages').then((m) => m.BankTrayPage))
 const PaymentOrderFormPage = lazyPage(() =>
   import('@/features/payables/payment-order-form').then((m) => m.PaymentOrderFormPage),
 )
@@ -187,6 +189,8 @@ export const router = createBrowserRouter(
                 { path: 'pagos/cobros/nuevo', element: <CollectionFormPage /> },
                 { path: 'pagos/cobros/:number', element: <DocumentPage key="rc" docType="CUSTOMER_RECEIPT" /> },
                 { path: 'pagos/cajas-y-bancos', element: <TreasuryPage /> },
+                { path: 'pagos/banco-aula', element: <HomeBankingPage /> },
+                { path: 'banco/bandeja', element: <BankTrayPage /> },
                 { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },

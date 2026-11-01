@@ -19,11 +19,13 @@ import {
   insertJobCategories,
   insertLaborAgreements,
   insertVehicles,
+  insertEnvironment,
   insertWorkCenters,
+  openBankAccount,
   round2,
   startAccounting,
 } from './engine'
-import { buildSeed } from './seed'
+import { addDemoBankUser, buildSeed } from './seed'
 
 export interface DocumentSequence {
   company_id: string
@@ -78,6 +80,8 @@ export interface DB {
   carriers: T.Carrier[]
   vehicles: T.Vehicle[]
   rsLines: T.RouteSheetLine[]
+  bankAccounts: T.BankAccount[]
+  bankMovements: T.BankMovement[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -95,7 +99,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 21
+export const DB_VERSION = 22
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -155,6 +159,8 @@ const COLLECTIONS = [
   'carriers',
   'vehicles',
   'rsLines',
+  'bankAccounts',
+  'bankMovements',
   'jobCategories',
   'employees',
   'pyLines',
@@ -205,6 +211,8 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   carriers: 20,
   vehicles: 20,
   rsLines: 21,
+  bankAccounts: 22,
+  bankMovements: 22,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -445,6 +453,19 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   // v20 → v21: hojas de ruta (Fase 7c.2): los remitos de cada hoja.
   20: (db) => {
     db.rsLines ??= []
+  },
+  // v21 → v22: el Banco Aula (Fase 8a): la isla del entorno en cada empresa y su cuenta en el
+  // banco, con el saldo inicial y lo que ya movió el banco, procesado con la fecha de cada asiento.
+  21: (db) => {
+    db.bankAccounts ??= []
+    db.bankMovements ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      insertEnvironment(ctx, company.id)
+      openBankAccount(ctx, company.id)
+    }
+    const demo = db.companies.find((c) => c.is_template)
+    if (demo) addDemoBankUser(db, demo.id, ctx.now)
   },
 }
 

@@ -77,6 +77,8 @@ export type {
   PriceListProduct,
   PriceListRow,
   ProducibleProduct,
+  BankAccountView,
+  BankMovementRow,
   ProductionCostRow,
   ProductionNeedRow,
   ProductionOrderView,
@@ -240,6 +242,7 @@ const mockApi = {
     query((db, u) => Q.supplierAccount(db, u, companyId, supplierId)),
   postingRules: (companyId: string) => query((db, u) => Q.listPostingRules(db, u, companyId)),
   treasuryAccounts: (companyId: string) => query((db, u) => Q.treasuryAccounts(db, u, companyId)),
+  bankAccount: (companyId: string) => query((db, u) => Q.bankAccountView(db, u, companyId)),
   cashFlow: (companyId: string, from: string, to: string) => query((db, u) => Q.cashFlow(db, u, companyId, from, to)),
   cashProjection: (companyId: string) => query((db, u) => Q.cashProjection(db, u, companyId)),
   issuedCheques: (companyId: string) => query((db, u) => Q.issuedCheques(db, u, companyId)),
@@ -464,6 +467,7 @@ const mockCommands = {
   closeRouteSheet: (docId: string, outcomes: E.RouteSheetOutcome[]) =>
     command((c) => E.cmdCloseRouteSheet(c, docId, outcomes)),
   cancelRouteSheet: (docId: string, reason: string) => command((c) => E.cmdCancelRouteSheet(c, docId, reason)),
+  processBankOrders: (companyId: string, ids: string[]) => command((c) => E.cmdProcessBankOrders(c, companyId, ids)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),
