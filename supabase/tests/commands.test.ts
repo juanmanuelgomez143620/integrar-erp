@@ -255,6 +255,20 @@ async function sameRead(
   expect(canonical(got), label).toEqual(canonical(want))
 }
 
+/** Las órdenes pendientes del Banco Aula, en el orden en que llegaron: el mismo registro en los dos lados. */
+async function linkPendingBankOrders() {
+  const orders = mock.bankMovements
+    .filter((m) => m.company_id === company && m.status === 'PENDIENTE')
+    .sort((a, b) => a.seq - b.seq)
+  const rows = await db.admin<{ id: string }>(
+    `select id from public.bank_movements where company_id = $1 and status = 'PENDIENTE' order by seq`,
+    [pg(company)],
+  )
+  expect(rows.length, 'órdenes pendientes en los dos lados').toBe(orders.length)
+  orders.forEach((order, i) => loaded.link(order.id, rows[i].id))
+  return orders
+}
+
 beforeAll(async () => {
   mock = buildScenario()
   db = await createTestDb()
@@ -1682,6 +1696,22 @@ describe('paridad de comandos', () => {
       E.accountLinesUpTo(mock, bank, today).reduce((s, { line }) => s + line.debit - line.credit, 0),
     )
     const statement = E.round2(book + cheque.total)
+    // El extracto es el del Banco Aula (Fase 8a.2): Tesorería procesó todo lo que le mandó la empresa, menos el cheque.
+    const orders = (await linkPendingBankOrders()).filter((m) => m.source_document_id !== cheque.id).map((m) => m.id)
+    expect(
+      await step(
+        'el banco procesa todo menos el cheque',
+        'tesoreria2',
+        (c) => E.cmdProcessBankOrders(c, company, orders),
+        (b) => b.commands.processBankOrders(companyPg, orders.map(pg)),
+      ),
+    ).not.toBeNull()
+    await sameRead(
+      'lo que hace falta para conciliar, con el extracto del banco',
+      'contabilidad',
+      (b) => b.api.reconciliationCandidates(companyPg, pg(bank), today),
+      (u) => Q.reconciliationCandidates(mock, u, company, bank, today),
+    )
 
     for (const [label, username, over] of [
       ['Tesorería no concilia', 'tesoreria', { statement_balance: statement, journal_line_ids: marked }],
@@ -4246,19 +4276,7 @@ describe('paridad de comandos', () => {
         (c) => E.cmdProcessBankOrders(c, company, ids),
         (b) => b.commands.processBankOrders(companyPg, ids.map(pg)),
       )
-    /** Las órdenes pendientes, en el orden en que llegaron: el mismo registro en los dos lados. */
-    const pendingOrders = async () => {
-      const orders = mock.bankMovements
-        .filter((m) => m.company_id === company && m.status === 'PENDIENTE')
-        .sort((a, b) => a.seq - b.seq)
-      const rows = await db.admin<{ id: string }>(
-        `select id from public.bank_movements where company_id = $1 and status = 'PENDIENTE' order by seq`,
-        [companyPg],
-      )
-      expect(rows.length, 'órdenes pendientes en los dos lados').toBe(orders.length)
-      orders.forEach((order, i) => loaded.link(order.id, rows[i].id))
-      return orders
-    }
+    const pendingOrders = linkPendingBankOrders
 
     // Lo opera Tesorería: la orden espera en la bandeja y quien la envió no la procesa.
     expect(await mode('un modo que no existe', 'OTRO' as never)).toBeNull()
@@ -4466,6 +4484,12 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.bankAccount(companyPg),
         (u) => Q.bankAccountView(mock, u, company),
+      )
+      await sameRead(
+        `el extracto del año (${username})`,
+        username,
+        (b) => b.api.bankStatement(companyPg, `${year}-01-01`, `${year}-12-31`),
+        (u) => Q.bankStatement(mock, u, company, `${year}-01-01`, `${year}-12-31`),
       )
       for (const code of ['PRV-001', 'PRV-010'])
         await sameRead(

@@ -503,6 +503,12 @@ beforeAll(async () => {
       p_confirm: true,
     })
   ).id
+  // El Banco Aula procesa lo que le llegó (Fase 8a): el extracto de la conciliación es el del banco.
+  const pending = await db.admin<{ id: string }>(
+    `select id from public.bank_movements where company_id = $1 and status = 'PENDIENTE' order by seq`,
+    [B.id],
+  )
+  await rpc('docenteB', 'bank_orders_process', { p_company_id: B.id, p_ids: `{${pending.map((r) => r.id).join(',')}}` })
   // Una conciliación del banco de B con todos sus movimientos.
   const bankLines = await db.admin<{ id: string; net: string }>(
     `select l.id, l.debit - l.credit as net from public.journal_entry_lines l

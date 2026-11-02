@@ -108,6 +108,9 @@ const SupplierAccountPage = lazyPage(() =>
 const TreasuryPage = lazyPage(() => import('@/features/payables/payables-pages').then((m) => m.TreasuryPage))
 const HomeBankingPage = lazyPage(() => import('@/features/bank/bank-pages').then((m) => m.HomeBankingPage))
 const BankTrayPage = lazyPage(() => import('@/features/bank/bank-pages').then((m) => m.BankTrayPage))
+const BankStatementPrintPage = lazyPage(() =>
+  import('@/features/bank/bank-statement').then((m) => m.BankStatementPrintPage),
+)
 const PaymentOrderFormPage = lazyPage(() =>
   import('@/features/payables/payment-order-form').then((m) => m.PaymentOrderFormPage),
 )
@@ -150,6 +153,7 @@ export const router = createBrowserRouter(
           children: [
             { path: 'documentos/:docId/imprimir', element: <PrintPage /> },
             { path: 'contabilidad/imprimir/:book', element: <BookPrintPage /> },
+            { path: 'pagos/banco-aula/extracto/imprimir', element: <BankStatementPrintPage /> },
             {
               element: <AppShell />,
               children: [

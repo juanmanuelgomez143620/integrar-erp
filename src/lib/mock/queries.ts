@@ -17,7 +17,10 @@ import { date, money, qty, todayAR } from '../format'
 import type { DB } from './db'
 import {
   accountBalance,
+  bankAccountFor,
   bankMode,
+  bankSigned,
+  processedBankMovements,
   accountLabel,
   activeBomOf,
   accountLinesUpTo,
@@ -3532,18 +3535,9 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
     }
   }
   const movements = db.bankMovements.filter((m) => m.bank_account_id === account.id)
-  // En el orden en que el banco los procesó: el saldo inicial primero, después por número de transacción.
-  const processed = movements
-    .filter((m) => m.status === 'PROCESADO')
-    .sort(
-      (a, b) =>
-        compareCodes(a.processed_on!, b.processed_on!) ||
-        Number(a.transaction_number !== null) - Number(b.transaction_number !== null) ||
-        compareCodes(a.transaction_number ?? '', b.transaction_number ?? ''),
-    )
   let balance = 0
-  const rows = processed.map((m) => {
-    balance = round2(balance + (m.direction === 'CREDITO' ? m.amount : -m.amount))
+  const rows = processedBankMovements(db, account.id).map((m) => {
+    balance = round2(balance + bankSigned(m))
     return row(m, balance)
   })
   return {
@@ -3564,6 +3558,78 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       .sort((a, b) => a.seq - b.seq)
       .map((m) => row(m, null)),
     movements: rows.reverse(),
+  }
+}
+
+/** Una línea del extracto: lo que el banco procesó un día, con el saldo después del movimiento. */
+export interface BankStatementLine {
+  id: string
+  date: string
+  transaction_number: string | null
+  concept: string
+  debit: number
+  credit: number
+  balance: number
+}
+
+/** Las líneas del extracto de toda la vida de la cuenta, con el saldo de cada momento. */
+function statementLines(db: DB, bankAccountId: string): BankStatementLine[] {
+  let balance = 0
+  return processedBankMovements(db, bankAccountId).map((m) => {
+    balance = round2(balance + bankSigned(m))
+    return {
+      id: m.id,
+      date: m.processed_on!,
+      transaction_number: m.transaction_number,
+      concept: m.concept,
+      debit: m.direction === 'DEBITO' ? m.amount : 0,
+      credit: m.direction === 'CREDITO' ? m.amount : 0,
+      balance,
+    }
+  })
+}
+
+/** El extracto de la cuenta en el Banco Aula de un período (Fase 8a.2). */
+export interface BankStatement {
+  holder: { legal_name: string; tax_id: string }
+  account: { number: string; bank_key: string; alias: string }
+  from: string
+  to: string
+  /** El saldo al empezar el período: lo procesado antes. */
+  opening_balance: number
+  lines: BankStatementLine[]
+  debits: number
+  credits: number
+  closing_balance: number
+}
+
+/** El extracto de un período: el saldo al empezar, lo que el banco procesó día por día y el saldo final. */
+export function bankStatement(
+  db: DB,
+  userId: string,
+  companyId: string,
+  from: string,
+  to: string,
+): BankStatement | null {
+  assertPerm(db, userId, companyId, 'bank.read')
+  if (!isDate(from) || !isDate(to) || from > to)
+    fail('DATO_INVALIDO', 'Indicá el período del extracto: desde y hasta, en ese orden.')
+  const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (!account) return null
+  const company = db.companies.find((c) => c.id === companyId)!
+  const all = statementLines(db, account.id)
+  const opening = all.filter((l) => l.date < from).at(-1)?.balance ?? 0
+  const lines = all.filter((l) => l.date >= from && l.date <= to)
+  return {
+    holder: { legal_name: company.legal_name, tax_id: company.tax_id },
+    account: { number: account.number, bank_key: account.bank_key, alias: account.alias },
+    from,
+    to,
+    opening_balance: opening,
+    lines,
+    debits: round2(lines.reduce((s, l) => s + l.debit, 0)),
+    credits: round2(lines.reduce((s, l) => s + l.credit, 0)),
+    closing_balance: lines.at(-1)?.balance ?? opening,
   }
 }
 
@@ -3797,6 +3863,11 @@ export interface ReconciliationCandidates {
   book_balance: number
   /** Los movimientos todavía sin conciliar hasta esa fecha, en el orden del libro diario. */
   lines: ReconciliationLineView[]
+  /**
+   * Si es la cuenta de un banco del Banco Aula (Fase 8a.2): el saldo según el banco a esa fecha (el del
+   * extracto, que ya no se escribe) y lo que procesó desde la última conciliación, para puntear.
+   */
+  bank: { balance: number; lines: BankStatementLine[] } | null
 }
 
 /** Lo que hace falta para conciliar un banco a una fecha (null si la cuenta no es una caja o un banco). */
@@ -3826,7 +3897,16 @@ export function reconciliationCandidates(
       : null,
     book_balance: round2(lines.reduce((s, { line }) => s + line.debit - line.credit, 0)),
     lines: lines.filter(({ line }) => !reconciled.has(line.id)).map((l) => reconciliationLine(db, l)),
+    bank: bankStatementSince(db, account.id, last?.br!.statement_date ?? null, statementDate),
   }
+}
+
+/** El extracto del Banco Aula para conciliar: el saldo a la fecha y lo procesado después de la conciliación anterior. */
+function bankStatementSince(db: DB, ledgerAccountId: string, since: string | null, upTo: string) {
+  const bank = bankAccountFor(db, ledgerAccountId)
+  if (!bank) return null
+  const lines = statementLines(db, bank.id).filter((l) => l.date <= upTo)
+  return { balance: lines.at(-1)?.balance ?? 0, lines: lines.filter((l) => since === null || l.date > since) }
 }
 
 export type ChequeStatus = 'PENDIENTE' | 'DEBITADO' | 'ANULADO'

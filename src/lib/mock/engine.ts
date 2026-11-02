@@ -3586,6 +3586,16 @@ export function cmdCreateBankReconciliation(ctx: Ctx, companyId: string, input: 
     )
   if (!Number.isFinite(input.statement_balance) || round2(input.statement_balance) !== input.statement_balance)
     fail('DATO_INVALIDO', 'El saldo del extracto es un importe con hasta 2 decimales.')
+  // Con el Banco Aula (Fase 8a.2), el extracto no se escribe: es el del banco a esa fecha.
+  const bank = bankAccountFor(db, account.id)
+  if (bank) {
+    const balance = bankBalanceAt(db, bank.id, input.statement_date)
+    if (input.statement_balance !== balance)
+      fail(
+        'DATO_INVALIDO',
+        `El saldo del extracto del Banco Aula al ${fmtDate(input.statement_date)} es ${money(balance)}: es el que se concilia.`,
+      )
+  }
   const lines = accountLinesUpTo(db, account.id, input.statement_date)
   const reconciled = reconciledLineIds(db, account.id)
   const open = lines.filter(({ line }) => !reconciled.has(line.id))
@@ -3664,8 +3674,34 @@ export function cmdCancelBankReconciliation(ctx: Ctx, docId: string, reason: str
 export const bankMode = (company: T.Company): T.BankMode => company.settings.bank_mode ?? 'ESTUDIANTES'
 
 /** La cuenta del Banco Aula que refleja una cuenta contable, si la hay. */
-const bankAccountFor = (db: DB, ledgerAccountId: string) =>
+export const bankAccountFor = (db: DB, ledgerAccountId: string) =>
   db.bankAccounts.find((b) => b.ledger_account_id === ledgerAccountId && b.is_active)
+
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/** Lo procesado de una cuenta, en el orden del extracto: el saldo inicial y después por número de transacción. */
+export function processedBankMovements(db: DB, bankAccountId: string) {
+  return db.bankMovements
+    .filter((m) => m.bank_account_id === bankAccountId && m.status === 'PROCESADO')
+    .sort(
+      (a, b) =>
+        byText(a.processed_on!, b.processed_on!) ||
+        Number(a.transaction_number !== null) - Number(b.transaction_number !== null) ||
+        byText(a.transaction_number ?? '', b.transaction_number ?? ''),
+    )
+}
+
+/** Cuánto suma un movimiento al saldo de la cuenta: el crédito entra, el débito sale. */
+export const bankSigned = (m: T.BankMovement) => (m.direction === 'CREDITO' ? m.amount : -m.amount)
+
+/** El saldo según el banco al cierre de un día: lo procesado hasta esa fecha. */
+export function bankBalanceAt(db: DB, bankAccountId: string, date: string) {
+  return round2(
+    processedBankMovements(db, bankAccountId)
+      .filter((m) => m.processed_on! <= date)
+      .reduce((sum, m) => sum + bankSigned(m), 0),
+  )
+}
 
 /** "FORESTAL.NORTE.BA": el alias de la cuenta, con las dos primeras palabras del nombre de la empresa. */
 export function bankAlias(slug: string) {

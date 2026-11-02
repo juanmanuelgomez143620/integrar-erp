@@ -340,6 +340,36 @@ describe('tesorería', () => {
       await same(u, () => Q.bankAccountView(mock, userId(u), company), 'bank_account_view', [companyPg])
   })
 
+  it('el extracto del Banco Aula: un año, un mes sin movimientos y períodos mal armados', async () => {
+    const year = new Date().getFullYear()
+    const periods: [string, string][] = [
+      [`${year}-01-01`, `${year}-12-31`],
+      [`${year - 1}-03-01`, `${year - 1}-03-31`],
+      [todayAR(), todayAR()],
+      [`${year}-12-31`, `${year}-01-01`],
+      ['no-es-fecha', todayAR()],
+    ]
+    for (const u of [...USERS, 'tesoreria2'])
+      for (const [from, to] of periods)
+        await same(u, () => Q.bankStatement(mock, userId(u), company, from, to), 'bank_statement', [
+          companyPg,
+          from,
+          to,
+        ])
+  })
+
+  it('lo que hace falta para conciliar trae el extracto del banco sólo en la cuenta del Banco Aula', async () => {
+    const accountId = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    for (const u of ['contabilidad', 'docente'])
+      for (const code of ['1.1.01.03', '1.1.01.01'])
+        await same(
+          u,
+          () => Q.reconciliationCandidates(mock, userId(u), company, accountId(code), todayAR()),
+          'reconciliation_candidates',
+          [companyPg, loaded.pg(accountId(code)), todayAR()],
+        )
+  })
+
   it('cheques emitidos y movimientos para conciliar', async () => {
     const year = new Date().getFullYear()
     const accountId = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id

@@ -12,6 +12,7 @@ import { date, money, parseAmount, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { StatementTable } from '@/features/bank/bank-statement'
 import { MovementTable } from './reconciliation-views'
 
 /** Acepta "1.300,50" (es-AR), "1.000.000" y "1300.50"; vacío o inválido → null. */
@@ -20,6 +21,12 @@ const amount = (s: string) => {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
 }
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+
+/** El saldo del extracto antes de su primera línea: el de esa línea sin su movimiento. */
+const openingOf = (data: ReconciliationCandidates) => {
+  const first = data.bank?.lines[0]
+  return first ? round2(first.balance - first.credit + first.debit) : (data.bank?.balance ?? 0)
+}
 
 export function ReconciliationFormPage() {
   const company = useCompany()
@@ -50,7 +57,7 @@ function ReconciliationForm({ accounts }: { accounts: TreasuryAccountRow[] }) {
           { label: 'Nueva' },
         ]}
         title="Nueva conciliación bancaria"
-        description="Con el extracto del banco, marcá qué movimientos del mayor figuran en él. Lo que no figura (cheques sin debitar, depósitos sin acreditar) explica la diferencia: la conciliación se confirma cuando cierra."
+        description="Con el extracto del banco, marcá qué movimientos del mayor figuran en él. Lo que no figura (cheques sin debitar, depósitos sin acreditar, órdenes que el banco todavía no procesó) explica la diferencia: la conciliación se confirma cuando cierra. En la cuenta del Banco Aula, el extracto sale del banco."
       />
       <Section title="Extracto" className="mb-4">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -98,7 +105,8 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
   const pendingDebits = round2(pending.reduce((s, l) => s + l.debit, 0))
   const pendingCredits = round2(pending.reduce((s, l) => s + l.credit, 0))
   const expected = round2(data.book_balance - pendingDebits + pendingCredits)
-  const statement = amount(balance)
+  // En la cuenta del Banco Aula el saldo del extracto no se escribe: es el del banco a esa fecha.
+  const statement = data.bank ? data.bank.balance : amount(balance)
   const difference = statement == null ? null : round2(statement - expected)
   const save = useCommand(
     () =>
@@ -139,6 +147,33 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
           empty="No hay movimientos sin conciliar hasta esa fecha."
         />
       </Section>
+      {data.bank && (
+        <Section
+          className="lg:col-start-1"
+          title={`Extracto del Banco Aula al ${date(statementDate)}`}
+          description={
+            data.last
+              ? `Lo que el banco procesó después de la conciliación anterior (${date(data.last.statement_date)}): puntealo contra el mayor.`
+              : 'Lo que el banco procesó desde la apertura de la cuenta: puntealo contra el mayor.'
+          }
+          bodyClassName="p-0"
+        >
+          <StatementTable
+            compact
+            statement={{
+              holder: { legal_name: '', tax_id: '' },
+              account: { number: '', bank_key: '', alias: '' },
+              from: data.bank.lines[0]?.date ?? statementDate,
+              to: statementDate,
+              opening_balance: openingOf(data),
+              lines: data.bank.lines,
+              debits: round2(data.bank.lines.reduce((s, l) => s + l.debit, 0)),
+              credits: round2(data.bank.lines.reduce((s, l) => s + l.credit, 0)),
+              closing_balance: data.bank.balance,
+            }}
+          />
+        </Section>
+      )}
       <aside className="flex flex-col gap-3">
         <Section title="Conciliación">
           <dl className="flex flex-col gap-1.5 text-sm">
@@ -159,14 +194,21 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
               <dd className="tabular">{money(expected)}</dd>
             </div>
           </dl>
-          <Field label="Saldo según el extracto" required className="mt-3">
-            <Input
-              inputMode="decimal"
-              value={balance}
-              onChange={(e) => setBalance(e.target.value)}
-              className="tabular text-right"
-            />
-          </Field>
+          {data.bank ? (
+            <div className="mt-3 flex justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Saldo según el extracto del Banco Aula</span>
+              <span className="tabular font-semibold">{money(data.bank.balance)}</span>
+            </div>
+          ) : (
+            <Field label="Saldo según el extracto" required className="mt-3">
+              <Input
+                inputMode="decimal"
+                value={balance}
+                onChange={(e) => setBalance(e.target.value)}
+                className="tabular text-right"
+              />
+            </Field>
+          )}
           {difference != null && (
             <p className={cn('mt-3 flex gap-2 text-sm', difference === 0 ? 'text-green-800' : 'text-red-700')}>
               {difference === 0 ? (

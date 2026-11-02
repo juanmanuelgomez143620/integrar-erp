@@ -79,6 +79,8 @@ export type {
   ProducibleProduct,
   BankAccountView,
   BankMovementRow,
+  BankStatement,
+  BankStatementLine,
   ProductionCostRow,
   ProductionNeedRow,
   ProductionOrderView,
@@ -243,6 +245,8 @@ const mockApi = {
   postingRules: (companyId: string) => query((db, u) => Q.listPostingRules(db, u, companyId)),
   treasuryAccounts: (companyId: string) => query((db, u) => Q.treasuryAccounts(db, u, companyId)),
   bankAccount: (companyId: string) => query((db, u) => Q.bankAccountView(db, u, companyId)),
+  bankStatement: (companyId: string, from: string, to: string) =>
+    query((db, u) => Q.bankStatement(db, u, companyId, from, to)),
   cashFlow: (companyId: string, from: string, to: string) => query((db, u) => Q.cashFlow(db, u, companyId, from, to)),
   cashProjection: (companyId: string) => query((db, u) => Q.cashProjection(db, u, companyId)),
   issuedCheques: (companyId: string) => query((db, u) => Q.issuedCheques(db, u, companyId)),

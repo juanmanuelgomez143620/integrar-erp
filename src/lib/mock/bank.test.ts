@@ -18,7 +18,7 @@ import {
   cmdUpdateCompanySettings,
   type Ctx,
 } from './engine'
-import { bankAccountView, listTasks } from './queries'
+import { bankAccountView, bankStatement, listTasks, reconciliationCandidates } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -210,6 +210,67 @@ describe('Banco Aula: Tesorería opera el banco', () => {
     // Al anular, la reversión también se procesa en el momento.
     cmdCancelFundsTransfer(ctx('tesoreria'), trf.id, 'Boleta equivocada')
     expect(view().balance).toBe(view().book_balance)
+  })
+})
+
+describe('Banco Aula: el extracto y la conciliación (8a.2)', () => {
+  it('el extracto de un período: el saldo al empezar, lo procesado día por día y el saldo final', () => {
+    cmdProcessBankOrders(ctx('tesoreria'), companyId(), [view().pending[0].id])
+    const trf = deposit(100_000)
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [pendingOf(trf.id).id])
+    const may = bankStatement(db, userId('tesoreria'), companyId(), '2027-05-01', '2027-05-31')!
+    expect(may).toMatchObject({
+      holder: { legal_name: 'Forestal del Norte SRL' },
+      account: { number: 'CC 0001-000001', alias: 'FORESTAL.NORTE.BA' },
+      opening_balance: 12_500_000,
+      debits: 0,
+      credits: 400_000,
+      closing_balance: 12_900_000,
+    })
+    expect(may.lines.map((l) => [l.date, l.transaction_number, l.credit, l.balance])).toEqual([
+      ['2027-05-14', 'SIM-000001', 300_000, 12_800_000],
+      ['2027-05-14', 'SIM-000002', 100_000, 12_900_000],
+    ])
+    // Enero: el saldo inicial de la cuenta es su primera línea.
+    const january = bankStatement(db, userId('contabilidad'), companyId(), '2027-01-01', '2027-01-31')!
+    expect(january.opening_balance).toBe(0)
+    expect(january.lines.map((l) => [l.concept, l.transaction_number, l.credit])).toEqual([
+      ['Saldo inicial de la cuenta', null, 12_500_000],
+    ])
+    // Un mes sin movimientos termina con el mismo saldo con que empezó.
+    expect(bankStatement(db, userId('tesoreria'), companyId(), '2027-03-01', '2027-03-31')).toMatchObject({
+      opening_balance: 12_500_000,
+      lines: [],
+      closing_balance: 12_500_000,
+    })
+  })
+
+  it('pide un período válido y sólo lo ve quien ve el banco', () => {
+    expectBusinessError(
+      () => bankStatement(db, userId('tesoreria'), companyId(), '2027-05-31', '2027-05-01'),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => bankStatement(db, userId('tesoreria'), companyId(), 'mayo', '2027-05-31'),
+      'DATO_INVALIDO',
+    )
+    expect(() => bankStatement(db, userId('compras1'), companyId(), '2027-05-01', '2027-05-31')).toThrow()
+  })
+
+  it('la conciliación de una cuenta que no es del Banco Aula sigue con el extracto escrito', () => {
+    expect(
+      reconciliationCandidates(db, userId('contabilidad'), companyId(), account('1.1.01.01'), '2027-05-14')!.bank,
+    ).toBeNull()
+    const bank = reconciliationCandidates(
+      db,
+      userId('contabilidad'),
+      companyId(),
+      account('1.1.01.03'),
+      '2027-05-14',
+    )!.bank!
+    // El depósito de la demo todavía no está en el banco: el extracto sólo tiene el saldo inicial.
+    expect(bank.balance).toBe(12_500_000)
+    expect(bank.lines.map((l) => l.concept)).toEqual(['Saldo inicial de la cuenta'])
   })
 })
 

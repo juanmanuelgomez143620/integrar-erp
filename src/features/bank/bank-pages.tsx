@@ -14,6 +14,7 @@ import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { StatementSection } from './bank-statement'
 
 function useBankAccount() {
   const company = useCompany()
@@ -233,6 +234,7 @@ export function HomeBankingPage() {
               columns={movementColumns(true)}
             />
           </Section>
+          <StatementSection />
         </div>
         <AccountData view={view} />
       </div>

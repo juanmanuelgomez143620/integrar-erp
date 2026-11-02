@@ -2,7 +2,7 @@
 // conciliación bancaria (docs/FASE_3_COMPRAS_Y_TESORERIA.md §7) sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { todayAR } from '../format'
+import { money, todayAR } from '../format'
 import type { DB } from './db'
 import {
   BusinessError,
@@ -15,6 +15,7 @@ import {
   cmdCreateFundsTransfer,
   cmdCreateJournalEntry,
   cmdPayPaymentOrder,
+  cmdProcessBankOrders,
   type BankReconciliationInput,
   type Ctx,
   type FundsTransferInput,
@@ -48,7 +49,7 @@ function expectBusinessError(fn: () => void, code: string) {
   } catch (e) {
     expect(e).toBeInstanceOf(BusinessError)
     expect((e as BusinessError).code).toBe(code)
-    return
+    return (e as BusinessError).message
   }
   expect.unreachable(`se esperaba BusinessError con código ${code}`)
 }
@@ -253,16 +254,29 @@ describe('cheques y conciliación bancaria', () => {
       journal_line_ids: january.lines.map((l) => l.line_id),
     })
     expect(byNumber(first.display_number)).toMatchObject({ status: 'CONFIRMADA' })
-    // Hoy: el depósito del seed ya está en el extracto, el cheque todavía no.
+    // Hoy: Tesorería ya procesó en el Banco Aula el depósito del seed; el cheque, todavía no.
+    const order = (amount: number) => db.bankMovements.find((m) => m.status === 'PENDIENTE' && m.amount === amount)!
+    cmdProcessBankOrders(ctx('tesoreria'), companyId(), [order(300000).id])
     const today = candidates()
     expect(today.last?.display_number).toBe(first.display_number)
     expect(today.lines.map((l) => [l.debit, l.credit])).toEqual([
       [300000, 0],
       [0, op.total],
     ])
+    // El extracto es el del banco: su saldo y lo que procesó después de la conciliación anterior.
+    expect(today.bank).toMatchObject({ balance: 12800000 })
+    expect(today.bank!.lines.map((l) => [l.concept, l.credit, l.balance])).toEqual([
+      ['Depósito en el banco del efectivo de la caja', 300000, 12800000],
+    ])
     const deposit = today.lines[0].line_id
+    expect(
+      expectBusinessError(
+        () => reconcile({ statement_balance: 12800000 - 1, journal_line_ids: [deposit] }),
+        'DATO_INVALIDO',
+      ),
+    ).toBe(`El saldo del extracto del Banco Aula al 14/05/2027 es ${money(12800000)}: es el que se concilia.`)
     expectBusinessError(
-      () => reconcile({ statement_balance: 12800000 - 1, journal_line_ids: [deposit] }),
+      () => reconcile({ statement_balance: 12800000, journal_line_ids: [] }),
       'CONCILIACION_NO_CIERRA',
     )
     expectBusinessError(() => reconcile({ statement_date: '2027-01-31', statement_balance: 12500000 }), 'DATO_INVALIDO')
@@ -289,7 +303,8 @@ describe('cheques y conciliación bancaria', () => {
       'TRANSICION_INVALIDA',
     )
     cmdCancelBankReconciliation(ctx('contabilidad'), second.id, 'Se cargó el saldo de otro extracto')
-    // Con el cheque debitado, cierra sin pendientes.
+    // Con el cheque debitado (lo procesa otro integrante de Tesorería), cierra sin pendientes.
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order(op.total).id])
     const all = candidates().lines.map((l) => l.line_id)
     const third = reconcile({ statement_balance: 12800000 - op.total, journal_line_ids: all })
     expect(issuedCheques(db, userId('tesoreria'), companyId())[0]).toMatchObject({

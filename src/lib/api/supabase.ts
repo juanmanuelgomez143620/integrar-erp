@@ -262,6 +262,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     postingRules: (companyId) => rpc('posting_rules_list', company(companyId)),
     treasuryAccounts: (companyId) => rpc('treasury_accounts', company(companyId)),
     bankAccount: (companyId) => rpc('bank_account_view', company(companyId)),
+    bankStatement: (companyId, from, to) => rpc('bank_statement', { ...company(companyId), p_from: from, p_to: to }),
     cashFlow: (companyId, from, to) => rpc('cash_flow', { ...company(companyId), p_from: from, p_to: to }),
     cashProjection: (companyId) => rpc('cash_projection', company(companyId)),
     issuedCheques: (companyId) => rpc('issued_cheques', company(companyId)),
