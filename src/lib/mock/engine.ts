@@ -7,6 +7,7 @@ import {
   ACTION_VERBS,
   ADJUSTMENT_REASONS,
   BANK_ACCOUNT_DEFAULTS,
+  BANK_CHARGES,
   BANK_MODES,
   BANK_MOVEMENT_STATUSES,
   BOM_COMPONENT_TYPES,
@@ -3722,7 +3723,12 @@ type BankOrderInput = Pick<
 >
 
 /** Un movimiento que llega a la cuenta, pendiente, con el número que sigue en el orden de llegada. */
-function addBankMovement(ctx: Ctx, account: T.BankAccount, input: BankOrderInput, on: string) {
+function addBankMovement(
+  ctx: Ctx,
+  account: T.BankAccount,
+  input: BankOrderInput & { charge?: T.BankCharge },
+  on: string,
+) {
   const seq = ctx.db.bankMovements.reduce(
     (max, m) => (m.bank_account_id === account.id ? Math.max(max, m.seq) : max),
     0,
@@ -3732,6 +3738,7 @@ function addBankMovement(ctx: Ctx, account: T.BankAccount, input: BankOrderInput
     company_id: account.company_id,
     bank_account_id: account.id,
     seq: seq + 1,
+    charge: null,
     ...input,
     status: 'PENDIENTE',
     received_on: on,
@@ -3815,6 +3822,11 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
   const today = businessDate(company)
   const sent: T.BankMovement[] = []
   let withdrawn = false
+  const registered = db.bankMovements.filter(
+    (m) => m.origin === 'BANCO' && lines.some((l) => l.id === m.journal_line_id),
+  )
+  for (const charge of registered) charge.journal_line_id = null
+  if (registered.length) syncChargesTask(ctx, company.id)
   for (const order of db.bankMovements.filter(
     (m) => m.origin === 'ORDEN' && m.reverses_id === null && lines.some((l) => l.id === m.journal_line_id),
   )) {
@@ -3942,6 +3954,9 @@ export function openBankAccount(ctx: Ctx, companyId: string) {
     alias: bankAlias(company.slug),
     opened_on: openedOn,
     overdraft_limit: BANK_ACCOUNT_DEFAULTS.overdraft_limit,
+    monthly_fee: BANK_ACCOUNT_DEFAULTS.monthly_fee,
+    overdraft_rate: BANK_ACCOUNT_DEFAULTS.overdraft_rate,
+    charges_from: `${businessDate(company).slice(0, 7)}-01`,
     is_active: true,
     created_at: ctx.now,
     created_by: ctx.userId,
@@ -4062,6 +4077,236 @@ export function cmdProcessBankOrders(ctx: Ctx, companyId: string, ids: string[])
       .join(', ')}`,
   })
   return { processed: orders.length }
+}
+
+/** "2026-10" → "2026-11". */
+function nextPeriod(period: string) {
+  const [year, month] = period.split('-').map(Number)
+  return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`
+}
+
+/** El primer y el último día de un mes. */
+function periodRange(period: string) {
+  const [year, month] = period.split('-').map(Number)
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  return { from: `${period}-01`, to: `${period}-${String(last).padStart(2, '0')}` }
+}
+
+/**
+ * El mes que el banco tiene que cerrar: el más viejo que ya terminó y no se cerró, desde que la
+ * cuenta empezó a operar en la app. null si no hay ninguno.
+ */
+export function bankMonthToClose(db: DB, account: T.BankAccount, today: string) {
+  const closed = new Set(db.bankClosings.filter((c) => c.bank_account_id === account.id).map((c) => c.period))
+  for (let period = account.charges_from.slice(0, 7); period < today.slice(0, 7); period = nextPeriod(period))
+    if (!closed.has(period)) return period
+  return null
+}
+
+/** Los cargos del mes: el impuesto sobre lo que movieron las órdenes y los intereses por el descubierto de cada día. */
+function monthCharges(db: DB, account: T.BankAccount, period: string) {
+  const { from, to } = periodRange(period)
+  const movements = processedBankMovements(db, account.id)
+  const moved = movements
+    .filter((m) => m.origin === 'ORDEN' && m.processed_on! >= from && m.processed_on! <= to)
+    .reduce((sum, m) => sum + m.amount, 0)
+  // El saldo de cada día al cerrar: lo que estuvo en negativo paga la tasa mensual, con mes de 30 días.
+  let balance = 0
+  let next = 0
+  let negative = 0
+  for (let day = from; day <= to; day = addDays(day, 1)) {
+    while (next < movements.length && movements[next].processed_on! <= day)
+      balance = round2(balance + bankSigned(movements[next++]))
+    if (balance < 0) negative = round2(negative - balance)
+  }
+  return {
+    fee: account.monthly_fee,
+    tax: round2((moved * BANK_ACCOUNT_DEFAULTS.debit_credit_tax_pct) / 100),
+    interest: round2((negative * account.overdraft_rate) / 3000),
+  }
+}
+
+/**
+ * Quien opera el banco cierra un mes: el banco debita, con la fecha de hoy, la comisión de
+ * mantenimiento, el impuesto a los débitos y créditos y los intereses por descubierto (las dos
+ * últimas si dan algo). Se cierran en orden, desde el mes en que la cuenta empezó a operar.
+ */
+export function cmdCloseBankMonth(ctx: Ctx, companyId: string, period: string) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bank.operate')
+  const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (!account) fail('DATO_INVALIDO', 'La empresa no tiene cuenta en el Banco Aula.')
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) fail('DATO_INVALIDO', 'Indicá el mes que se cierra.')
+  const today = businessDate(getCompany(db, companyId))
+  const label = periodLabel(period)
+  if (db.bankClosings.some((c) => c.bank_account_id === account.id && c.period === period))
+    fail('TRANSICION_INVALIDA', `${label} ya está cerrado en el Banco Aula.`)
+  if (period >= today.slice(0, 7)) fail('DATO_INVALIDO', `${label} todavía no terminó.`)
+  if (period < account.charges_from.slice(0, 7))
+    fail(
+      'DATO_INVALIDO',
+      `La cuenta opera en el Banco Aula desde ${periodLabel(account.charges_from.slice(0, 7))}: ${label} no se cierra.`,
+    )
+  const due = bankMonthToClose(db, account, today)
+  if (due !== period) fail('DATO_INVALIDO', `Primero hay que cerrar ${periodLabel(due!)}.`)
+  const { fee, tax, interest } = monthCharges(db, account, period)
+  const debited: [T.BankCharge, number, string][] = [
+    ['COMISION', fee, `${BANK_CHARGES.COMISION} · ${label}`],
+    ['IMPUESTO_DC', tax, `${BANK_CHARGES.IMPUESTO_DC} (0,6 %) · ${label}`],
+    ['INTERESES', interest, `${BANK_CHARGES.INTERESES} (${account.overdraft_rate} % mensual) · ${label}`],
+  ]
+  for (const [charge, amount, concept] of debited) {
+    if (amount <= 0) continue
+    const movement = addBankMovement(
+      ctx,
+      account,
+      {
+        origin: 'BANCO',
+        direction: 'DEBITO',
+        amount,
+        concept,
+        source_document_id: null,
+        journal_line_id: null,
+        reverses_id: null,
+        ordered_by: null,
+        charge,
+      },
+      today,
+    )
+    processBankMovement(db, movement, today, ctx.userId)
+  }
+  db.bankClosings.push({
+    id: uid(),
+    company_id: companyId,
+    bank_account_id: account.id,
+    period,
+    closed_on: today,
+    closed_by: ctx.userId,
+    fee,
+    tax,
+    interest,
+    created_at: ctx.now,
+  })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CLOSE_MONTH',
+    entity_type: 'bank_account',
+    entity_id: account.id,
+    entity_label: `Banco Aula ${account.number}`,
+    summary: `Cerró ${label} en el Banco Aula: comisión ${money(fee)}, impuesto a los débitos y créditos ${money(tax)}, intereses ${money(interest)}`,
+  })
+  syncChargesTask(ctx, companyId)
+  return { period, fee, tax, interest }
+}
+
+/** Mientras haya cargos del banco sin registrar, Contabilidad tiene una tarea abierta para registrarlos. */
+function syncChargesTask(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const unregistered = db.bankMovements.some(
+    (m) => m.company_id === companyId && m.origin === 'BANCO' && m.status === 'PROCESADO' && !m.journal_line_id,
+  )
+  const open = db.tasks.find(
+    (t) =>
+      t.company_id === companyId &&
+      t.task_type === 'REGISTRAR_CARGOS_BANCO' &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+  )
+  if (!unregistered) {
+    if (open) {
+      open.status = 'RESUELTA'
+      open.completed_by = ctx.userId
+      open.completed_at = ctx.now
+    }
+    return
+  }
+  if (open) return
+  const company = getCompany(db, companyId)
+  const task: T.Task = {
+    id: uid(),
+    company_id: companyId,
+    document_id: null,
+    task_type: 'REGISTRAR_CARGOS_BANCO',
+    title: 'Registrar los cargos del Banco Aula',
+    description:
+      'El banco debitó cargos que no están en los libros: registralos desde la conciliación de la cuenta del banco.',
+    origin_status: null,
+    context: {},
+    assigned_role: 'CONTABILIDAD',
+    assigned_user_id: null,
+    status: 'PENDIENTE',
+    priority: 'NORMAL',
+    source: 'SISTEMA',
+    claimed_by: null,
+    claimed_at: null,
+    completed_by: null,
+    completed_at: null,
+    created_by: null,
+    created_at: ctx.now,
+  }
+  db.tasks.push(task)
+  notifyRoles(ctx, companyId, ['CONTABILIDAD'], {
+    type: 'NUEVA_TAREA',
+    title: 'Cargos del Banco Aula',
+    body: 'El banco debitó cargos que no están en los libros: registralos desde la conciliación.',
+    link_path: `/e/${company.slug}/pagos/conciliaciones/nueva`,
+    task_id: task.id,
+  })
+}
+
+/**
+ * Contabilidad registra cargos que el banco ya debitó: un asiento automático con la cuenta de cada
+ * tipo de cargo al debe y el banco al haber. No le manda una orden al banco: registra lo que ya pasó.
+ */
+export function cmdRegisterBankCharges(ctx: Ctx, companyId: string, ids: string[]) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bank_reconciliation.create')
+  if (!ids.length) fail('DATO_INVALIDO', 'Elegí los cargos del banco que se registran.')
+  if (new Set(ids).size !== ids.length) fail('DATO_INVALIDO', 'Un cargo está dos veces.')
+  const chosen = ids
+    .map((id) => {
+      const charge = db.bankMovements.find(
+        (m) => m.id === id && m.company_id === companyId && m.origin === 'BANCO' && m.status === 'PROCESADO',
+      )
+      if (!charge) fail('DATO_INVALIDO', 'Uno de los cargos no es de esta empresa.')
+      if (charge.journal_line_id)
+        fail('TRANSICION_INVALIDA', `El cargo ${charge.transaction_number} ya está registrado.`)
+      return charge
+    })
+    .sort((a, b) => a.seq - b.seq)
+  const account = db.bankAccounts.find((b) => b.id === chosen[0].bank_account_id)!
+  const total = round2(chosen.reduce((sum, c) => sum + c.amount, 0))
+  // Al debe, la cuenta de cada tipo de cargo (en el orden en que aparecen); al haber, el banco.
+  const debits = new Map<string, number>()
+  for (const c of chosen) {
+    const target = ruleAccount(db, companyId, 'CARGOS_BANCARIOS', c.charge!)
+    debits.set(target.id, round2((debits.get(target.id) ?? 0) + c.amount))
+  }
+  const entry = newEntry(
+    ctx,
+    companyId,
+    actor,
+    businessDate(getCompany(db, companyId)),
+    {
+      description: `Cargos del Banco Aula registrados desde la conciliación: ${chosen.length} cargo${chosen.length === 1 ? '' : 's'} por ${money(total)}.`,
+      origin: 'AUTOMATICO',
+      reverses_id: null,
+    },
+    [
+      ...[...debits].map(([account_id, debit]) => ({ account_id, debit, credit: 0, notes: '' })),
+      { account_id: account.ledger_account_id, debit: 0, credit: total, notes: '' },
+    ],
+  )
+  postEntry(
+    ctx,
+    entry,
+    (n) => `Registró ${entry.display_number}, asiento automático N.º ${n} de los cargos del Banco Aula`,
+    actor,
+  )
+  const bankLine = db.jeLines.find((l) => l.document_id === entry.id && l.account_id === account.ledger_account_id)!
+  for (const c of chosen) c.journal_line_id = bankLine.id
+  syncChargesTask(ctx, companyId)
+  return { id: entry.id, display_number: entry.display_number }
 }
 
 // ============================================================ Pedidos de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2)

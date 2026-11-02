@@ -219,6 +219,11 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'IIBB', key: 'RETENCIONES', code: '1.1.04.03' },
   { event: 'IIBB', key: 'IIBB_A_PAGAR', code: '2.1.04.03' },
   { event: 'PAGO_IIBB', key: 'IIBB_A_PAGAR', code: '2.1.04.03' },
+  // Los cargos que el Banco Aula debita por su cuenta (Fase 8b).
+  { event: 'CARGOS_BANCARIOS', key: 'COMISION', code: '5.3.01.03' },
+  { event: 'CARGOS_BANCARIOS', key: 'IMPUESTO_DC', code: '5.3.01.03' },
+  { event: 'CARGOS_BANCARIOS', key: 'INTERESES', code: '5.3.01.01' },
+  { event: 'CARGOS_BANCARIOS', key: 'RECHAZO', code: '5.3.01.03' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */

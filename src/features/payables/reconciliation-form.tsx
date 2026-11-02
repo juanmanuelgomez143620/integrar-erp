@@ -108,6 +108,14 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
   // En la cuenta del Banco Aula el saldo del extracto no se escribe: es el del banco a esa fecha.
   const statement = data.bank ? data.bank.balance : amount(balance)
   const difference = statement == null ? null : round2(statement - expected)
+  const register = useCommand(
+    () =>
+      commands.registerBankCharges(
+        company.companyId,
+        (data.bank?.charges ?? []).map((c) => c.id),
+      ),
+    { success: (r) => `Cargos del banco registrados en ${r.display_number}.` },
+  )
   const save = useCommand(
     () =>
       commands.createBankReconciliation(company.companyId, {
@@ -147,6 +155,30 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
           empty="No hay movimientos sin conciliar hasta esa fecha."
         />
       </Section>
+      {data.bank && data.bank.charges.length > 0 && (
+        <Section
+          className="lg:col-start-1"
+          title={`Cargos del banco sin registrar (${data.bank.charges.length})`}
+          description="El banco los debitó y no están en los libros: registralos (con la fecha de hoy) para que la conciliación cierre."
+          actions={
+            <Button size="sm" disabled={register.isPending} onClick={() => register.mutate([])}>
+              Registrar en los libros
+            </Button>
+          }
+          bodyClassName="p-0"
+        >
+          <ul className="divide-y text-sm">
+            {data.bank.charges.map((c) => (
+              <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-2">
+                <span>
+                  {date(c.date)} · {c.transaction_number} · {c.concept}
+                </span>
+                <span className="tabular">{money(c.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
       {data.bank && (
         <Section
           className="lg:col-start-1"
@@ -218,7 +250,11 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
               )}
               {difference === 0
                 ? 'Cierra: libros y extracto coinciden.'
-                : `No cierra: diferencia de ${money(difference)}. Revisá qué figura en el extracto; si el banco registró comisiones o intereses, Contabilidad los registra con un asiento.`}
+                : `No cierra: diferencia de ${money(difference)}. ${
+                    data.bank
+                      ? 'Marcá lo que figura en el extracto; los cargos que debitó el banco se registran desde «Cargos del banco sin registrar».'
+                      : 'Revisá qué figura en el extracto; si el banco registró comisiones o intereses, Contabilidad los registra con un asiento.'
+                  }`}
             </p>
           )}
           <Field label="Observaciones" className="mt-3">
@@ -228,7 +264,8 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
         <Button size="lg" disabled={save.isPending || difference !== 0} onClick={() => save.mutate([])}>
           Confirmar conciliación
         </Button>
-        {company.can('journal_entry.create') && (
+        {/* En el Banco Aula, un asiento manual le mandaría al banco otra orden: los cargos se registran arriba. */}
+        {!data.bank && company.can('journal_entry.create') && (
           <Button variant="outline" asChild>
             <Link to={company.docPath('JOURNAL_ENTRY', 'nuevo')}>Registrar un gasto bancario</Link>
           </Button>

@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
 import { api, commands, type BankAccountView, type BankMovementRow } from '@/lib/api'
 import { BANK_MODES } from '@/lib/domain/catalog'
+import { periodLabel } from '@/features/hr/payroll'
 import { date, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
@@ -96,6 +97,12 @@ function movementColumns(withSource: boolean): Column<BankMovementRow>[] {
       cell: (r) => (
         <div className="whitespace-normal">
           {r.concept}
+          {r.origin === 'BANCO' && (
+            <>
+              {' '}
+              <StatusBadge label="Cargo del banco" badge="warning" />
+            </>
+          )}
           {r.processed_by_name && <div className="text-xs text-muted-foreground">Procesó {r.processed_by_name}</div>}
         </div>
       ),
@@ -133,6 +140,8 @@ function AccountData({ view }: { view: BankAccountView }) {
         </InfoRow>
         <InfoRow label="Abierta el">{date(account.opened_on)}</InfoRow>
         <InfoRow label="Acuerdo de descubierto">{money(account.overdraft_limit)}</InfoRow>
+        <InfoRow label="Comisión de mantenimiento">{money(account.monthly_fee)} por mes</InfoRow>
+        <InfoRow label="Intereses por descubierto">{account.overdraft_rate} % mensual</InfoRow>
         <InfoRow label="En los libros">
           {account.ledger.code} {account.ledger.name}
         </InfoRow>
@@ -256,6 +265,10 @@ export function BankTrayPage() {
       r.processed === 1 ? 'Orden procesada: ya está en la cuenta.' : `${r.processed} órdenes procesadas.`,
     onSuccess: () => setSelected(new Set()),
   })
+  const closeMonth = useCommand((period: string) => commands.closeBankMonth(company.companyId, period), {
+    success: (r) =>
+      `Mes cerrado: el banco debitó ${money(Math.round((r.fee + r.tax + r.interest) * 100) / 100)} entre comisión, impuesto e intereses.`,
+  })
   const crumbs = [
     { label: 'Inicio', to: company.to() },
     { label: 'Pagos y tesorería' },
@@ -311,6 +324,27 @@ export function BankTrayPage() {
         <KpiCard label="Acuerdo de descubierto" value={money(view.account.overdraft_limit)} />
       </div>
       <div className="space-y-4">
+        <Section
+          title="Cierre del mes"
+          description={`Al cerrar un mes, el banco debita la comisión de mantenimiento (${money(view.account.monthly_fee)}), el impuesto a los débitos y créditos (0,6 % de lo que movieron las órdenes del mes) y, si la cuenta estuvo en descubierto, los intereses (${view.account.overdraft_rate} % mensual). Contabilidad los registra desde la conciliación.`}
+        >
+          {view.to_close ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <span>
+                <span className="font-medium">{periodLabel(view.to_close)}</span> terminó y todavía no se cerró.
+              </span>
+              {company.can('bank.operate') && (
+                <Button disabled={closeMonth.isPending} onClick={() => closeMonth.mutate([view.to_close!])}>
+                  Cerrar {periodLabel(view.to_close)}
+                </Button>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No hay meses para cerrar: el próximo se cierra cuando termine.
+            </p>
+          )}
+        </Section>
         <Section
           title="Órdenes pendientes"
           description="En el orden en que llegaron. Se procesan con la fecha de hoy."

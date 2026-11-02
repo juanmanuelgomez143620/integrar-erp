@@ -78,6 +78,7 @@ export type {
   PriceListRow,
   ProducibleProduct,
   BankAccountView,
+  BankChargeRow,
   BankMovementRow,
   BankStatement,
   BankStatementLine,
@@ -472,6 +473,9 @@ const mockCommands = {
     command((c) => E.cmdCloseRouteSheet(c, docId, outcomes)),
   cancelRouteSheet: (docId: string, reason: string) => command((c) => E.cmdCancelRouteSheet(c, docId, reason)),
   processBankOrders: (companyId: string, ids: string[]) => command((c) => E.cmdProcessBankOrders(c, companyId, ids)),
+  closeBankMonth: (companyId: string, period: string) => command((c) => E.cmdCloseBankMonth(c, companyId, period)),
+  registerBankCharges: (companyId: string, ids: string[]) =>
+    command((c) => E.cmdRegisterBankCharges(c, companyId, ids)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

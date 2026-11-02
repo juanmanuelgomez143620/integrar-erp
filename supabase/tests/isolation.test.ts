@@ -258,8 +258,11 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_company_id: company,
     p_document_id: doc,
     p_task_id: B.task,
-    // La bandeja del banco recibe un movimiento de la cuenta de B; los avisos, uno de B.
-    p_ids: fn === 'bank_orders_process' ? `{${B.bankMovement}}` : `{${B.notification}}`,
+    // La bandeja del banco y el registro de sus cargos reciben un movimiento de la cuenta de B; los
+    // avisos, uno de B.
+    p_ids: ['bank_orders_process', 'bank_charges_register'].includes(fn)
+      ? `{${B.bankMovement}}`
+      : `{${B.notification}}`,
     p_user_id: u.alumnoB,
     p_user_ids: `{${u.alumnoB}}`,
     p_member_role_id: B.memberRole,

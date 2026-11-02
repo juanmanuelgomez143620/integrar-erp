@@ -1,6 +1,6 @@
-// Pruebas del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3, 8a.1): la cuenta de la empresa, las
-// órdenes que le llegan de los asientos, Tesorería que opera el banco (SoD-12: quien envía una
-// orden no la procesa) y el modo del banco.
+// Pruebas del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3): la cuenta de la empresa, las órdenes
+// que le llegan de los asientos, Tesorería que opera el banco (SoD-12: quien envía una orden no la
+// procesa), el modo del banco, el extracto y la conciliación (8a) y los cargos del mes (8b.1).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ROLES } from '../domain/catalog'
@@ -11,10 +11,14 @@ import {
   accountBalance,
   bankAlias,
   cmdCancelFundsTransfer,
+  cmdCancelJournalEntry,
+  cmdCloseBankMonth,
   cmdConfirmJournalEntry,
   cmdCreateCompanyFromTemplate,
   cmdCreateFundsTransfer,
+  cmdCreateJournalEntry,
   cmdProcessBankOrders,
+  cmdRegisterBankCharges,
   cmdUpdateCompanySettings,
   type Ctx,
 } from './engine'
@@ -271,6 +275,143 @@ describe('Banco Aula: el extracto y la conciliación (8a.2)', () => {
     // El depósito de la demo todavía no está en el banco: el extracto sólo tiene el saldo inicial.
     expect(bank.balance).toBe(12_500_000)
     expect(bank.lines.map((l) => l.concept)).toEqual(['Saldo inicial de la cuenta'])
+  })
+})
+
+describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
+  /** Mayo con descubierto: el depósito de la demo y un pago de 13 millones, los dos procesados el 14/05. */
+  const mayInOverdraft = () => {
+    cmdProcessBankOrders(ctx('tesoreria'), companyId(), [view().pending[0].id])
+    const big = cmdCreateJournalEntry(
+      ctx('contabilidad'),
+      companyId(),
+      {
+        document_date: '2027-05-14',
+        description: 'Pago de la ampliación del galpón con transferencia bancaria.',
+        lines: [
+          { account_id: account('5.2.02.02'), debit: 13_000_000, credit: 0 },
+          { account_id: account('1.1.01.03'), debit: 0, credit: 13_000_000 },
+        ],
+      },
+      true,
+    )
+    cmdProcessBankOrders(ctx('tesoreria'), companyId(), [pendingOf(big.id).id])
+  }
+  const travel = (day: string) => vi.setSystemTime(new Date(`${day}T12:00:00-03:00`))
+  const closeMay = () => cmdCloseBankMonth(ctx('tesoreria'), companyId(), '2027-05')
+
+  it('al cerrar el mes, el banco debita la comisión, el impuesto y los intereses por descubierto', () => {
+    mayInOverdraft()
+    expect(view().balance).toBe(-200_000)
+    travel('2027-06-03')
+    expect(view().to_close).toBe('2027-05')
+    // Impuesto: 0,6 % de lo que movieron las órdenes (300.000 + 13.000.000). Intereses: 200.000 en
+    // negativo del 14 al 31 de mayo (18 días) al 6 % mensual, con mes de 30 días.
+    expect(closeMay()).toEqual({ period: '2027-05', fee: 15_000, tax: 79_800, interest: 7_200 })
+    const v = view()
+    expect(v.to_close).toBeNull()
+    expect(v.movements.slice(0, 3).map((m) => [m.origin, m.charge, m.amount, m.processed_on])).toEqual([
+      ['BANCO', 'INTERESES', 7_200, '2027-06-03'],
+      ['BANCO', 'IMPUESTO_DC', 79_800, '2027-06-03'],
+      ['BANCO', 'COMISION', 15_000, '2027-06-03'],
+    ])
+    expect(v.movements[2].concept).toBe('Comisión de mantenimiento de cuenta · 05/2027')
+    expect(v.balance).toBe(-302_000)
+    expect(db.audit.at(-1)).toMatchObject({ action: 'CLOSE_MONTH', entity_type: 'bank_account' })
+    const tasks = listTasks(db, userId('contabilidad'), companyId(), 'mine').filter(
+      (t) => t.task_type === 'REGISTRAR_CARGOS_BANCO',
+    )
+    expect(tasks.map((t) => t.path)).toEqual(['/e/forestal-del-norte/pagos/conciliaciones/nueva'])
+  })
+
+  it('se cierran en orden, una vez, sólo los meses terminados y desde que la cuenta opera', () => {
+    expect(expectBusinessError(closeMay, 'DATO_INVALIDO')).toBe('05/2027 todavía no terminó.')
+    expect(
+      expectBusinessError(() => cmdCloseBankMonth(ctx('tesoreria'), companyId(), '2027-04'), 'DATO_INVALIDO'),
+    ).toBe('La cuenta opera en el Banco Aula desde 05/2027: 04/2027 no se cierra.')
+    travel('2027-07-02')
+    expect(
+      expectBusinessError(() => cmdCloseBankMonth(ctx('tesoreria'), companyId(), '2027-06'), 'DATO_INVALIDO'),
+    ).toBe('Primero hay que cerrar 05/2027.')
+    expectBusinessError(() => cmdCloseBankMonth(ctx('contabilidad'), companyId(), '2027-05'), 'SIN_PERMISO')
+    expect(closeMay()).toMatchObject({ fee: 15_000, tax: 0, interest: 0 })
+    expectBusinessError(closeMay, 'TRANSICION_INVALIDA')
+    // Junio: sin órdenes ni descubierto, sólo la comisión.
+    expect(cmdCloseBankMonth(ctx('tesoreria2'), companyId(), '2027-06')).toMatchObject({
+      fee: 15_000,
+      tax: 0,
+      interest: 0,
+    })
+    expect(view().to_close).toBeNull()
+  })
+
+  it('Contabilidad registra los cargos desde la conciliación; si anula el asiento, vuelven a quedar sin registrar', () => {
+    mayInOverdraft()
+    travel('2027-06-03')
+    closeMay()
+    const candidates = () =>
+      reconciliationCandidates(db, userId('contabilidad'), companyId(), account('1.1.01.03'), '2027-06-03')!.bank!
+    const charges = candidates().charges
+    expect(charges.map((c) => [c.charge, c.amount])).toEqual([
+      ['COMISION', 15_000],
+      ['IMPUESTO_DC', 79_800],
+      ['INTERESES', 7_200],
+    ])
+    const ids = charges.map((c) => c.id)
+    const movements = db.bankMovements.length
+    expectBusinessError(() => cmdRegisterBankCharges(ctx('tesoreria'), companyId(), ids), 'SIN_PERMISO')
+    expectBusinessError(() => cmdRegisterBankCharges(ctx('contabilidad'), companyId(), []), 'DATO_INVALIDO')
+    const entry = cmdRegisterBankCharges(ctx('contabilidad'), companyId(), ids)
+    const doc = db.documents.find((d) => d.id === entry.id)!
+    expect(doc).toMatchObject({ status: 'CONFIRMADO', je: { origin: 'AUTOMATICO' } })
+    const code = (id: string) => db.accounts.find((a) => a.id === id)!.code
+    expect(
+      db.jeLines
+        .filter((l) => l.document_id === entry.id)
+        .sort((a, b) => a.line_no - b.line_no)
+        .map((l) => [code(l.account_id), l.debit, l.credit]),
+    ).toEqual([
+      ['5.3.01.03', 94_800, 0],
+      ['5.3.01.01', 7_200, 0],
+      ['1.1.01.03', 0, 102_000],
+    ])
+    // Registra lo que el banco ya debitó: no le manda una orden nueva.
+    expect(db.bankMovements.length).toBe(movements)
+    expect(candidates().charges).toEqual([])
+    expect(view().book_balance).toBe(view().balance)
+    expectBusinessError(() => cmdRegisterBankCharges(ctx('contabilidad'), companyId(), ids), 'TRANSICION_INVALIDA')
+    const open = () =>
+      listTasks(db, userId('contabilidad'), companyId(), 'mine').filter((t) => t.task_type === 'REGISTRAR_CARGOS_BANCO')
+    expect(open()).toEqual([])
+
+    cmdCancelJournalEntry(ctx('contabilidad'), entry.id, 'Se registró con la cuenta equivocada')
+    expect(candidates().charges.map((c) => c.id)).toEqual(ids)
+    expect(open()).toHaveLength(1)
+    expect(db.bankMovements.length).toBe(movements)
+  })
+
+  it('una base de la versión 23 recibe la comisión, la tasa y las reglas de los cargos', () => {
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    delete old.bankClosings
+    for (const account of old.bankAccounts!) {
+      const a = account as Partial<T.BankAccount>
+      delete a.monthly_fee
+      delete a.overdraft_rate
+      delete a.charges_from
+    }
+    for (const m of old.bankMovements!) delete (m as Partial<T.BankMovement>).charge
+    old.postingRules = old.postingRules!.filter((r) => r.event !== 'CARGOS_BANCARIOS')
+    old.version = 23
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    expect(db.bankAccounts[0]).toMatchObject({ monthly_fee: 15_000, overdraft_rate: 6, charges_from: '2027-05-01' })
+    expect(db.bankMovements.every((m) => m.charge === null)).toBe(true)
+    expect(
+      db.postingRules
+        .filter((r) => r.event === 'CARGOS_BANCARIOS')
+        .map((r) => r.key)
+        .sort(),
+    ).toEqual(['COMISION', 'IMPUESTO_DC', 'INTERESES', 'RECHAZO'])
   })
 })
 

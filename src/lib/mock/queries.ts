@@ -17,8 +17,10 @@ import { date, money, qty, todayAR } from '../format'
 import type { DB } from './db'
 import {
   accountBalance,
+  businessDate,
   bankAccountFor,
   bankMode,
+  bankMonthToClose,
   bankSigned,
   processedBankMovements,
   accountLabel,
@@ -3462,6 +3464,8 @@ export interface BankMovementRow {
   id: string
   seq: number
   origin: T.BankMovementOrigin
+  /** El tipo de cargo, si lo debitó el banco por su cuenta. */
+  charge: T.BankCharge | null
   direction: T.BankDirection
   amount: number
   concept: string
@@ -3488,9 +3492,13 @@ export interface BankAccountView {
     alias: string
     opened_on: string
     overdraft_limit: number
+    monthly_fee: number
+    overdraft_rate: number
     ledger: { id: string; code: string; name: string }
   }
   mode: T.BankMode
+  /** El mes que el banco tiene que cerrar (el más viejo terminado y sin cerrar); null si no hay. */
+  to_close: string | null
   /** Saldo según el banco: lo procesado. */
   balance: number
   /** Saldo según libros: el mayor de la cuenta contable que la refleja. */
@@ -3510,6 +3518,7 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
   const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
   if (!account) return null
   const eff = effectivePermissions(db, userId, companyId)
+  const company = db.companies.find((c) => c.id === companyId)!
   const ledger = db.accounts.find((a) => a.id === account.ledger_account_id)!
   const row = (m: T.BankMovement, balance: number | null): BankMovementRow => {
     const doc = m.source_document_id ? db.documents.find((d) => d.id === m.source_document_id) : undefined
@@ -3517,6 +3526,7 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       id: m.id,
       seq: m.seq,
       origin: m.origin,
+      charge: m.charge,
       direction: m.direction,
       amount: m.amount,
       concept: m.concept,
@@ -3548,9 +3558,12 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       alias: account.alias,
       opened_on: account.opened_on,
       overdraft_limit: account.overdraft_limit,
+      monthly_fee: account.monthly_fee,
+      overdraft_rate: account.overdraft_rate,
       ledger: { id: ledger.id, code: ledger.code, name: ledger.name },
     },
-    mode: bankMode(db.companies.find((c) => c.id === companyId)!),
+    mode: bankMode(company),
+    to_close: bankMonthToClose(db, account, businessDate(company)),
     balance,
     book_balance: accountBalance(db, ledger.id),
     pending: movements
@@ -3867,7 +3880,12 @@ export interface ReconciliationCandidates {
    * Si es la cuenta de un banco del Banco Aula (Fase 8a.2): el saldo según el banco a esa fecha (el del
    * extracto, que ya no se escribe) y lo que procesó desde la última conciliación, para puntear.
    */
-  bank: { balance: number; lines: BankStatementLine[] } | null
+  bank: {
+    balance: number
+    lines: BankStatementLine[]
+    /** Los cargos que el banco debitó hasta esa fecha y no están en los libros: Contabilidad los registra. */
+    charges: BankChargeRow[]
+  } | null
 }
 
 /** Lo que hace falta para conciliar un banco a una fecha (null si la cuenta no es una caja o un banco). */
@@ -3906,7 +3924,31 @@ function bankStatementSince(db: DB, ledgerAccountId: string, since: string | nul
   const bank = bankAccountFor(db, ledgerAccountId)
   if (!bank) return null
   const lines = statementLines(db, bank.id).filter((l) => l.date <= upTo)
-  return { balance: lines.at(-1)?.balance ?? 0, lines: lines.filter((l) => since === null || l.date > since) }
+  const charges = processedBankMovements(db, bank.id)
+    .filter((m) => m.origin === 'BANCO' && !m.journal_line_id && m.processed_on! <= upTo)
+    .map((m) => ({
+      id: m.id,
+      date: m.processed_on!,
+      transaction_number: m.transaction_number,
+      charge: m.charge!,
+      concept: m.concept,
+      amount: m.amount,
+    }))
+  return {
+    balance: lines.at(-1)?.balance ?? 0,
+    lines: lines.filter((l) => since === null || l.date > since),
+    charges,
+  }
+}
+
+/** Un cargo del banco sin registrar en los libros. */
+export interface BankChargeRow {
+  id: string
+  date: string
+  transaction_number: string | null
+  charge: T.BankCharge
+  concept: string
+  amount: number
 }
 
 export type ChequeStatus = 'PENDIENTE' | 'DEBITADO' | 'ANULADO'
@@ -4044,7 +4086,9 @@ export function listTasks(
               ? `/e/${company.slug}/stock`
               : t.task_type === 'PROCESAR_BANCO'
                 ? `/e/${company.slug}/pagos/banco-aula/bandeja`
-                : null,
+                : t.task_type === 'REGISTRAR_CARGOS_BANCO'
+                  ? `/e/${company.slug}/pagos/conciliaciones/nueva`
+                  : null,
           assignee_label: t.assigned_user_id
             ? nameOf(db, t.assigned_user_id)
             : t.assigned_role

@@ -462,6 +462,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     closeRouteSheet: (docId, outcomes) => rpc('rs_close', { ...doc(docId), p_lines: outcomes }),
     cancelRouteSheet: (docId, reason) => rpc('rs_cancel', { ...doc(docId), p_reason: reason }),
     processBankOrders: (companyId, ids) => rpc('bank_orders_process', { ...company(companyId), p_ids: ids }),
+    closeBankMonth: (companyId, period) => rpc('bank_month_close', { ...company(companyId), p_period: period }),
+    registerBankCharges: (companyId, ids) => rpc('bank_charges_register', { ...company(companyId), p_ids: ids }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

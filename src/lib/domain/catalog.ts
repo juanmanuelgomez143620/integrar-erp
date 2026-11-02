@@ -6,6 +6,7 @@ import type {
   AccountType,
   AdjustmentReason,
   Badge,
+  BankCharge,
   BankMode,
   BankMovementStatus,
   DeliveryStatus,
@@ -849,6 +850,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   PAGAR_DJ: 'Pagar impuesto',
   REPONER_STOCK: 'Evaluar reposición',
   PROCESAR_BANCO: 'Procesar órdenes del banco',
+  REGISTRAR_CARGOS_BANCO: 'Registrar cargos del banco',
   CONSIGNA: 'Consigna del docente',
 }
 
@@ -873,6 +875,19 @@ export const BANK_ACCOUNT_DEFAULTS = {
   bank_key: 'SIM0001000000000017',
   /** Acuerdo de descubierto (se usa desde la Fase 8b). */
   overdraft_limit: 1_000_000,
+  /** Comisión de mantenimiento por mes (Fase 8b). */
+  monthly_fee: 15_000,
+  /** Intereses por descubierto: tasa mensual, en por ciento, con mes de 30 días (Fase 8b). */
+  overdraft_rate: 6,
+  /** Impuesto a los débitos y créditos: por ciento de lo que movieron las órdenes del mes (Fase 8b). */
+  debit_credit_tax_pct: 0.6,
+}
+
+export const BANK_CHARGES: Record<BankCharge, string> = {
+  COMISION: 'Comisión de mantenimiento de cuenta',
+  IMPUESTO_DC: 'Impuesto a los débitos y créditos',
+  INTERESES: 'Intereses por descubierto',
+  RECHAZO: 'Comisión por rechazo',
 }
 
 export const BANK_MOVEMENT_STATUSES: Record<BankMovementStatus, { label: string; badge: Badge }> = {
@@ -1085,6 +1100,16 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     keys: {
       // La contrapartida es la caja o el banco elegido, no una regla.
       IIBB_A_PAGAR: 'Saldo que se paga',
+    },
+  },
+  CARGOS_BANCARIOS: {
+    label: 'Cargos del Banco Aula (registrados desde la conciliación)',
+    keys: {
+      // La contrapartida es la cuenta del banco que los debitó, no una regla.
+      COMISION: 'Comisión de mantenimiento de cuenta',
+      IMPUESTO_DC: 'Impuesto a los débitos y créditos',
+      INTERESES: 'Intereses por descubierto',
+      RECHAZO: 'Comisión por rechazo',
     },
   },
   CONVERSION_PRODUCCION: {

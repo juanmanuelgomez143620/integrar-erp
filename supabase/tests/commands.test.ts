@@ -4314,6 +4314,152 @@ describe('paridad de comandos', () => {
     await view('la cuenta al día (tesorería)', 'tesoreria')
   })
 
+  it('banco: el cierre del mes con sus cargos y su registro desde la conciliación (8b.1)', async () => {
+    const companyPg = pg(company)
+    const ledger = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
+    const today = todayAR()
+    const [year, month] = today.split('-').map(Number)
+    const previous = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, '0')}`
+    const view = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.bankAccount(companyPg),
+        (u) => Q.bankAccountView(mock, u, company),
+      )
+    const candidates = (label: string) =>
+      sameRead(
+        label,
+        'contabilidad',
+        (b) => b.api.reconciliationCandidates(companyPg, pg(ledger), today),
+        (u) => Q.reconciliationCandidates(mock, u, company, ledger, today),
+      )
+    const close = (label: string, username: string, period: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCloseBankMonth(c, company, period),
+        (b) => b.commands.closeBankMonth(companyPg, period),
+      )
+    const register = (label: string, username: string, ids: string[]) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdRegisterBankCharges(c, company, ids),
+        (b) => b.commands.registerBankCharges(companyPg, ids.map(pg)),
+      )
+    const charges = () =>
+      mock.bankMovements
+        .filter((m) => m.company_id === company && m.origin === 'BANCO' && !m.journal_line_id)
+        .sort((a, b) => a.seq - b.seq)
+
+    expect(await close('el mes en curso no terminó', 'tesoreria', today.slice(0, 7))).toBeNull()
+    expect(await close('la cuenta todavía no operaba', 'tesoreria', previous)).toBeNull()
+
+    // Un pago más grande que el saldo deja la cuenta en descubierto (el banco lo opera el sistema).
+    const amount = Math.round((Q.bankAccountView(mock, mockId('tesoreria'), company)!.balance + 100_000) * 100) / 100
+    expect(amount, 'el saldo de la cuenta').toBeGreaterThan(0)
+    const input: E.JournalEntryInput = {
+      document_date: today,
+      description: 'Pago de la ampliación del galpón con transferencia bancaria.',
+      lines: [
+        {
+          account_id: mock.accounts.find((a) => a.company_id === company && a.code === '5.2.02.02')!.id,
+          debit: amount,
+          credit: 0,
+        },
+        { account_id: ledger, debit: 0, credit: amount },
+      ],
+    }
+    await created(
+      'un pago grande deja la cuenta en descubierto',
+      'contabilidad',
+      (c) => E.cmdCreateJournalEntry(c, company, input, true),
+      (b) =>
+        b.commands.createJournalEntry(
+          companyPg,
+          { ...input, lines: input.lines.map((l) => ({ ...l, account_id: pg(l.account_id) })) },
+          true,
+        ),
+    )
+
+    // En los dos lados, el banco cobra desde el mes anterior y lo que procesó hoy pasa al 15 de ese
+    // mes: cierra con impuesto (lo que movieron las órdenes) e intereses (en descubierto desde el 15).
+    const fifteenth = `${previous}-15`
+    for (const b of mock.bankAccounts.filter((x) => x.company_id === company)) b.charges_from = `${previous}-01`
+    for (const m of mock.bankMovements.filter((x) => x.company_id === company && x.processed_on === today)) {
+      m.received_on = fifteenth
+      m.processed_on = fifteenth
+    }
+    await db.admin(`update public.bank_accounts set charges_from = $1 where company_id = $2`, [
+      `${previous}-01`,
+      companyPg,
+    ])
+    await db.admin(
+      `update public.bank_movements set received_on = $1, processed_on = $1 where company_id = $2 and processed_on = $3`,
+      [fifteenth, companyPg, today],
+    )
+    await view('el mes anterior, para cerrar', 'tesoreria')
+
+    expect(await close('Gerencia no opera el banco', 'gerencia', previous)).toBeNull()
+    expect(await close('un mes que no existe', 'tesoreria', `${year}-13`)).toBeNull()
+    const closed = await ok(
+      'Tesorería cierra el mes anterior',
+      'tesoreria',
+      (c) => E.cmdCloseBankMonth(c, company, previous),
+      (b) => b.commands.closeBankMonth(companyPg, previous),
+    )
+    expect(closed.pg).toEqual(closed.mock)
+    expect(closed.mock.tax, 'el impuesto de lo que movieron las órdenes').toBeGreaterThan(0)
+    // 100.000 en negativo desde el 15 hasta fin de mes, al 6 % mensual con mes de 30 días.
+    const days = new Date(year, month - 1, 0).getDate() - 14
+    expect(closed.mock.interest, 'los intereses por descubierto').toBe(days * 200)
+    expect(await close('el mismo mes otra vez', 'tesoreria2', previous)).toBeNull()
+
+    // Los cargos: el mismo registro en los dos lados, por su orden.
+    const debited = charges()
+    const rows = await db.admin<{ id: string }>(
+      `select id from public.bank_movements where company_id = $1 and origin = 'BANCO' order by seq`,
+      [companyPg],
+    )
+    expect(rows.length, 'cargos en los dos lados').toBe(debited.length)
+    debited.forEach((m, i) => loaded.link(m.id, rows[i].id))
+    await view('la cuenta con los cargos del mes', 'tesoreria')
+    await candidates('los cargos sin registrar en la conciliación')
+
+    const ids = debited.map((m) => m.id)
+    expect(await register('Tesorería no los registra', 'tesoreria2', ids)).toBeNull()
+    expect(await register('sin cargos', 'contabilidad', [])).toBeNull()
+    expect(await register('un cargo dos veces', 'contabilidad', [ids[0], ids[0]])).toBeNull()
+    const entry = await created(
+      'Contabilidad registra los cargos con un asiento automático',
+      'contabilidad',
+      (c) => E.cmdRegisterBankCharges(c, company, ids),
+      (b) => b.commands.registerBankCharges(companyPg, ids.map(pg)),
+    )
+    expect(await register('ya registrados', 'contabilidad', ids)).toBeNull()
+    await candidates('la conciliación sin cargos pendientes')
+
+    // Si se anula el asiento, los cargos vuelven a quedar sin registrar (y el banco no recibe nada).
+    expect(
+      await step(
+        'anular el asiento de los cargos',
+        'contabilidad',
+        (c) => E.cmdCancelJournalEntry(c, entry, 'Se registró con la cuenta equivocada'),
+        (b) => b.commands.cancelJournalEntry(pg(entry), 'Se registró con la cuenta equivocada'),
+      ),
+    ).not.toBeNull()
+    expect(charges().map((m) => m.id)).toEqual(ids)
+    await candidates('los cargos otra vez sin registrar')
+    await created(
+      'se registran de nuevo',
+      'contabilidad',
+      (c) => E.cmdRegisterBankCharges(c, company, ids),
+      (b) => b.commands.registerBankCharges(companyPg, ids.map(pg)),
+    )
+    await view('la cuenta con los cargos registrados', 'contabilidad')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

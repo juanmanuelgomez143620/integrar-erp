@@ -7,7 +7,9 @@
 import type * as T from '../domain/types'
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } from '../domain/employees'
+import { BANK_ACCOUNT_DEFAULTS } from '../domain/catalog'
 import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
+import { todayAR } from '../format'
 import {
   insertBaseChart,
   insertBasePostingRules,
@@ -81,6 +83,7 @@ export interface DB {
   rsLines: T.RouteSheetLine[]
   bankAccounts: T.BankAccount[]
   bankMovements: T.BankMovement[]
+  bankClosings: T.BankClosing[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -98,7 +101,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 23
+export const DB_VERSION = 24
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -160,6 +163,7 @@ const COLLECTIONS = [
   'rsLines',
   'bankAccounts',
   'bankMovements',
+  'bankClosings',
   'jobCategories',
   'employees',
   'pyLines',
@@ -212,6 +216,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   rsLines: 21,
   bankAccounts: 22,
   bankMovements: 22,
+  bankClosings: 24,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -479,6 +484,21 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.islands = db.islands.filter((i) => i.number !== 9 || db.sectors.some((s) => s.island_id === i.id))
     const demo = db.companies.find((c) => c.is_template)
     if (demo) addDemoTreasurer(db, demo.id, new Date().toISOString())
+  },
+  // v23 → v24: los cargos del Banco Aula (Fase 8b.1): la comisión, la tasa de descubierto y el mes
+  // desde el que se cobran (el de hoy: los meses de antes no pagan), los cierres de cada mes y las
+  // reglas de imputación de los cargos.
+  23: (db) => {
+    db.bankClosings ??= []
+    const month = `${todayAR().slice(0, 7)}-01`
+    for (const account of db.bankAccounts) {
+      account.monthly_fee ??= BANK_ACCOUNT_DEFAULTS.monthly_fee
+      account.overdraft_rate ??= BANK_ACCOUNT_DEFAULTS.overdraft_rate
+      account.charges_from ??= month
+    }
+    for (const m of db.bankMovements) m.charge ??= null
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
   },
 }
 

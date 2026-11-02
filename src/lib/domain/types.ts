@@ -346,7 +346,31 @@ export interface BankAccount extends Audited {
   opened_on: string
   /** Acuerdo de descubierto: se usa desde la Fase 8b. */
   overdraft_limit: number
+  /** Comisión de mantenimiento que el banco debita al cerrar cada mes (Fase 8b). */
+  monthly_fee: number
+  /** Tasa mensual de los intereses por descubierto, en por ciento (Fase 8b). */
+  overdraft_rate: number
+  /** El primer día del mes desde el que el banco cobra cargos: cuando la cuenta empezó a operar en la app. */
+  charges_from: string
   is_active: boolean
+}
+
+/** Los cargos que el banco debita por su cuenta (Fase 8b): no llegan como orden de la empresa. */
+export type BankCharge = 'COMISION' | 'IMPUESTO_DC' | 'INTERESES' | 'RECHAZO'
+
+/** El cierre de un mes en el Banco Aula (tabla bank_closings): lo que debitó por la cuenta. */
+export interface BankClosing {
+  id: string
+  company_id: string
+  bank_account_id: string
+  /** "2026-10". */
+  period: string
+  closed_on: string
+  closed_by: string | null
+  fee: number
+  tax: number
+  interest: number
+  created_at: string
 }
 
 /** El saldo inicial, una orden que llega de una operación de la empresa o (desde la 8b) un cargo del banco. */
@@ -376,6 +400,8 @@ export interface BankMovement {
   reverses_id: string | null
   /** Quién la envió con su operación (no la procesa: SoD-12); vacío en el saldo inicial y en lo anterior al banco. */
   ordered_by: string | null
+  /** El tipo de cargo, si lo debitó el banco por su cuenta (origen BANCO). */
+  charge: BankCharge | null
   status: BankMovementStatus
   /** Cuándo llegó al banco. */
   received_on: string

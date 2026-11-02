@@ -278,7 +278,7 @@ const vehicles = async (company: string) =>
     .map((r) => r.line)
     .sort()
 
-/** La cuenta en el Banco Aula de la demo y su saldo inicial (Fase 8a). */
+/** La cuenta en el Banco Aula de la demo (con la comisión y la tasa de la 8b.1) y su saldo inicial (Fase 8a). */
 const mockBank = (() => {
   const account = seed.bankAccounts.find((b) => b.company_id === mockTemplate.id)!
   const start = seed.bankMovements.find((m) => m.bank_account_id === account.id && m.origin === 'APERTURA')!
@@ -289,6 +289,9 @@ const mockBank = (() => {
       alias: account.alias,
       opened_on: account.opened_on,
       overdraft_limit: account.overdraft_limit,
+      monthly_fee: account.monthly_fee,
+      overdraft_rate: account.overdraft_rate,
+      charges_from: account.charges_from,
     },
     start: { origin: start.origin, direction: start.direction, amount: start.amount, status: start.status },
   }
@@ -297,7 +300,9 @@ const mockBank = (() => {
 /** La cuenta en el Banco Aula de una empresa y sus movimientos, en el orden de llegada. */
 async function bank(company: string) {
   const [account] = await db.admin<Record<string, unknown>>(
-    `select b.number, b.bank_key, b.alias, b.opened_on::text as opened_on, b.overdraft_limit::float as overdraft_limit
+    `select b.number, b.bank_key, b.alias, b.opened_on::text as opened_on, b.overdraft_limit::float as overdraft_limit,
+            b.monthly_fee::float as monthly_fee, b.overdraft_rate::float as overdraft_rate,
+            b.charges_from::text as charges_from
        from public.bank_accounts b where b.company_id = $1`,
     [company],
   )
@@ -515,6 +520,40 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(account).toEqual(mockBank.account)
     // La plantilla no tiene las operaciones de ejemplo de la demo: sólo el saldo inicial.
     expect(movements).toEqual([mockBank.start])
+  })
+
+  it('calcula los cargos de un mes: la comisión, el impuesto y los intereses por descubierto (8b.1)', async () => {
+    // Como en src/lib/mock/bank.test.ts: un depósito de 300.000 y un pago de 13 millones el 14 de
+    // mayo dejan la cuenta 200.000 en negativo hasta fin de mes (18 días). Se deshace al terminar.
+    const year = mockBank.account.opened_on.slice(0, 4)
+    const charges = async (period: string) =>
+      (
+        await db.admin(
+          `select c.fee::float as fee, c.tax::float as tax, c.interest::float as interest
+             from public.bank_accounts b, private.bank_month_charges(b, $2) c where b.company_id = $1`,
+          [template, period],
+        )
+      )[0]
+    await db.admin('begin')
+    try {
+      for (const [direction, amount] of [
+        ['CREDITO', 300_000],
+        ['DEBITO', 13_000_000],
+      ] as const)
+        await db.admin(
+          `select private.bank_process_movement(
+                    (private.bank_add_movement(b, 'ORDEN', $2, $3, 'Prueba', null, null, null, $4::date, null)).id,
+                    $4::date, null)
+             from public.bank_accounts b where b.company_id = $1`,
+          [template, direction, amount, `${year}-05-14`],
+        )
+      expect(await charges(`${year}-05`)).toEqual({ fee: 15_000, tax: 79_800, interest: 7_200 })
+      // Abril, sin órdenes y con saldo: sólo la comisión.
+      expect(await charges(`${year}-04`)).toEqual({ fee: 15_000, tax: 0, interest: 0 })
+    } finally {
+      await db.admin('rollback')
+    }
+    expect((await bank(template)).movements).toEqual([mockBank.start])
   })
 
   it('es idempotente: si la plantilla existe, no la vuelve a cargar', async () => {
