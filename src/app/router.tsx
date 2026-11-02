@@ -190,7 +190,7 @@ export const router = createBrowserRouter(
                 { path: 'pagos/cobros/:number', element: <DocumentPage key="rc" docType="CUSTOMER_RECEIPT" /> },
                 { path: 'pagos/cajas-y-bancos', element: <TreasuryPage /> },
                 { path: 'pagos/banco-aula', element: <HomeBankingPage /> },
-                { path: 'banco/bandeja', element: <BankTrayPage /> },
+                { path: 'pagos/banco-aula/bandeja', element: <BankTrayPage /> },
                 { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },

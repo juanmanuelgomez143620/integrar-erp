@@ -2,13 +2,13 @@
 -- empresa en el banco del entorno, vinculada a Banco cuenta corriente, y sus movimientos: el
 -- saldo inicial y las órdenes que le llegan de cada asiento registrado que mueve esa cuenta (un
 -- pago, un cobro, una transferencia entre cuentas, el pago de los sueldos, de las cargas sociales
--- o de un impuesto, o un asiento manual). El banco las procesa en el momento (lo opera el sistema)
--- o las procesa quien tiene el rol Banco (lo operan estudiantes). Traducción de la sección "Banco
--- Aula" de src/lib/mock/engine.ts y de bankAccountView en queries.ts.
+-- o de un impuesto, o un asiento manual). El banco lo opera Tesorería: un integrante que no envió la
+-- orden la procesa (SoD-12); si el docente lo pide, la procesa el sistema en el momento. Traducción
+-- de la sección "Banco Aula" de src/lib/mock/engine.ts y de bankAccountView en queries.ts.
 --
--- El rol, el módulo y los permisos están en la migración de catálogos siguiente; la plantilla,
--- en la de la plantilla; las empresas que ya existían reciben la isla del entorno y su cuenta
--- (con lo que ya movió el banco, procesado con la fecha de cada asiento) en la última de esta fase.
+-- El módulo y los permisos están en la migración de catálogos siguiente; la plantilla, en la de la
+-- plantilla; las empresas que ya existían reciben su cuenta (con lo que ya movió el banco, procesado
+-- con la fecha de cada asiento) en la última de esta fase.
 
 -- La acción "operate" (bank.operate: procesar las órdenes del banco).
 alter table public.permissions drop constraint permissions_action_check;
@@ -63,6 +63,7 @@ create table public.bank_movements (
   source_document_id uuid,
   journal_line_id uuid references public.journal_entry_lines (id),
   reverses_id uuid,
+  ordered_by uuid, -- quién la envió con su operación: no la procesa (SoD-12)
   status text not null default 'PENDIENTE' check (status in ('PENDIENTE', 'PROCESADO', 'ANULADO')),
   received_on date not null,
   processed_on date,
@@ -89,22 +90,14 @@ create policy bank_movements_select on public.bank_movements for select to authe
 
 -- ------------------------------------------------------------------ Auxiliares
 
--- Quién opera el banco: el sistema, salvo que el docente diga que lo operan estudiantes (bankMode).
+-- Quién opera el banco: Tesorería, salvo que el docente pida que lo opere el sistema (bankMode).
 create function private.bank_mode(p_company uuid)
 returns text
 language sql
 stable
 security definer
 set search_path = ''
-as $$ select coalesce((select c.settings ->> 'bank_mode' from public.companies c where c.id = p_company), 'AUTOMATICO') $$;
-
--- Los roles del entorno: no se combinan con los de la empresa (SoD-12). El Fisco llega con la 8d.
-create function private.environment_roles()
-returns text[]
-language sql
-immutable
-set search_path = ''
-as $$ select array['BANCO'] $$;
+as $$ select coalesce((select c.settings ->> 'bank_mode' from public.companies c where c.id = p_company), 'ESTUDIANTES') $$;
 
 -- "FORESTAL.NORTE.BA": el alias de la cuenta, con las dos primeras palabras del nombre (bankAlias).
 create function private.bank_alias(p_slug text)
@@ -129,7 +122,8 @@ create function private.bank_add_movement(
   p_source uuid,
   p_line uuid,
   p_reverses uuid,
-  p_on date
+  p_on date,
+  p_ordered_by uuid
 )
 returns public.bank_movements
 language plpgsql
@@ -143,9 +137,9 @@ begin
   perform 1 from public.bank_accounts b where b.id = p_account.id for update;
   select coalesce(max(m.seq), 0) + 1 into v_seq from public.bank_movements m where m.bank_account_id = p_account.id;
   insert into public.bank_movements (company_id, bank_account_id, seq, origin, direction, amount, concept,
-                                     source_document_id, journal_line_id, reverses_id, status, received_on)
+                                     source_document_id, journal_line_id, reverses_id, ordered_by, status, received_on)
   values (p_account.company_id, p_account.id, v_seq, p_origin, p_direction, p_amount, p_concept,
-          p_source, p_line, p_reverses, 'PENDIENTE', p_on)
+          p_source, p_line, p_reverses, p_ordered_by, 'PENDIENTE', p_on)
   returning * into v_row;
   return v_row;
 end;
@@ -173,7 +167,7 @@ begin
 end;
 $$;
 
--- Mientras haya órdenes pendientes, Banco tiene una tarea abierta para procesarlas (syncBankTask).
+-- Mientras haya órdenes pendientes, Tesorería tiene una tarea abierta para procesarlas en el banco (syncBankTask).
 create function private.bank_sync_task(p_company uuid)
 returns void
 language plpgsql
@@ -199,13 +193,13 @@ begin
   end if;
   insert into public.tasks (company_id, task_type, title, description, context, assigned_role, priority)
   values (p_company, 'PROCESAR_BANCO', 'Procesar las órdenes del Banco Aula',
-          'La empresa envió órdenes al banco (pagos, cobros, depósitos o transferencias): procesalas desde la bandeja.',
-          '{}', 'BANCO', 'NORMAL')
+          'Llegaron órdenes al banco (pagos, cobros, depósitos o transferencias): las procesa desde la bandeja un integrante de Tesorería que no las envió.',
+          '{}', 'TESORERIA', 'NORMAL')
   returning id into v_task;
   perform private.notify_roles(
-    p_company, array['BANCO'], 'NUEVA_TAREA', 'Órdenes en el Banco Aula',
-    'La empresa envió órdenes al banco: procesalas desde la bandeja.',
-    '/e/' || (select c.slug from public.companies c where c.id = p_company) || '/banco/bandeja', null, v_task
+    p_company, array['TESORERIA'], 'NUEVA_TAREA', 'Órdenes en el Banco Aula',
+    'Llegaron órdenes al banco: procesalas desde la bandeja (no las que enviaste vos).',
+    '/e/' || (select c.slug from public.companies c where c.id = p_company) || '/pagos/banco-aula/bandeja', null, v_task
   );
 end;
 $$;
@@ -269,7 +263,7 @@ begin
     v_row := private.bank_add_movement(v_account, 'ORDEN',
       case when v_line.debit > 0 then 'CREDITO' else 'DEBITO' end,
       case when v_line.debit > 0 then v_line.debit else v_line.credit end,
-      v_concept, p_source.id, v_line.id, null, v_today);
+      v_concept, p_source.id, v_line.id, null, v_today, (select auth.uid()));
     v_ids := v_ids || v_row.id;
   end loop;
   if cardinality(v_ids) > 0 then
@@ -321,7 +315,7 @@ begin
     v_row := private.bank_add_movement(v_account, 'ORDEN',
       case when v_order.direction = 'CREDITO' then 'DEBITO' else 'CREDITO' end, v_order.amount,
       'Reversión de ' || v_order.transaction_number || ': ' || v_order.concept,
-      v_order.source_document_id, v_mirror, v_order.id, v_today);
+      v_order.source_document_id, v_mirror, v_order.id, v_today, (select auth.uid()));
     v_ids := v_ids || v_row.id;
   end loop;
   if cardinality(v_ids) > 0 then
@@ -378,7 +372,7 @@ begin
           private.bank_alias((select c.slug from public.companies c where c.id = p_company)), v_opened, 1000000)
   returning * into v_account;
   v_row := private.bank_add_movement(v_account, 'APERTURA', case when v_balance < 0 then 'DEBITO' else 'CREDITO' end,
-    abs(v_balance), 'Saldo inicial de la cuenta', null, v_open_line, null, v_opened);
+    abs(v_balance), 'Saldo inicial de la cuenta', null, v_open_line, null, v_opened, null);
   -- El saldo inicial no es una transacción: no lleva número.
   update public.bank_movements set status = 'PROCESADO', processed_on = v_opened where id = v_row.id;
   for v_r in
@@ -394,7 +388,7 @@ begin
         case when v_r.debit > 0 then 'CREDITO' else 'DEBITO' end,
         case when v_r.debit > 0 then v_r.debit else v_r.credit end,
         regexp_replace(v_r.description, '\.$', ''), private.bank_entry_source(v_r.document_id), v_r.id, null,
-        v_r.document_date);
+        v_r.document_date, null);
       perform private.bank_process_movement(v_row.id, v_r.document_date, null);
       continue;
     end if;
@@ -407,35 +401,16 @@ begin
     v_row := private.bank_add_movement(v_account, 'ORDEN',
       case when v_order.direction = 'CREDITO' then 'DEBITO' else 'CREDITO' end, v_order.amount,
       'Reversión de ' || v_order.transaction_number || ': ' || v_order.concept,
-      v_order.source_document_id, v_r.id, v_order.id, v_r.document_date);
+      v_order.source_document_id, v_r.id, v_order.id, v_r.document_date, null);
     perform private.bank_process_movement(v_row.id, v_r.document_date, null);
   end loop;
 end;
 $$;
 
--- La isla 9 (el entorno: banco y fisco) y sus sectores, si la empresa todavía no los tiene (insertEnvironment).
-create function private.insert_environment(p_company uuid)
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  insert into public.islands (company_id, number, name)
-  select p_company, 9, 'Entorno: banco y fisco'
-   where not exists (select 1 from public.islands i where i.company_id = p_company and i.number = 9);
-  insert into public.sectors (company_id, code, name, island_id)
-  select p_company, s.code, s.name, i.id
-    from (values (1, 'BAN', 'Banco Aula'), (2, 'FIS', 'Fisco simulado')) as s (n, code, name)
-    join public.islands i on i.company_id = p_company and i.number = 9
-   where not exists (select 1 from public.sectors x where x.company_id = p_company and x.code = s.code)
-   order by s.n;
-end;
-$$;
-
 -- ------------------------------------------------------------------ Comandos
 
--- Banco procesa órdenes pendientes con la fecha del día, en el orden en que llegaron (cmdProcessBankOrders).
+-- Tesorería procesa en el banco órdenes pendientes con la fecha del día, en el orden en que llegaron.
+-- SoD-12: quien envió una orden (con su pago, cobro, transferencia o asiento) no la procesa (cmdProcessBankOrders).
 create function public.bank_orders_process(p_company_id uuid, p_ids uuid[])
 returns jsonb
 language plpgsql
@@ -444,6 +419,9 @@ set search_path = ''
 as $$
 declare
   v_actor private.actor := private.require_permission(p_company_id, 'bank.operate');
+  v_sod boolean := coalesce((select (c.settings ->> 'sod_enabled')::boolean from public.companies c
+                             where c.id = p_company_id), true)
+                   and not private.is_supervisor(p_company_id);
   v_id uuid;
   v_order public.bank_movements;
   v_ids uuid[] := '{}';
@@ -467,6 +445,11 @@ begin
       perform private.raise_business_error('TRANSICION_INVALIDA',
         format('La orden N.º %s ya está %s.', v_order.seq,
                case v_order.status when 'PROCESADO' then 'procesada' else 'anulada' end));
+    end if;
+    if v_sod and v_order.ordered_by = (select auth.uid()) then
+      perform private.raise_business_error('SEPARACION_FUNCIONES',
+        format('No podés procesar la orden N.º %s: la enviaste vos.', v_order.seq),
+        'Separación de funciones (SoD-12): quien envía una orden al banco no la procesa. Tiene que procesarla otro integrante de Tesorería.');
     end if;
   end loop;
   for v_order in select m.* from public.bank_movements m where m.id = any (p_ids) order by m.seq loop
@@ -551,6 +534,8 @@ as $$
     'concept', p_m.concept, 'status', p_m.status, 'received_on', p_m.received_on, 'processed_on', p_m.processed_on,
     'transaction_number', p_m.transaction_number,
     'processed_by_name', case when p_m.processed_by is not null then private.full_name(p_m.processed_by) end,
+    'ordered_by_name', case when p_m.ordered_by is not null then private.full_name(p_m.ordered_by) end,
+    'own', coalesce(p_m.ordered_by = (select auth.uid()), false),
     'source', (select jsonb_build_object('id', d.id, 'display_number', d.display_number, 'path', private.doc_path(d.id))
                  from public.documents d join public.document_types dt on dt.code = d.doc_type
                 where d.id = p_m.source_document_id and private.has_permission(p_company, dt.resource || '.read')),
@@ -785,72 +770,10 @@ begin
       then 'Cambió los porcentajes de la liquidación de sueldos'
       when p_settings ? 'iibb_pct' then 'Cambió la alícuota de ingresos brutos'
       when p_settings ? 'bank_mode' then 'Cambió quién opera el Banco Aula: '
-        || case v_after ->> 'bank_mode' when 'ESTUDIANTES' then 'lo operan estudiantes' else 'lo opera el sistema' end
+        || case v_after ->> 'bank_mode' when 'AUTOMATICO' then 'lo opera el sistema' else 'lo opera Tesorería' end
       else 'Cambió la configuración de control interno de la empresa' end,
     null, null, null,
     private.diff(v_before, v_after, array['sod_enabled', 'allow_negative_stock', 'payroll', 'iibb_pct', 'bank_mode']));
-end;
-$$;
-
--- Igual que antes, y además la separación de funciones del entorno (SoD-12): quien opera el banco
--- no tiene roles de la empresa, ni al revés, salvo el docente (cmdAssignRole).
-create or replace function public.member_assign_role(p_company_id uuid, p_user_id uuid, p_role text, p_sector_id uuid default null)
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_actor private.actor := private.require_supervisor(p_company_id);
-  v_member uuid;
-  v_clash text;
-begin
-  if not exists (select 1 from public.profiles p where p.id = p_user_id) then
-    perform private.raise_business_error('DATO_INVALIDO', 'El usuario no existe.');
-  end if;
-  if not exists (select 1 from public.roles r where r.code = p_role) then
-    perform private.raise_business_error('DATO_INVALIDO', 'El rol no existe.');
-  end if;
-  if p_sector_id is not null and not exists (
-    select 1 from public.sectors s where s.company_id = p_company_id and s.id = p_sector_id
-  ) then
-    perform private.raise_business_error('DATO_INVALIDO', 'El sector no existe en esta empresa.');
-  end if;
-  select m.id into v_member from public.company_members m where m.company_id = p_company_id and m.user_id = p_user_id;
-  if v_member is null then
-    insert into public.company_members (company_id, user_id) values (p_company_id, p_user_id) returning id into v_member;
-  end if;
-  if exists (
-    select 1 from public.member_roles mr
-     where mr.member_id = v_member and mr.role_code = p_role and mr.sector_id is not distinct from p_sector_id
-  ) then
-    perform private.raise_business_error('DATO_INVALIDO', 'Esa asignación ya existe.');
-  end if;
-  -- SoD-12: quien opera el banco o el fisco del entorno no tiene roles de la empresa, ni al revés.
-  if coalesce((select (c.settings ->> 'sod_enabled')::boolean from public.companies c where c.id = p_company_id), true)
-     and p_role <> 'DOCENTE' then
-    select mr.role_code into v_clash from public.member_roles mr
-     where mr.member_id = v_member and mr.role_code <> 'DOCENTE'
-       and (mr.role_code = any (private.environment_roles())) <> (p_role = any (private.environment_roles()))
-     order by mr.id limit 1;
-    if v_clash is not null then
-      perform private.raise_business_error('SEPARACION_FUNCIONES',
-        case when p_role = any (private.environment_roles())
-          then format('%s tiene el rol %s en la empresa: no puede operar el %s.', private.full_name(p_user_id),
-                      (select r.name from public.roles r where r.code = v_clash),
-                      (select r.name from public.roles r where r.code = p_role))
-          else format('%s opera el %s: no puede tener un rol de la empresa.', private.full_name(p_user_id),
-                      (select r.name from public.roles r where r.code = v_clash)) end,
-        'Separación de funciones (SoD-12): quien opera el banco o el fisco del entorno no trabaja en la empresa.');
-    end if;
-  end if;
-  insert into public.member_roles (company_id, member_id, role_code, sector_id)
-  values (p_company_id, v_member, p_role, p_sector_id);
-  perform private.log_audit(p_company_id, v_actor, 'ASSIGN_ROLE', 'member_role', v_member, private.full_name(p_user_id),
-    format('Asignó el rol %s (%s) a %s',
-      (select r.name from public.roles r where r.code = p_role),
-      coalesce((select s.name from public.sectors s where s.id = p_sector_id), '—'),
-      private.full_name(p_user_id)));
 end;
 $$;
 
@@ -908,7 +831,7 @@ as $$
            'document_type', d.doc_type,
            'path', case when d.id is not null then private.doc_path(d.id)
                         when t.task_type = 'REPONER_STOCK' then '/e/' || c.slug || '/stock'
-                        when t.task_type = 'PROCESAR_BANCO' then '/e/' || c.slug || '/banco/bandeja' end,
+                        when t.task_type = 'PROCESAR_BANCO' then '/e/' || c.slug || '/pagos/banco-aula/bandeja' end,
            'assignee_label', case when t.assigned_user_id is not null then private.full_name(t.assigned_user_id)
                                   when t.assigned_role is not null then (select r.name from public.roles r where r.code = t.assigned_role)
                                   else '—' end,

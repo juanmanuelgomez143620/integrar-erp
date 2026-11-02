@@ -116,7 +116,6 @@ export const ROLES: Record<RoleCode, RoleInfo> = {
   PRODUCCION: { code: 'PRODUCCION', name: 'Producción', island: 7, defaultSector: 'PRO', isSupervisor: false, description: 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.' },
   DEPOSITO: { code: 'DEPOSITO', name: 'Depósito y Stock', island: 8, defaultSector: 'DEP', isSupervisor: false, description: 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.' },
   LOGISTICA: { code: 'LOGISTICA', name: 'Logística', island: 8, defaultSector: 'LOG', isSupervisor: false, description: 'Organiza el reparto de lo que despacha Depósito: transportistas, vehículos y hojas de ruta.' },
-  BANCO: { code: 'BANCO', name: 'Banco Aula', island: 9, defaultSector: 'BAN', isSupervisor: false, description: 'Opera el banco del entorno: procesa las órdenes que le llegan de la empresa. No tiene roles en la empresa (SoD-12).' },
   DOCENTE: { code: 'DOCENTE', name: 'Docente (supervisor)', island: null, defaultSector: null, isSupervisor: true, description: 'Todos los permisos en la empresa; puede actuar como supervisor.' },
 }
 
@@ -132,7 +131,6 @@ export const ROLE_ORDER: RoleCode[] = [
   'PRODUCCION',
   'DEPOSITO',
   'LOGISTICA',
-  'BANCO',
   'DOCENTE',
 ]
 
@@ -235,8 +233,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
     // Paga los sueldos y las cargas sociales (Fase 6c; SoD-6: no los que liquidó) y los impuestos (7a).
     'payroll.read', 'payroll.pay', 'tax_return.read', 'tax_return.pay',
-    // Opera contra el Banco Aula: ve su cuenta, lo que el banco procesó y lo que todavía no (Fase 8a).
-    'bank.read',
+    // Opera contra el Banco Aula y, además, lo opera: procesa las órdenes que no envió (Fase 8a; SoD-12).
+    'bank.read', 'bank.operate',
   ],
   // Legajos y categorías del personal (Fase 6a).
   RRHH: [
@@ -270,8 +268,6 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
     'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read', 'bank.read',
   ],
-  // El banco del entorno (Fase 8a): procesa las órdenes que le llegan de la empresa.
-  BANCO: [...CORE_READ, 'bank.read', 'bank.operate'],
   DOCENTE: [],
 }
 
@@ -858,23 +854,15 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
 
 // ---------------------------------------------------------------- Banco Aula (Fase 8a)
 
-/** La isla 9: el entorno de la empresa, que operan estudiantes con roles propios (a validar). */
-export const ENVIRONMENT_ISLAND = { number: 9, name: 'Entorno: banco y fisco' }
-export const ENVIRONMENT_SECTORS: [code: string, name: string][] = [
-  ['BAN', 'Banco Aula'],
-  ['FIS', 'Fisco simulado'],
-]
-/** Los roles del entorno: no se combinan con los de la empresa (SoD-12). */
-export const ENVIRONMENT_ROLES: RoleCode[] = ['BANCO']
-
 export const BANK_MODES: Record<BankMode, { label: string; description: string }> = {
   AUTOMATICO: {
     label: 'Lo opera el sistema',
     description: 'El banco procesa cada orden en el momento en que la empresa la envía.',
   },
   ESTUDIANTES: {
-    label: 'Lo operan estudiantes',
-    description: 'Cada orden espera en la bandeja del Banco Aula hasta que la procesa alguien con el rol Banco.',
+    label: 'Lo opera Tesorería',
+    description:
+      'Cada orden espera en la bandeja del Banco Aula hasta que la procesa un integrante de Tesorería que no la envió.',
   },
 }
 

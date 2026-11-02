@@ -1,13 +1,15 @@
 // Pruebas del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3, 8a.1): la cuenta de la empresa, las
-// órdenes que le llegan de los asientos, el modo del banco y la separación de funciones (SoD-12).
+// órdenes que le llegan de los asientos, Tesorería que opera el banco (SoD-12: quien envía una
+// orden no la procesa) y el modo del banco.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ROLES } from '../domain/catalog'
+import type * as T from '../domain/types'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
   accountBalance,
   bankAlias,
-  cmdAssignRole,
   cmdCancelFundsTransfer,
   cmdConfirmJournalEntry,
   cmdCreateCompanyFromTemplate,
@@ -36,6 +38,8 @@ const ctx = (username: string): Ctx => ({ db, userId: userId(username), now: new
 const companyId = () => db.companies[0].id
 const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
 const view = (username = 'tesoreria') => bankAccountView(db, userId(username), companyId())!
+const bankTasks = (username: string) =>
+  listTasks(db, userId(username), companyId(), 'mine').filter((t) => t.task_type === 'PROCESAR_BANCO')
 
 function expectBusinessError(fn: () => void, code: string) {
   try {
@@ -49,9 +53,9 @@ function expectBusinessError(fn: () => void, code: string) {
 }
 
 /** Tesorería deposita en el banco efectivo de la caja. */
-const deposit = (amount: number) =>
+const deposit = (amount: number, username = 'tesoreria') =>
   cmdCreateFundsTransfer(
-    ctx('tesoreria'),
+    ctx(username),
     companyId(),
     {
       from_account_id: account('1.1.01.01'),
@@ -63,10 +67,11 @@ const deposit = (amount: number) =>
     true,
   )
 
-const studentsOperate = () => cmdUpdateCompanySettings(ctx('docente'), companyId(), { bank_mode: 'ESTUDIANTES' })
+const pendingOf = (source: string) => view().pending.find((m) => m.source?.id === source)!
+const systemOperates = () => cmdUpdateCompanySettings(ctx('docente'), companyId(), { bank_mode: 'AUTOMATICO' })
 
 describe('Banco Aula: la cuenta de la demo', () => {
-  it('se abre con el saldo inicial y lo que ya movió el banco, procesado: coincide con los libros', () => {
+  it('se abre con el saldo inicial; lo opera Tesorería y el depósito de la demo espera en el banco', () => {
     const v = view()
     expect(v.account).toMatchObject({
       number: 'CC 0001-000001',
@@ -74,25 +79,29 @@ describe('Banco Aula: la cuenta de la demo', () => {
       overdraft_limit: 1_000_000,
     })
     expect(v.account.ledger.code).toBe('1.1.01.03')
-    expect(v.mode).toBe('AUTOMATICO')
-    expect(v.pending).toEqual([])
-    expect(v.balance).toBe(v.book_balance)
-    // El saldo inicial va primero (sin número de transacción) y el depósito manual de la demo, después.
-    const oldest = v.movements.at(-1)!
-    expect(oldest).toMatchObject({
+    expect(v.mode).toBe('ESTUDIANTES')
+    expect(v.movements).toHaveLength(1)
+    expect(v.movements[0]).toMatchObject({
       origin: 'APERTURA',
       transaction_number: null,
       concept: 'Saldo inicial de la cuenta',
     })
-    expect(v.movements.some((m) => m.concept === 'Depósito en el banco del efectivo de la caja')).toBe(true)
+    // El depósito que registró Contabilidad llegó al banco y espera que Tesorería lo procese.
+    expect(v.pending.map((m) => [m.concept, m.direction, m.amount, m.ordered_by_name, m.own])).toEqual([
+      ['Depósito en el banco del efectivo de la caja', 'CREDITO', 300_000, 'Diego Fernández', false],
+    ])
+    expect(v.book_balance).toBe(v.balance + 300_000)
   })
 
-  it('la isla 9 del entorno tiene sus sectores y el usuario del banco no tiene roles de la empresa', () => {
-    const island = db.islands.find((i) => i.company_id === companyId() && i.number === 9)!
-    expect(island.name).toBe('Entorno: banco y fisco')
-    expect(db.sectors.filter((s) => s.island_id === island.id).map((s) => s.code)).toEqual(['BAN', 'FIS'])
-    const member = db.members.find((m) => m.user_id === userId('banco'))!
-    expect(db.memberRoles.filter((r) => r.member_id === member.id).map((r) => r.role_code)).toEqual(['BANCO'])
+  it('no hay un rol aparte para el banco: lo opera Tesorería, que en la demo tiene dos integrantes', () => {
+    expect(Object.keys(ROLES)).not.toContain('BANCO')
+    expect(db.islands.filter((i) => i.company_id === companyId()).map((i) => i.number)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ])
+    const treasurers = db.memberRoles
+      .filter((r) => r.company_id === companyId() && r.role_code === 'TESORERIA')
+      .map((r) => db.profiles.find((p) => p.id === db.members.find((m) => m.id === r.member_id)!.user_id)!.username)
+    expect(treasurers.sort()).toEqual(['tesoreria', 'tesoreria2'])
   })
 
   it('el alias sale de las dos primeras palabras del nombre de la empresa', () => {
@@ -102,64 +111,59 @@ describe('Banco Aula: la cuenta de la demo', () => {
   })
 })
 
-describe('Banco Aula: las órdenes', () => {
-  it('en modo automático, lo que mueve el banco se procesa en el momento, con su número de transacción', () => {
+describe('Banco Aula: Tesorería opera el banco', () => {
+  it('la orden espera en la bandeja con una tarea para Tesorería; quien la envió no la procesa (SoD-12)', () => {
     const before = view()
     const trf = deposit(100_000)
-    const v = view()
-    expect(v.pending).toEqual([])
-    expect(v.balance).toBe(before.balance + 100_000)
-    expect(v.balance).toBe(v.book_balance)
-    expect(v.movements[0]).toMatchObject({
-      origin: 'ORDEN',
-      direction: 'CREDITO',
-      amount: 100_000,
-      status: 'PROCESADO',
-      processed_on: '2027-05-14',
-      processed_by_name: null,
-      source: { id: trf.id, display_number: trf.display_number },
-    })
-    expect(v.movements[0].transaction_number).toMatch(/^SIM-\d{6}$/)
-  })
-
-  it('operado por estudiantes, la orden espera en la bandeja con una tarea para el rol Banco', () => {
-    studentsOperate()
-    const before = view()
-    deposit(100_000)
-    const v = view()
-    expect(v.balance).toBe(before.balance)
-    expect(v.book_balance).toBe(before.book_balance + 100_000)
-    expect(v.pending).toHaveLength(1)
-    expect(v.pending[0]).toMatchObject({ direction: 'CREDITO', amount: 100_000, status: 'PENDIENTE' })
-    const tasks = listTasks(db, userId('banco'), companyId(), 'mine')
-    expect(tasks.map((t) => [t.task_type, t.path])).toEqual([['PROCESAR_BANCO', '/e/forestal-del-norte/banco/bandeja']])
+    expect(view().balance).toBe(before.balance)
+    expect(view().book_balance).toBe(before.book_balance + 100_000)
+    const mine = pendingOf(trf.id)
+    expect(mine).toMatchObject({ direction: 'CREDITO', amount: 100_000, ordered_by_name: 'Valentina Ruiz', own: true })
+    expect(bankTasks('tesoreria2').map((t) => t.path)).toEqual(['/e/forestal-del-norte/pagos/banco-aula/bandeja'])
     // Otra orden no abre otra tarea.
     deposit(50_000)
-    expect(listTasks(db, userId('banco'), companyId(), 'mine')).toHaveLength(1)
+    expect(bankTasks('tesoreria2')).toHaveLength(1)
+
+    const message = expectBusinessError(
+      () => cmdProcessBankOrders(ctx('tesoreria'), companyId(), [mine.id]),
+      'SEPARACION_FUNCIONES',
+    )
+    expect(message).toBe(`No podés procesar la orden N.º ${mine.seq}: la enviaste vos.`)
+    // Lo que envió Contabilidad, sí lo procesa.
+    const fromAccounting = view().pending.find((m) => m.ordered_by_name === 'Diego Fernández')!
+    cmdProcessBankOrders(ctx('tesoreria'), companyId(), [fromAccounting.id])
 
     const result = cmdProcessBankOrders(
-      ctx('banco'),
+      ctx('tesoreria2'),
       companyId(),
-      view('banco').pending.map((m) => m.id),
+      view('tesoreria2').pending.map((m) => m.id),
     )
     expect(result).toEqual({ processed: 2 })
     const after = view()
     expect(after.pending).toEqual([])
     expect(after.balance).toBe(after.book_balance)
-    expect(after.movements[0].processed_by_name).toBe('Brenda Ibarra')
-    expect(listTasks(db, userId('banco'), companyId(), 'mine')).toEqual([])
+    expect(after.movements[0].processed_by_name).toBe('Tomás Medina')
+    expect(after.movements[0].transaction_number).toBe('SIM-000003')
+    expect(bankTasks('tesoreria2')).toEqual([])
     expect(db.audit.at(-1)).toMatchObject({ action: 'PROCESS', entity_type: 'bank_account' })
   })
 
-  it('sólo Banco procesa, una orden pendiente y una sola vez', () => {
-    studentsOperate()
-    deposit(100_000)
-    const id = view().pending[0].id
-    expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria'), companyId(), [id]), 'SIN_PERMISO')
-    expectBusinessError(() => cmdProcessBankOrders(ctx('banco'), companyId(), []), 'DATO_INVALIDO')
-    expectBusinessError(() => cmdProcessBankOrders(ctx('banco'), companyId(), [id, id]), 'DATO_INVALIDO')
-    cmdProcessBankOrders(ctx('banco'), companyId(), [id])
-    expectBusinessError(() => cmdProcessBankOrders(ctx('banco'), companyId(), [id]), 'TRANSICION_INVALIDA')
+  it('sin separación de funciones, o como docente, quien la envió también puede procesarla', () => {
+    const own = pendingOf(deposit(100_000).id)
+    cmdProcessBankOrders(ctx('docente'), companyId(), [own.id])
+    const again = pendingOf(deposit(20_000).id)
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { sod_enabled: false })
+    cmdProcessBankOrders(ctx('tesoreria'), companyId(), [again.id])
+    expect(view().pending.map((m) => m.ordered_by_name)).toEqual(['Diego Fernández'])
+  })
+
+  it('sólo Tesorería procesa, una orden pendiente y una sola vez', () => {
+    const id = pendingOf(deposit(100_000).id).id
+    expectBusinessError(() => cmdProcessBankOrders(ctx('contabilidad'), companyId(), [id]), 'SIN_PERMISO')
+    expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria2'), companyId(), []), 'DATO_INVALIDO')
+    expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [id, id]), 'DATO_INVALIDO')
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [id])
+    expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [id]), 'TRANSICION_INVALIDA')
   })
 
   it('un asiento manual que mueve el banco también es una orden', () => {
@@ -167,94 +171,111 @@ describe('Banco Aula: las órdenes', () => {
       (d) => d.doc_type === 'JOURNAL_ENTRY' && d.status === 'BORRADOR' && d.je?.description.includes('energía'),
     )!
     cmdConfirmJournalEntry(ctx('contabilidad'), draft.id)
-    const v = view()
-    expect(v.movements[0]).toMatchObject({ direction: 'DEBITO', amount: 185_000, source: { id: draft.id } })
-    expect(v.balance).toBe(v.book_balance)
+    expect(pendingOf(draft.id)).toMatchObject({
+      direction: 'DEBITO',
+      amount: 185_000,
+      ordered_by_name: 'Diego Fernández',
+    })
   })
 
   it('al anular la operación, la orden pendiente se retira y la procesada se revierte', () => {
-    // Procesada: el contraasiento manda la orden inversa.
+    // Pendiente: queda anulada, sin pasar por la cuenta.
+    const pending = deposit(70_000)
+    cmdCancelFundsTransfer(ctx('tesoreria'), pending.id, 'Error de importe')
+    expect(view().pending.some((m) => m.source?.id === pending.id)).toBe(false)
+    expect(db.bankMovements.find((m) => m.source_document_id === pending.id)!.status).toBe('ANULADO')
+
+    // Procesada: el contraasiento manda la orden inversa, que también espera en la bandeja.
     const processed = deposit(100_000)
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [pendingOf(processed.id).id])
     const balance = view().balance
     cmdCancelFundsTransfer(ctx('tesoreria'), processed.id, 'Se cargó dos veces')
-    const v = view()
-    expect(v.movements[0]).toMatchObject({ direction: 'DEBITO', amount: 100_000, status: 'PROCESADO' })
-    expect(v.movements[0].concept).toMatch(/^Reversión de SIM-\d{6}: /)
-    expect(v.balance).toBe(balance - 100_000)
-    expect(v.balance).toBe(v.book_balance)
-
-    // Pendiente: queda anulada y la tarea del banco se cierra.
-    studentsOperate()
-    const pending = deposit(70_000)
-    expect(view().pending).toHaveLength(1)
-    cmdCancelFundsTransfer(ctx('tesoreria'), pending.id, 'Error de importe')
-    expect(view().pending).toEqual([])
-    expect(db.bankMovements.find((m) => m.source_document_id === pending.id)!.status).toBe('ANULADO')
-    expect(listTasks(db, userId('banco'), companyId(), 'mine')).toEqual([])
-    expect(view().balance).toBe(view().book_balance)
+    const reversal = view().pending.find((m) => m.source?.id === processed.id)!
+    expect(reversal.direction).toBe('DEBITO')
+    expect(reversal.concept).toMatch(/^Reversión de SIM-\d{6}: /)
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [reversal.id])
+    expect(view().balance).toBe(balance - 100_000)
   })
 
-  it('al volver al sistema, lo pendiente se procesa con la fecha del día', () => {
-    studentsOperate()
-    deposit(100_000)
-    cmdUpdateCompanySettings(ctx('docente'), companyId(), { bank_mode: 'AUTOMATICO' })
+  it('si el docente pide que lo opere el sistema, lo pendiente se procesa y lo nuevo, en el momento', () => {
+    systemOperates()
+    expect(view().pending).toEqual([])
+    expect(view().balance).toBe(view().book_balance)
+    expect(db.audit.at(-1)!.summary).toBe('Cambió quién opera el Banco Aula: lo opera el sistema')
+    const trf = deposit(100_000)
     const v = view()
     expect(v.pending).toEqual([])
-    expect(v.balance).toBe(v.book_balance)
-    expect(db.audit.at(-1)!.summary).toBe('Cambió quién opera el Banco Aula: lo opera el sistema')
+    expect(v.movements[0]).toMatchObject({ amount: 100_000, processed_on: '2027-05-14', processed_by_name: null })
+    expect(v.movements[0].source).toMatchObject({ id: trf.id, display_number: trf.display_number })
+    // Al anular, la reversión también se procesa en el momento.
+    cmdCancelFundsTransfer(ctx('tesoreria'), trf.id, 'Boleta equivocada')
+    expect(view().balance).toBe(view().book_balance)
   })
 })
 
-describe('Banco Aula: permisos y separación de funciones', () => {
-  it('ven la cuenta Tesorería, Contabilidad, Gerencia, Auditoría y Banco; Compras no', () => {
-    for (const username of ['tesoreria', 'contabilidad', 'gerencia', 'auditor', 'banco', 'docente'])
+describe('Banco Aula: quién ve la cuenta', () => {
+  it('Tesorería, Contabilidad, Gerencia, Auditoría y el docente; Compras no', () => {
+    for (const username of ['tesoreria', 'tesoreria2', 'contabilidad', 'gerencia', 'auditor', 'docente'])
       expect(bankAccountView(db, userId(username), companyId())).not.toBeNull()
     expect(() => bankAccountView(db, userId('compras1'), companyId())).toThrow()
-  })
-
-  it('SoD-12: quien opera el banco no tiene roles de la empresa, ni al revés', () => {
-    const sector = (code: string) => db.sectors.find((s) => s.company_id === companyId() && s.code === code)!.id
-    expectBusinessError(
-      () => cmdAssignRole(ctx('docente'), companyId(), userId('tesoreria'), 'BANCO', sector('BAN')),
-      'SEPARACION_FUNCIONES',
-    )
-    const message = expectBusinessError(
-      () => cmdAssignRole(ctx('docente'), companyId(), userId('banco'), 'TESORERIA', sector('TES')),
-      'SEPARACION_FUNCIONES',
-    )
-    expect(message).toBe('Brenda Ibarra opera el Banco Aula: no puede tener un rol de la empresa.')
-    // El docente queda afuera de la regla y, sin separación de funciones, se puede combinar.
-    cmdAssignRole(ctx('docente'), companyId(), userId('banco'), 'DOCENTE', null)
-    cmdUpdateCompanySettings(ctx('docente'), companyId(), { sod_enabled: false })
-    cmdAssignRole(ctx('docente'), companyId(), userId('tesoreria'), 'BANCO', sector('BAN'))
   })
 })
 
 describe('Banco Aula: empresas nuevas y bases guardadas', () => {
-  it('la empresa de un curso abre su cuenta con la apertura y trae la isla del entorno', () => {
+  it('la empresa de un curso abre su cuenta con la apertura', () => {
     const course = db.courses[0]
     const created = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course.id })
-    const account = db.bankAccounts.find((b) => b.company_id === created.id)!
-    const movements = db.bankMovements.filter((m) => m.bank_account_id === account.id)
+    const bankAccount = db.bankAccounts.find((b) => b.company_id === created.id)!
+    const movements = db.bankMovements.filter((m) => m.bank_account_id === bankAccount.id)
     expect(movements.map((m) => m.origin)).toEqual(['APERTURA'])
-    const ledger = db.accounts.find((a) => a.id === account.ledger_account_id)!
+    const ledger = db.accounts.find((a) => a.id === bankAccount.ledger_account_id)!
     expect(movements[0].amount).toBe(accountBalance(db, ledger.id))
-    expect(db.sectors.filter((s) => s.company_id === created.id && ['BAN', 'FIS'].includes(s.code))).toHaveLength(2)
   })
 
-  it('una base de la versión 21 recibe la cuenta con su historia, que coincide con los libros', () => {
+  it('una base de la versión 21 recibe la cuenta con su historia procesada y el segundo integrante de Tesorería', () => {
     const old = structuredClone(db) as Partial<DB> & { version: number }
     delete old.bankAccounts
     delete old.bankMovements
-    old.islands = old.islands!.filter((i) => i.number !== 9)
-    old.sectors = old.sectors!.filter((s) => !['BAN', 'FIS'].includes(s.code))
+    const second = old.profiles!.find((p) => p.username === 'tesoreria2')!
+    const member = old.members!.find((m) => m.user_id === second.id)!
+    old.memberRoles = old.memberRoles!.filter((r) => r.member_id !== member.id)
+    old.members = old.members!.filter((m) => m.id !== member.id)
+    old.profiles = old.profiles!.filter((p) => p.id !== second.id)
     old.version = 21
-    const upgraded = upgradeDatabase(old as DB)!
-    expect(upgraded.version).toBe(DB_VERSION)
-    db = upgraded
-    const v = bankAccountView(db, userId('tesoreria'), companyId())!
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    const v = view()
     expect(v.balance).toBe(v.book_balance)
     expect(v.pending).toEqual([])
-    expect(db.islands.some((i) => i.company_id === companyId() && i.number === 9)).toBe(true)
+    expect(db.profiles.some((p) => p.username === 'tesoreria2')).toBe(true)
+  })
+
+  it('una base de la primera versión de la 8a.1 pierde la isla del entorno y el rol Banco', () => {
+    const old = structuredClone(db)
+    const company = companyId()
+    const island = { id: 'isl-9', company_id: company, number: 9, name: 'Entorno: banco y fisco' }
+    old.islands.push(island)
+    old.sectors.push(
+      { id: 'sec-ban', company_id: company, code: 'BAN', name: 'Banco Aula', island_id: island.id },
+      { id: 'sec-fis', company_id: company, code: 'FIS', name: 'Fisco simulado', island_id: island.id },
+    )
+    old.profiles.push({ ...old.profiles.find((p) => p.username === 'tesoreria')!, id: 'usr-banco', username: 'banco' })
+    old.members.push({ id: 'mbr-banco', company_id: company, user_id: 'usr-banco', job_title: '', is_active: true })
+    old.memberRoles.push({
+      id: 'mro-banco',
+      company_id: company,
+      member_id: 'mbr-banco',
+      role_code: 'BANCO' as T.RoleCode,
+      sector_id: 'sec-ban',
+    })
+    const task = old.tasks.find((t) => t.task_type === 'PROCESAR_BANCO')!
+    task.assigned_role = 'BANCO' as T.RoleCode
+    old.version = 22
+    db = upgradeDatabase(old)!
+    expect(db.memberRoles.some((r) => r.id === 'mro-banco')).toBe(false)
+    expect(db.profiles.find((p) => p.id === 'usr-banco')!.is_active).toBe(false)
+    expect(db.sectors.some((s) => ['BAN', 'FIS'].includes(s.code))).toBe(false)
+    expect(db.islands.some((i) => i.number === 9)).toBe(false)
+    expect(db.tasks.find((t) => t.id === task.id)!.assigned_role).toBe('TESORERIA')
   })
 })

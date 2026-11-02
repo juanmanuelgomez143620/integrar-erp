@@ -5,7 +5,6 @@
 // demo usan la contraseña DEMO_PASSWORD.
 
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
-import { ENVIRONMENT_ISLAND, ENVIRONMENT_SECTORS } from '../domain/catalog'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS } from '../domain/employees'
 import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
 import type * as T from '../domain/types'
@@ -58,18 +57,19 @@ function cuit(prefix: number, body: number): string {
 
 let counter = 0
 /**
- * El usuario demo del Banco Aula (Fase 8a), que opera el banco del entorno y no tiene roles en la
- * empresa (SoD-12). También lo recibe la empresa demo de una base guardada antes de la Fase 8a.
+ * El segundo integrante de Tesorería (Fase 8a): el Banco Aula lo opera Tesorería y quien envía una
+ * orden no la procesa (SoD-12), así que en la demo procesa lo que envía `tesoreria`. También lo
+ * recibe la empresa demo de una base guardada antes.
  */
-export function addDemoBankUser(db: DB, companyId: string, now: string) {
-  if (db.profiles.some((p) => p.username === 'banco')) return
-  const sector = db.sectors.find((s) => s.company_id === companyId && s.code === 'BAN')
+export function addDemoTreasurer(db: DB, companyId: string, now: string) {
+  if (db.profiles.some((p) => p.username === 'tesoreria2')) return
+  const sector = db.sectors.find((s) => s.company_id === companyId && s.code === 'TES')
   const profile: T.Profile = {
-    id: 'usr-banco',
-    username: 'banco',
+    id: 'usr-tesoreria2',
+    username: 'tesoreria2',
     password: DEMO_PASSWORD,
-    first_name: 'Brenda',
-    last_name: 'Ibarra',
+    first_name: 'Tomás',
+    last_name: 'Medina',
     app_role: 'ESTUDIANTE',
     is_active: true,
     must_change_password: false,
@@ -80,7 +80,7 @@ export function addDemoBankUser(db: DB, companyId: string, now: string) {
     id: id('mbr'),
     company_id: companyId,
     user_id: profile.id,
-    job_title: 'Oficial del Banco Aula',
+    job_title: 'Analista de Tesorería',
     is_active: true,
   }
   db.members.push(member)
@@ -88,7 +88,7 @@ export function addDemoBankUser(db: DB, companyId: string, now: string) {
     id: id('mro'),
     company_id: companyId,
     member_id: member.id,
-    role_code: 'BANCO',
+    role_code: 'TESORERIA',
     sector_id: sector?.id ?? null,
   })
 }
@@ -211,7 +211,6 @@ export function buildSeed(): DB {
     'RRHH y Sueldos',
     'Producción y Costos',
     'Depósito y Logística',
-    ENVIRONMENT_ISLAND.name,
   ]
   const islands = islandNames.map((name, i) => ({ id: id('isl'), company_id: companyId, number: i + 1, name }))
   db.islands.push(...islands)
@@ -221,7 +220,6 @@ export function buildSeed(): DB {
     ['GER', 'Gerencia', 1], ['CGE', 'Control de Gestión', 1], ['COM', 'Compras', 2], ['VEN', 'Ventas', 3],
     ['CON', 'Contabilidad', 4], ['IMP', 'Impuestos', 4], ['TES', 'Tesorería y Finanzas', 5], ['RRH', 'RRHH y Sueldos', 6],
     ['PRO', 'Producción', 7], ['COS', 'Costos', 7], ['DEP', 'Depósito', 8], ['LOG', 'Logística', 8],
-    ...ENVIRONMENT_SECTORS.map(([code, name]): [string, string, number] => [code, name, ENVIRONMENT_ISLAND.number]),
   ]
   const sector: Record<string, string> = {}
   for (const [code, name, island] of sectorDefs) {
@@ -313,7 +311,7 @@ export function buildSeed(): DB {
     ],
     'Encargado de Depósito',
   )
-  addDemoBankUser(db, companyId, now)
+  addDemoTreasurer(db, companyId, now)
 
   // ------------------------------------------------------------ Proveedores
   const audited = { created_at: now, created_by: null, updated_at: now, updated_by: null }

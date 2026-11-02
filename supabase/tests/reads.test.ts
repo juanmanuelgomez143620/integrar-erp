@@ -336,7 +336,7 @@ describe('tesorería', () => {
   })
 
   it('la cuenta en el Banco Aula: saldos, lo pendiente y lo procesado (y quién lo ve)', async () => {
-    for (const u of [...USERS, 'banco'])
+    for (const u of [...USERS, 'tesoreria2'])
       await same(u, () => Q.bankAccountView(mock, userId(u), company), 'bank_account_view', [companyPg])
   })
 

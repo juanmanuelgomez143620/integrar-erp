@@ -30,7 +30,7 @@ Si tenés el agente de planificación (Tab en OpenCode), usalo hasta terminar es
   - `adapter.test.ts`: el adaptador de la interfaz contra una imitación HTTP de Supabase (`support/fake-supabase.ts`).
   - Si cambiás una consulta o un comando del simulador, cambiá su función SQL hasta que esas pruebas pasen.
 - **Migraciones generadas** (no se editan a mano): la de catálogos sale de `src/lib/domain/catalog.ts` (`npm run db:catalog`) y la de la empresa plantilla, de `seed.ts` (`npm run db:demo`). Todavía no se aplicaron a ningún proyecto, así que se pueden corregir en el lugar. Después de aplicarlas, cualquier cambio va en una migración nueva.
-- **Usuarios demo** (contraseña `demo1234`): admin, docente, gerencia, auditor, compras1, compras2, ventas, contabilidad, tesoreria, rrhh, produccion, deposito y banco (el Banco Aula del entorno, Fase 8a). Circuito: produccion crea y envía la SC → compras1 arma la OC → la aprueba compras2 (hasta $ 500.000) o gerencia (más) → compras1 la envía → deposito recibe. Quien crea la OC no puede aprobarla.
+- **Usuarios demo** (contraseña `demo1234`): admin, docente, gerencia, auditor, compras1, compras2, ventas, contabilidad, tesoreria, rrhh, produccion, deposito y tesoreria2 (procesa en el Banco Aula lo que envía tesoreria, Fase 8a). Circuito: produccion crea y envía la SC → compras1 arma la OC → la aprueba compras2 (hasta $ 500.000) o gerencia (más) → compras1 la envía → deposito recibe. Quien crea la OC no puede aprobarla.
 
 ## 3. Reglas que no se negocian
 

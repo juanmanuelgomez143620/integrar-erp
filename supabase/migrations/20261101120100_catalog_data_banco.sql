@@ -31,8 +31,7 @@ insert into public.roles (code, name, island, default_sector_code, description, 
   ('PRODUCCION', 'Producción', 7, 'PRO', 'Arma las listas de materiales, planifica y termina las órdenes de producción, y pide los materiales a Compras.', false, 8),
   ('DEPOSITO', 'Depósito y Stock', 8, 'DEP', 'Recibe y despacha mercadería, entrega los materiales a Producción, controla el stock y pide reposición.', false, 9),
   ('LOGISTICA', 'Logística', 8, 'LOG', 'Organiza el reparto de lo que despacha Depósito: transportistas, vehículos y hojas de ruta.', false, 10),
-  ('BANCO', 'Banco Aula', 9, 'BAN', 'Opera el banco del entorno: procesa las órdenes que le llegan de la empresa. No tiene roles en la empresa (SoD-12).', false, 11),
-  ('DOCENTE', 'Docente (supervisor)', null, null, 'Todos los permisos en la empresa; puede actuar como supervisor.', true, 12)
+  ('DOCENTE', 'Docente (supervisor)', null, null, 'Todos los permisos en la empresa; puede actuar como supervisor.', true, 11)
 on conflict (code) do update set name = excluded.name, island = excluded.island, default_sector_code = excluded.default_sector_code, description = excluded.description, is_supervisor = excluded.is_supervisor, sort = excluded.sort;
 
 insert into public.permissions (code, module_code, resource, action) values
@@ -416,6 +415,7 @@ insert into public.role_permissions (role_code, permission_code) values
   ('TESORERIA', 'tax_return.read'),
   ('TESORERIA', 'tax_return.pay'),
   ('TESORERIA', 'bank.read'),
+  ('TESORERIA', 'bank.operate'),
   ('RRHH', 'company.read'),
   ('RRHH', 'member.read'),
   ('RRHH', 'sector.read'),
@@ -513,12 +513,7 @@ insert into public.role_permissions (role_code, permission_code) values
   ('AUDITOR', 'tax_return.read'),
   ('AUDITOR', 'carrier.read'),
   ('AUDITOR', 'route_sheet.read'),
-  ('AUDITOR', 'bank.read'),
-  ('BANCO', 'company.read'),
-  ('BANCO', 'member.read'),
-  ('BANCO', 'sector.read'),
-  ('BANCO', 'bank.read'),
-  ('BANCO', 'bank.operate');
+  ('AUDITOR', 'bank.read');
 
 insert into public.units_of_measure (code, name, allows_decimals) values
   ('UN', 'Unidad', false),

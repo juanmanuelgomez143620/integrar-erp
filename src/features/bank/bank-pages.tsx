@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Clock, Landmark, Scale, Vault } from 'lucide-react'
+import { Clock, Inbox, Landmark, Scale, Vault } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataTable, type Column } from '@/components/common/data-table'
 import { EmptyState, InfoRow, KpiCard, Loading, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
+import { StatusBadge } from '@/components/common/status-badge'
 import { api, commands, type BankAccountView, type BankMovementRow } from '@/lib/api'
 import { BANK_MODES } from '@/lib/domain/catalog'
 import { date, money } from '@/lib/format'
@@ -56,6 +57,21 @@ function pendingColumns(withSource: boolean): Column<BankMovementRow>[] {
       key: 'concept',
       header: 'Concepto',
       cell: (r) => <span className="whitespace-normal">{r.concept}</span>,
+    },
+    {
+      key: 'ordered_by',
+      header: 'Envió',
+      cell: (r) => (
+        <span className="whitespace-normal">
+          {r.ordered_by_name ?? '—'}
+          {r.own && (
+            <>
+              {' '}
+              <StatusBadge label="Vos" badge="info" />
+            </>
+          )}
+        </span>
+      ),
     },
     ...(withSource
       ? [{ key: 'source', header: 'Operación', cell: (r: BankMovementRow) => <SourceCell row={r} /> }]
@@ -126,8 +142,8 @@ function AccountData({ view }: { view: BankAccountView }) {
 }
 
 /**
- * Tesorería → Banco Aula: la cuenta de la empresa vista desde el banco (el homebanking). El saldo
- * según el banco sale de lo que procesó; lo enviado que todavía no procesó espera aparte.
+ * Pagos y tesorería → Banco Aula: la cuenta de la empresa vista desde el banco (el homebanking). El
+ * saldo según el banco sale de lo que procesó; lo enviado que todavía no procesó espera aparte.
  */
 export function HomeBankingPage() {
   const company = useCompany()
@@ -153,6 +169,15 @@ export function HomeBankingPage() {
         crumbs={crumbs}
         title="Banco Aula"
         description="La cuenta corriente de la empresa en el banco del aula. Cada pago, cobro, depósito o transferencia que mueve el banco le llega como una orden, y recién cuando el banco la procesa entra en la cuenta. Por eso el saldo según el banco puede no coincidir con el de libros: la conciliación explica la diferencia."
+        actions={
+          company.can('bank.operate') && (
+            <Button asChild>
+              <Link to={company.to('pagos/banco-aula/bandeja')}>
+                <Inbox /> Bandeja del banco
+              </Link>
+            </Button>
+          )
+        }
       />
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         <KpiCard
@@ -216,8 +241,9 @@ export function HomeBankingPage() {
 }
 
 /**
- * Banco Aula → Bandeja: quien opera el banco procesa las órdenes que mandó la empresa, de a una o
- * todas juntas, con la fecha de hoy. En modo automático el banco las procesa solo.
+ * Pagos y tesorería → Banco Aula → Bandeja: Tesorería opera el banco y procesa las órdenes que mandó
+ * la empresa, de a una o todas juntas, con la fecha de hoy; quien envió una orden no la procesa
+ * (SoD-12). Si el docente lo pide, el banco las procesa solo.
  */
 export function BankTrayPage() {
   const company = useCompany()
@@ -228,7 +254,12 @@ export function BankTrayPage() {
       r.processed === 1 ? 'Orden procesada: ya está en la cuenta.' : `${r.processed} órdenes procesadas.`,
     onSuccess: () => setSelected(new Set()),
   })
-  const crumbs = [{ label: 'Inicio', to: company.to() }, { label: 'Entorno' }, { label: 'Bandeja del banco' }]
+  const crumbs = [
+    { label: 'Inicio', to: company.to() },
+    { label: 'Pagos y tesorería' },
+    { label: 'Banco Aula', to: company.to('pagos/banco-aula') },
+    { label: 'Bandeja' },
+  ]
   if (isLoading || error) return <Loading error={error} />
   if (!view)
     return (
@@ -238,7 +269,10 @@ export function BankTrayPage() {
       </>
     )
   const pending = view.pending
-  const chosen = pending.filter((r) => selected.has(r.id)).map((r) => r.id)
+  // Con la separación de funciones, quien envió una orden no la procesa (el docente, sí).
+  const blocked = (r: BankMovementRow) => r.own && company.company.settings.sod_enabled && !company.supervisor
+  const processable = pending.filter((r) => !blocked(r)).map((r) => r.id)
+  const chosen = pending.filter((r) => selected.has(r.id) && !blocked(r)).map((r) => r.id)
   const toggle = (id: string, on: boolean) =>
     setSelected((prev) => {
       const next = new Set(prev)
@@ -251,12 +285,12 @@ export function BankTrayPage() {
       <PageHeader
         crumbs={crumbs}
         title="Bandeja del Banco Aula"
-        description={`Las órdenes que envió ${company.company.legal_name}: pagos, cobros, depósitos y transferencias. Al procesarlas entran en la cuenta con la fecha de hoy y un número de transacción.`}
+        description={`Tesorería opera el banco de ${company.company.legal_name}: procesa las órdenes que llegaron (pagos, cobros, depósitos y transferencias), que entran en la cuenta con la fecha de hoy y un número de transacción. Quien envió una orden no la procesa: lo hace otro integrante de Tesorería.`}
       />
       {view.mode === 'AUTOMATICO' && (
         <div className="mb-4 rounded-xl border border-brand-blue/30 bg-brand-blue-soft/40 px-4 py-3 text-sm text-navy">
-          {BANK_MODES.AUTOMATICO.label}: {BANK_MODES.AUTOMATICO.description.toLowerCase()} El docente puede pasarlo a
-          estudiantes en el panel docente.
+          {BANK_MODES.AUTOMATICO.label}: {BANK_MODES.AUTOMATICO.description.toLowerCase()} El docente puede volver a
+          dejarlo en manos de Tesorería en el panel docente.
         </div>
       )}
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
@@ -290,8 +324,11 @@ export function BankTrayPage() {
                 >
                   Procesar seleccionadas{chosen.length ? ` (${chosen.length})` : ''}
                 </Button>
-                <Button disabled={process.isPending} onClick={() => process.mutate([pending.map((r) => r.id)])}>
-                  Procesar todas
+                <Button
+                  disabled={!processable.length || process.isPending}
+                  onClick={() => process.mutate([processable])}
+                >
+                  Procesar todas{processable.length < pending.length ? ` las que podés (${processable.length})` : ''}
                 </Button>
               </div>
             )
@@ -309,9 +346,11 @@ export function BankTrayPage() {
                       header: <span className="sr-only">Elegir</span>,
                       cell: (r: BankMovementRow) => (
                         <Checkbox
-                          checked={selected.has(r.id)}
+                          checked={selected.has(r.id) && !blocked(r)}
+                          disabled={blocked(r)}
                           onCheckedChange={(v) => toggle(r.id, v === true)}
                           aria-label={`Elegir la orden N.º ${r.seq}`}
+                          title={blocked(r) ? 'La enviaste vos: la procesa otro integrante de Tesorería.' : undefined}
                         />
                       ),
                     },

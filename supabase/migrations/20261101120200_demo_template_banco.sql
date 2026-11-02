@@ -632,8 +632,7 @@ begin
       (5, 'Tesorería y Finanzas'),
       (6, 'RRHH y Sueldos'),
       (7, 'Producción y Costos'),
-      (8, 'Depósito y Logística'),
-      (9, 'Entorno: banco y fisco')
+      (8, 'Depósito y Logística')
     ) as i (number, name);
 
   insert into public.sectors (company_id, code, name, island_id)
@@ -650,9 +649,7 @@ begin
       ('PRO', 'Producción', 7),
       ('COS', 'Costos', 7),
       ('DEP', 'Depósito', 8),
-      ('LOG', 'Logística', 8),
-      ('BAN', 'Banco Aula', 9),
-      ('FIS', 'Fisco simulado', 9)
+      ('LOG', 'Logística', 8)
     ) as s (code, name, island)
     left join public.islands i on i.company_id = v_id and i.number = s.island;
 

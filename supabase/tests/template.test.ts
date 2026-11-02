@@ -589,19 +589,10 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await vehicles(created.id)).toEqual(mockVehicles)
   })
 
-  it('abre su cuenta en el Banco Aula con la apertura y trae la isla del entorno', async () => {
+  it('abre su cuenta en el Banco Aula con la apertura', async () => {
     const { account, movements } = await bank(created.id)
     expect(account).toMatchObject({ number: mockBank.account.number, alias: 'FORESTAL.NORTE.BA' })
     expect(movements).toEqual([mockBank.start])
-    const sectors = await db.admin<{ code: string; island: number }>(
-      `select s.code, i.number as island from public.sectors s join public.islands i on i.id = s.island_id
-        where s.company_id = $1 and s.code in ('BAN', 'FIS') order by s.code`,
-      [created.id],
-    )
-    expect(sectors).toEqual([
-      { code: 'BAN', island: 9 },
-      { code: 'FIS', island: 9 },
-    ])
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

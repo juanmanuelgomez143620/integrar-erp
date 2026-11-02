@@ -234,17 +234,17 @@ export function TeacherPage() {
               </li>
               <li className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="font-medium">Banco Aula operado por estudiantes</div>
+                  <div className="font-medium">Banco Aula operado por Tesorería</div>
                   <div className="text-xs text-muted-foreground">
-                    {BANK_MODES[company.company.settings.bank_mode ?? 'AUTOMATICO'].description} Para que lo operen
-                    estudiantes, asigná el rol Banco Aula (sin roles de la empresa). Al volver al sistema, lo pendiente
-                    se procesa con la fecha de hoy.
+                    {BANK_MODES[company.company.settings.bank_mode ?? 'ESTUDIANTES'].description} Desactivado, el banco
+                    procesa solo (útil si Tesorería tiene un único estudiante); al desactivarlo, lo pendiente se procesa
+                    con la fecha de hoy.
                   </div>
                 </div>
                 <Switch
-                  aria-label="Banco Aula operado por estudiantes"
+                  aria-label="Banco Aula operado por Tesorería"
                   disabled={setSettings.isPending}
-                  checked={company.company.settings.bank_mode === 'ESTUDIANTES'}
+                  checked={(company.company.settings.bank_mode ?? 'ESTUDIANTES') === 'ESTUDIANTES'}
                   onCheckedChange={(v) => setSettings.mutate([{ bank_mode: v ? 'ESTUDIANTES' : 'AUTOMATICO' }])}
                 />
               </li>

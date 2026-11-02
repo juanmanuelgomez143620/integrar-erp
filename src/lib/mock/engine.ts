@@ -12,9 +12,6 @@ import {
   BOM_COMPONENT_TYPES,
   DOC_STATUSES,
   DOC_TYPES,
-  ENVIRONMENT_ISLAND,
-  ENVIRONMENT_ROLES,
-  ENVIRONMENT_SECTORS,
   MODULES,
   IIBB_DEFAULT_PCT,
   PAYROLL_DEFAULT_RATES,
@@ -3663,8 +3660,8 @@ export function cmdCancelBankReconciliation(ctx: Ctx, docId: string, reason: str
 
 // ============================================================ Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3)
 
-/** El banco lo opera el sistema, salvo que el docente diga que lo operan estudiantes. */
-export const bankMode = (company: T.Company): T.BankMode => company.settings.bank_mode ?? 'AUTOMATICO'
+/** El banco lo opera Tesorería, salvo que el docente pida que lo opere el sistema. */
+export const bankMode = (company: T.Company): T.BankMode => company.settings.bank_mode ?? 'ESTUDIANTES'
 
 /** La cuenta del Banco Aula que refleja una cuenta contable, si la hay. */
 const bankAccountFor = (db: DB, ledgerAccountId: string) =>
@@ -3678,7 +3675,14 @@ export function bankAlias(slug: string) {
 
 type BankOrderInput = Pick<
   T.BankMovement,
-  'origin' | 'direction' | 'amount' | 'concept' | 'source_document_id' | 'journal_line_id' | 'reverses_id'
+  | 'origin'
+  | 'direction'
+  | 'amount'
+  | 'concept'
+  | 'source_document_id'
+  | 'journal_line_id'
+  | 'reverses_id'
+  | 'ordered_by'
 >
 
 /** Un movimiento que llega a la cuenta, pendiente, con el número que sigue en el orden de llegada. */
@@ -3753,6 +3757,7 @@ function sendBankOrders(ctx: Ctx, source: T.Document, entry: T.Document) {
           source_document_id: source.id,
           journal_line_id: line.id,
           reverses_id: null,
+          ordered_by: ctx.userId,
         },
         today,
       ),
@@ -3803,6 +3808,7 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
           source_document_id: order.source_document_id,
           journal_line_id: mirror?.id ?? null,
           reverses_id: order.id,
+          ordered_by: ctx.userId,
         },
         today,
       ),
@@ -3821,7 +3827,7 @@ function settleBankOrders(ctx: Ctx, company: T.Company, orders: T.BankMovement[]
   syncBankTask(ctx, company.id)
 }
 
-/** Mientras haya órdenes pendientes, Banco tiene una tarea abierta para procesarlas. */
+/** Mientras haya órdenes pendientes, Tesorería tiene una tarea abierta para procesarlas en el banco. */
 function syncBankTask(ctx: Ctx, companyId: string) {
   const { db } = ctx
   const pending = db.bankMovements.some((m) => m.company_id === companyId && m.status === 'PENDIENTE')
@@ -3848,10 +3854,10 @@ function syncBankTask(ctx: Ctx, companyId: string) {
     task_type: 'PROCESAR_BANCO',
     title: 'Procesar las órdenes del Banco Aula',
     description:
-      'La empresa envió órdenes al banco (pagos, cobros, depósitos o transferencias): procesalas desde la bandeja.',
+      'Llegaron órdenes al banco (pagos, cobros, depósitos o transferencias): las procesa desde la bandeja un integrante de Tesorería que no las envió.',
     origin_status: null,
     context: {},
-    assigned_role: 'BANCO',
+    assigned_role: 'TESORERIA',
     assigned_user_id: null,
     status: 'PENDIENTE',
     priority: 'NORMAL',
@@ -3864,11 +3870,11 @@ function syncBankTask(ctx: Ctx, companyId: string) {
     created_at: ctx.now,
   }
   db.tasks.push(task)
-  notifyRoles(ctx, companyId, ['BANCO'], {
+  notifyRoles(ctx, companyId, ['TESORERIA'], {
     type: 'NUEVA_TAREA',
     title: 'Órdenes en el Banco Aula',
-    body: 'La empresa envió órdenes al banco: procesalas desde la bandeja.',
-    link_path: `/e/${company.slug}/banco/bandeja`,
+    body: 'Llegaron órdenes al banco: procesalas desde la bandeja (no las que enviaste vos).',
+    link_path: `/e/${company.slug}/pagos/banco-aula/bandeja`,
     task_id: task.id,
   })
 }
@@ -3919,6 +3925,7 @@ export function openBankAccount(ctx: Ctx, companyId: string) {
       source_document_id: null,
       journal_line_id: opening[0]?.line.id ?? null,
       reverses_id: null,
+      ordered_by: null,
     },
     openedOn,
   )
@@ -3939,6 +3946,7 @@ export function openBankAccount(ctx: Ctx, companyId: string) {
           source_document_id: entrySource(db, doc).id,
           journal_line_id: line.id,
           reverses_id: null,
+          ordered_by: null,
         },
         doc.document_date,
       )
@@ -3965,6 +3973,7 @@ export function openBankAccount(ctx: Ctx, companyId: string) {
         source_document_id: order.source_document_id,
         journal_line_id: line.id,
         reverses_id: order.id,
+        ordered_by: null,
       },
       doc.document_date,
     )
@@ -3972,24 +3981,15 @@ export function openBankAccount(ctx: Ctx, companyId: string) {
   }
 }
 
-/** La isla 9 (el entorno: banco y fisco) y sus sectores, si la empresa todavía no los tiene. */
-export function insertEnvironment(ctx: Ctx, companyId: string) {
-  const { db } = ctx
-  let island = db.islands.find((i) => i.company_id === companyId && i.number === ENVIRONMENT_ISLAND.number)
-  if (!island) {
-    island = { id: uid(), company_id: companyId, number: ENVIRONMENT_ISLAND.number, name: ENVIRONMENT_ISLAND.name }
-    db.islands.push(island)
-  }
-  for (const [code, name] of ENVIRONMENT_SECTORS) {
-    if (db.sectors.some((s) => s.company_id === companyId && s.code === code)) continue
-    db.sectors.push({ id: uid(), company_id: companyId, code, name, island_id: island.id })
-  }
-}
-
-/** Banco procesa órdenes pendientes con la fecha del día, en el orden en que llegaron. */
+/**
+ * Tesorería procesa en el banco órdenes pendientes con la fecha del día, en el orden en que llegaron.
+ * SoD-12: quien envió una orden (con su pago, cobro, transferencia o asiento) no la procesa.
+ */
 export function cmdProcessBankOrders(ctx: Ctx, companyId: string, ids: string[]) {
   const { db } = ctx
   const actor = requirePermission(ctx, companyId, 'bank.operate')
+  const sod =
+    getCompany(db, companyId).settings.sod_enabled && !effectivePermissions(db, ctx.userId!, companyId).supervisor
   if (!ids.length) fail('DATO_INVALIDO', 'Elegí las órdenes que procesa el banco.')
   if (new Set(ids).size !== ids.length) fail('DATO_INVALIDO', 'Una orden está dos veces.')
   const orders = ids
@@ -4000,6 +4000,12 @@ export function cmdProcessBankOrders(ctx: Ctx, companyId: string, ids: string[])
         fail(
           'TRANSICION_INVALIDA',
           `La orden N.º ${order.seq} ya está ${BANK_MOVEMENT_STATUSES[order.status].label.toLowerCase()}.`,
+        )
+      if (sod && order.ordered_by === ctx.userId)
+        fail(
+          'SEPARACION_FUNCIONES',
+          `No podés procesar la orden N.º ${order.seq}: la enviaste vos.`,
+          'Separación de funciones (SoD-12): quien envía una orden al banco no la procesa. Tiene que procesarla otro integrante de Tesorería.',
         )
       return order
     })
@@ -8430,23 +8436,6 @@ export function cmdAssignRole(ctx: Ctx, companyId: string, userId: string, role:
   if (db.memberRoles.some((r) => r.member_id === member.id && r.role_code === role && r.sector_id === sectorId)) {
     fail('DATO_INVALIDO', 'Esa asignación ya existe.')
   }
-  if (getCompany(db, companyId).settings.sod_enabled && role !== 'DOCENTE') {
-    const environment = ENVIRONMENT_ROLES.includes(role)
-    const clash = db.memberRoles.find(
-      (r) =>
-        r.member_id === member.id &&
-        r.role_code !== 'DOCENTE' &&
-        ENVIRONMENT_ROLES.includes(r.role_code) !== environment,
-    )
-    if (clash)
-      fail(
-        'SEPARACION_FUNCIONES',
-        environment
-          ? `${fullName(profile)} tiene el rol ${ROLES[clash.role_code].name} en la empresa: no puede operar el ${ROLES[role].name}.`
-          : `${fullName(profile)} opera el ${ROLES[clash.role_code].name}: no puede tener un rol de la empresa.`,
-        'Separación de funciones (SoD-12): quien opera el banco o el fisco del entorno no trabaja en la empresa.',
-      )
-  }
   db.memberRoles.push({ id: uid(), company_id: companyId, member_id: member.id, role_code: role, sector_id: sectorId })
   logAudit(ctx, {
     company_id: companyId,
@@ -8715,7 +8704,7 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
       : settings.iibb_pct !== undefined
         ? 'Cambió la alícuota de ingresos brutos'
         : settings.bank_mode !== undefined
-          ? `Cambió quién opera el Banco Aula: ${BANK_MODES[after.bank_mode!].label.toLowerCase()}`
+          ? `Cambió quién opera el Banco Aula: ${after.bank_mode === 'AUTOMATICO' ? 'lo opera el sistema' : 'lo opera Tesorería'}`
           : 'Cambió la configuración de control interno de la empresa',
     // Sin porcentajes configurados, la base los compara como null.
     changes: diff(comparable(before), comparable(company.settings), [

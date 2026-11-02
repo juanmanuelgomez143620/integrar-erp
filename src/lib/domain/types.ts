@@ -15,8 +15,6 @@ export type RoleCode =
   | 'IMPUESTOS'
   | 'LOGISTICA'
   | 'AUDITOR'
-  /** El oficial del Banco Aula (Fase 8a): opera el banco del entorno, no la empresa. */
-  | 'BANCO'
   | 'DOCENTE'
 
 export type ModuleCode =
@@ -146,11 +144,11 @@ export interface CompanySettings {
   payroll?: Partial<PayrollRates>
   /** La alícuota de ingresos brutos (Fase 7b); sin ella, IIBB_DEFAULT_PCT. */
   iibb_pct?: number
-  /** Quién opera el Banco Aula (Fase 8a); sin el dato, el sistema. */
+  /** Quién opera el Banco Aula (Fase 8a); sin el dato, Tesorería. */
   bank_mode?: BankMode
 }
 
-/** El Banco Aula lo opera el sistema (responde en el momento) o lo operan estudiantes con el rol Banco. */
+/** El Banco Aula lo operan los estudiantes de Tesorería o, si el docente lo pide, el sistema (responde en el momento). */
 export type BankMode = 'AUTOMATICO' | 'ESTUDIANTES'
 
 /** Porcentajes de la liquidación de sueldos (a validar: sin pretensión de exactitud legal). */
@@ -376,6 +374,8 @@ export interface BankMovement {
   journal_line_id: string | null
   /** La orden que revierte (al anular una operación que el banco ya procesó). */
   reverses_id: string | null
+  /** Quién la envió con su operación (no la procesa: SoD-12); vacío en el saldo inicial y en lo anterior al banco. */
+  ordered_by: string | null
   status: BankMovementStatus
   /** Cuándo llegó al banco. */
   received_on: string

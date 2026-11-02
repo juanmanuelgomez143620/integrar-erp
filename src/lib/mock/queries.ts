@@ -3467,6 +3467,10 @@ export interface BankMovementRow {
   processed_on: string | null
   transaction_number: string | null
   processed_by_name: string | null
+  /** Quién la envió con su operación. */
+  ordered_by_name: string | null
+  /** Si la envió quien mira: no la puede procesar (SoD-12). */
+  own: boolean
   /** La operación de la empresa que la originó, si quien mira la puede leer. */
   source: { id: string; display_number: string; path: string } | null
   /** El saldo de la cuenta después del movimiento (sólo en los procesados). */
@@ -3518,6 +3522,8 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       processed_on: m.processed_on,
       transaction_number: m.transaction_number,
       processed_by_name: m.processed_by ? nameOf(db, m.processed_by) : null,
+      ordered_by_name: m.ordered_by ? nameOf(db, m.ordered_by) : null,
+      own: m.ordered_by === userId,
       source:
         doc && can(eff, `${DOC_TYPES[doc.doc_type].resource}.read`)
           ? { id: doc.id, display_number: doc.display_number, path: docPath(db, doc) }
@@ -3957,7 +3963,7 @@ export function listTasks(
             : t.task_type === 'REPONER_STOCK'
               ? `/e/${company.slug}/stock`
               : t.task_type === 'PROCESAR_BANCO'
-                ? `/e/${company.slug}/banco/bandeja`
+                ? `/e/${company.slug}/pagos/banco-aula/bandeja`
                 : null,
           assignee_label: t.assigned_user_id
             ? nameOf(db, t.assigned_user_id)

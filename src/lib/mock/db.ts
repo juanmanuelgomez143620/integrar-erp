@@ -19,13 +19,12 @@ import {
   insertJobCategories,
   insertLaborAgreements,
   insertVehicles,
-  insertEnvironment,
   insertWorkCenters,
   openBankAccount,
   round2,
   startAccounting,
 } from './engine'
-import { addDemoBankUser, buildSeed } from './seed'
+import { addDemoTreasurer, buildSeed } from './seed'
 
 export interface DocumentSequence {
   company_id: string
@@ -99,7 +98,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 22
+export const DB_VERSION = 23
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -454,18 +453,32 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   20: (db) => {
     db.rsLines ??= []
   },
-  // v21 → v22: el Banco Aula (Fase 8a): la isla del entorno en cada empresa y su cuenta en el
-  // banco, con el saldo inicial y lo que ya movió el banco, procesado con la fecha de cada asiento.
+  // v21 → v22: el Banco Aula (Fase 8a): la cuenta de cada empresa en el banco, con el saldo
+  // inicial y lo que ya movió el banco, procesado con la fecha de cada asiento.
   21: (db) => {
     db.bankAccounts ??= []
     db.bankMovements ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
-    for (const company of db.companies) {
-      insertEnvironment(ctx, company.id)
-      openBankAccount(ctx, company.id)
+    for (const company of db.companies) openBankAccount(ctx, company.id)
+  },
+  // v22 → v23: el Banco Aula lo opera Tesorería, no un rol aparte. La primera versión de la 8a.1
+  // (vista previa del 01/11) tenía la isla 9 con el rol Banco y su usuario demo: se quitan, y la
+  // empresa demo recibe el segundo integrante de Tesorería, que procesa lo que envía el primero.
+  22: (db) => {
+    for (const m of db.bankMovements) m.ordered_by ??= null
+    const legacy = (role: string) => role === 'BANCO'
+    db.memberRoles = db.memberRoles.filter((r) => !legacy(r.role_code))
+    for (const t of db.tasks) if (t.assigned_role && legacy(t.assigned_role)) t.assigned_role = 'TESORERIA'
+    const banker = db.profiles.find((p) => p.id === 'usr-banco')
+    if (banker) {
+      banker.is_active = false
+      for (const m of db.members) if (m.user_id === banker.id) m.is_active = false
     }
+    const used = new Set([...db.memberRoles.map((r) => r.sector_id), ...db.employees.map((e) => e.sector_id)])
+    db.sectors = db.sectors.filter((s) => !(['BAN', 'FIS'].includes(s.code) && !used.has(s.id)))
+    db.islands = db.islands.filter((i) => i.number !== 9 || db.sectors.some((s) => s.island_id === i.id))
     const demo = db.companies.find((c) => c.is_template)
-    if (demo) addDemoBankUser(db, demo.id, ctx.now)
+    if (demo) addDemoTreasurer(db, demo.id, new Date().toISOString())
   },
 }
 

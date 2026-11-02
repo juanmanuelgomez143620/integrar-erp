@@ -49,7 +49,6 @@ import {
   Tags,
   TrendingUp,
   Truck,
-  University,
   Users,
   Van,
   Vault,
@@ -131,6 +130,8 @@ export const NAV: NavGroup[] = [
       { label: 'Cajas y bancos', path: 'pagos/cajas-y-bancos', icon: Landmark, permission: 'treasury.read' },
       // La cuenta en el Banco Aula, vista desde el banco (Fase 8a).
       { label: 'Banco Aula', path: 'pagos/banco-aula', icon: Vault, permission: 'bank.read' },
+      // Tesorería opera el banco: procesa las órdenes que no envió (SoD-12).
+      { label: 'Bandeja del banco', path: 'pagos/banco-aula/bandeja', icon: Inbox, permission: 'bank.operate' },
       {
         label: 'Transferencias',
         path: 'pagos/transferencias',
@@ -246,11 +247,6 @@ export const NAV: NavGroup[] = [
       { label: 'Proveedores', path: 'proveedores', icon: Truck, permission: 'supplier.read' },
       { label: 'Clientes', path: 'clientes', icon: Users, permission: 'customer.read' },
     ],
-  },
-  {
-    // El entorno de la empresa, que operan estudiantes con roles propios (Fase 8).
-    label: 'Entorno',
-    items: [{ label: 'Bandeja del banco', path: 'banco/bandeja', icon: University, permission: 'bank.operate' }],
   },
   {
     label: 'Control',
