@@ -101,7 +101,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 24
+export const DB_VERSION = 25
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -499,6 +499,14 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     for (const m of db.bankMovements) m.charge ??= null
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+  },
+  // v24 → v25: los cheques al cobro del Banco Aula (Fase 8b.2): cada movimiento dice si es un cheque
+  // y cuándo se presenta (lo de antes no lo es).
+  24: (db) => {
+    for (const m of db.bankMovements) {
+      m.cheque_number ??= null
+      m.presented_on ??= null
+    }
   },
 }
 

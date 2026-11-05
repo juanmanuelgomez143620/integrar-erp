@@ -21,6 +21,7 @@ import {
   bankAccountFor,
   bankMode,
   bankMonthToClose,
+  bankPresented,
   bankSigned,
   processedBankMovements,
   accountLabel,
@@ -3466,6 +3467,11 @@ export interface BankMovementRow {
   origin: T.BankMovementOrigin
   /** El tipo de cargo, si lo debitó el banco por su cuenta. */
   charge: T.BankCharge | null
+  /** El número del cheque y cuándo se presenta al cobro (8b.2). */
+  cheque_number: string | null
+  presented_on: string | null
+  /** Un cheque que todavía no se presentó: no entra en "procesar todas". */
+  unpresented: boolean
   direction: T.BankDirection
   amount: number
   concept: string
@@ -3505,6 +3511,8 @@ export interface BankAccountView {
   book_balance: number
   /** Lo que llegó al banco y todavía no procesó, en el orden de llegada. */
   pending: BankMovementRow[]
+  /** Lo que el banco rechazó por falta de fondos y la empresa todavía no resolvió (8b.2). */
+  rejected: BankMovementRow[]
   /** Lo procesado, del más reciente al más viejo, con el saldo de cada momento. */
   movements: BankMovementRow[]
 }
@@ -3519,6 +3527,7 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
   if (!account) return null
   const eff = effectivePermissions(db, userId, companyId)
   const company = db.companies.find((c) => c.id === companyId)!
+  const today = businessDate(company)
   const ledger = db.accounts.find((a) => a.id === account.ledger_account_id)!
   const row = (m: T.BankMovement, balance: number | null): BankMovementRow => {
     const doc = m.source_document_id ? db.documents.find((d) => d.id === m.source_document_id) : undefined
@@ -3527,6 +3536,9 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       seq: m.seq,
       origin: m.origin,
       charge: m.charge,
+      cheque_number: m.cheque_number,
+      presented_on: m.presented_on,
+      unpresented: !bankPresented(m, today),
       direction: m.direction,
       amount: m.amount,
       concept: m.concept,
@@ -3563,11 +3575,15 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       ledger: { id: ledger.id, code: ledger.code, name: ledger.name },
     },
     mode: bankMode(company),
-    to_close: bankMonthToClose(db, account, businessDate(company)),
+    to_close: bankMonthToClose(db, account, today),
     balance,
     book_balance: accountBalance(db, ledger.id),
     pending: movements
       .filter((m) => m.status === 'PENDIENTE')
+      .sort((a, b) => a.seq - b.seq)
+      .map((m) => row(m, null)),
+    rejected: movements
+      .filter((m) => m.status === 'RECHAZADO')
       .sort((a, b) => a.seq - b.seq)
       .map((m) => row(m, null)),
     movements: rows.reverse(),
@@ -4088,7 +4104,9 @@ export function listTasks(
                 ? `/e/${company.slug}/pagos/banco-aula/bandeja`
                 : t.task_type === 'REGISTRAR_CARGOS_BANCO'
                   ? `/e/${company.slug}/pagos/conciliaciones/nueva`
-                  : null,
+                  : t.task_type === 'RESOLVER_RECHAZO_BANCO'
+                    ? `/e/${company.slug}/pagos/banco-aula/bandeja`
+                    : null,
           assignee_label: t.assigned_user_id
             ? nameOf(db, t.assigned_user_id)
             : t.assigned_role

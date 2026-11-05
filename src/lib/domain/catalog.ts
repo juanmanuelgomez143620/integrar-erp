@@ -851,6 +851,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   REPONER_STOCK: 'Evaluar reposición',
   PROCESAR_BANCO: 'Procesar órdenes del banco',
   REGISTRAR_CARGOS_BANCO: 'Registrar cargos del banco',
+  RESOLVER_RECHAZO_BANCO: 'Resolver órdenes rechazadas por el banco',
   CONSIGNA: 'Consigna del docente',
 }
 
@@ -881,6 +882,11 @@ export const BANK_ACCOUNT_DEFAULTS = {
   overdraft_rate: 6,
   /** Impuesto a los débitos y créditos: por ciento de lo que movieron las órdenes del mes (Fase 8b). */
   debit_credit_tax_pct: 0.6,
+  /** Días hasta que el proveedor presenta al cobro un cheque emitido (Fase 8b.2). */
+  cheque_days: 3,
+  /** Comisión por rechazar por falta de fondos una transferencia y un cheque (Fase 8b.2). */
+  rejection_fee: 2_500,
+  cheque_rejection_fee: 4_000,
 }
 
 export const BANK_CHARGES: Record<BankCharge, string> = {
@@ -893,6 +899,7 @@ export const BANK_CHARGES: Record<BankCharge, string> = {
 export const BANK_MOVEMENT_STATUSES: Record<BankMovementStatus, { label: string; badge: Badge }> = {
   PENDIENTE: { label: 'Pendiente', badge: 'warning' },
   PROCESADO: { label: 'Procesada', badge: 'success' },
+  RECHAZADO: { label: 'Rechazada', badge: 'danger' },
   ANULADO: { label: 'Anulada', badge: 'neutral' },
 }
 
@@ -908,6 +915,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   PEDIDO_AUTORIZADO: 'Pedido autorizado',
   PEDIDO_DESPACHADO: 'Pedido despachado',
   PRODUCCION_TERMINADA: 'Producción terminada',
+  ORDEN_RECHAZADA: 'Orden rechazada por el banco',
 }
 
 // ---------------------------------------------------------------- Etiquetas

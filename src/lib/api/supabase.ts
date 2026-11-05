@@ -464,6 +464,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     processBankOrders: (companyId, ids) => rpc('bank_orders_process', { ...company(companyId), p_ids: ids }),
     closeBankMonth: (companyId, period) => rpc('bank_month_close', { ...company(companyId), p_period: period }),
     registerBankCharges: (companyId, ids) => rpc('bank_charges_register', { ...company(companyId), p_ids: ids }),
+    resendBankOrder: (companyId, id) => rpc('bank_order_resend', { ...company(companyId), p_id: id }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

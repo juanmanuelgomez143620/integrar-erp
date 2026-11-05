@@ -266,7 +266,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_user_id: u.alumnoB,
     p_user_ids: `{${u.alumnoB}}`,
     p_member_role_id: B.memberRole,
-    p_id: B.product,
+    // La orden que se reenvía al banco es un movimiento de la cuenta de B.
+    p_id: fn === 'bank_order_resend' ? B.bankMovement : B.product,
     p_kind: fn === 'export_rows' ? 'stock' : 'product',
     p_slug: B.slug,
     // La lista de B se busca por su código.

@@ -368,7 +368,8 @@ export function logAudit(ctx: Ctx, e: AuditInput) {
     from_status: e.from_status ?? null,
     to_status: e.to_status ?? null,
     summary: e.summary,
-    changes: e.changes ?? null,
+    // Sin cambios, null: como la base (log_audit guarda nullif(changes, '{}')).
+    changes: e.changes && Object.keys(e.changes).length ? e.changes : null,
   })
 }
 
@@ -3726,7 +3727,7 @@ type BankOrderInput = Pick<
 function addBankMovement(
   ctx: Ctx,
   account: T.BankAccount,
-  input: BankOrderInput & { charge?: T.BankCharge },
+  input: BankOrderInput & Partial<Pick<T.BankMovement, 'charge' | 'cheque_number' | 'presented_on'>>,
   on: string,
 ) {
   const seq = ctx.db.bankMovements.reduce(
@@ -3739,6 +3740,8 @@ function addBankMovement(
     bank_account_id: account.id,
     seq: seq + 1,
     charge: null,
+    cheque_number: null,
+    presented_on: null,
     ...input,
     status: 'PENDIENTE',
     received_on: on,
@@ -3760,6 +3763,56 @@ function processBankMovement(db: DB, movement: T.BankMovement, on: string, userI
   movement.processed_on = on
   movement.transaction_number = `SIM-${String(count + 1).padStart(6, '0')}`
   movement.processed_by = userId
+}
+
+/** Un cheque se debita desde que el proveedor lo presenta al cobro; las demás órdenes, desde que llegan. */
+export const bankPresented = (m: T.BankMovement, today: string) => m.presented_on === null || m.presented_on <= today
+
+/**
+ * El banco ejecuta una orden (8b.2): si saca más que el saldo según el banco más el acuerdo de
+ * descubierto, la rechaza sin debitarla, cobra la comisión por rechazo (un cargo más que registra
+ * Contabilidad) y le avisa a Tesorería; si no, la procesa.
+ */
+function executeBankOrder(ctx: Ctx, order: T.BankMovement, on: string, userId: string | null) {
+  const { db } = ctx
+  const account = db.bankAccounts.find((b) => b.id === order.bank_account_id)!
+  const available = round2(bankBalanceAt(db, account.id, '9999-12-31') + account.overdraft_limit)
+  if (order.direction === 'CREDITO' || order.amount <= available) {
+    processBankMovement(db, order, on, userId)
+    return
+  }
+  order.status = 'RECHAZADO'
+  order.processed_on = on
+  order.processed_by = userId
+  const cheque = order.cheque_number !== null
+  const fee = addBankMovement(
+    ctx,
+    account,
+    {
+      origin: 'BANCO',
+      direction: 'DEBITO',
+      amount: cheque ? BANK_ACCOUNT_DEFAULTS.cheque_rejection_fee : BANK_ACCOUNT_DEFAULTS.rejection_fee,
+      concept: cheque
+        ? `${BANK_CHARGES.RECHAZO} del cheque N.º ${order.cheque_number}`
+        : `${BANK_CHARGES.RECHAZO} de la orden N.º ${order.seq}`,
+      source_document_id: null,
+      journal_line_id: null,
+      reverses_id: null,
+      ordered_by: null,
+      charge: 'RECHAZO',
+    },
+    on,
+  )
+  processBankMovement(db, fee, on, userId)
+  const task = syncRejectedTask(ctx, order.company_id)!
+  syncChargesTask(ctx, order.company_id)
+  notifyRoles(ctx, order.company_id, ['TESORERIA'], {
+    type: 'ORDEN_RECHAZADA',
+    title: 'El Banco Aula rechazó una orden',
+    body: `La orden N.º ${order.seq} (${order.concept}, ${money(order.amount)}) supera el saldo más el acuerdo de descubierto: el banco no la debitó y cobró ${money(fee.amount)} de comisión. Anulá la operación y volvé a pagar, o reenviala cuando haya fondos.`,
+    link_path: `/e/${getCompany(db, order.company_id).slug}/pagos/banco-aula/bandeja`,
+    task_id: task.id,
+  })
 }
 
 /** La orden de una línea del mayor: al debe entra dinero (crédito en el extracto); al haber, sale (débito). */
@@ -3785,6 +3838,9 @@ function sendBankOrders(ctx: Ctx, source: T.Document, entry: T.Document) {
   const { db } = ctx
   const company = getCompany(db, entry.company_id)
   const today = businessDate(company)
+  // El pago de una orden de pago con cheque: el proveedor lo presenta al cobro unos días después (8b.2).
+  const cheque =
+    source.doc_type === 'PAYMENT_ORDER' && source.op!.payment_method === 'CHEQUE' ? source.op!.payment_reference : null
   const sent: T.BankMovement[] = []
   for (const line of db.jeLines.filter((l) => l.document_id === entry.id).sort((a, b) => a.line_no - b.line_no)) {
     const account = bankAccountFor(db, line.account_id)
@@ -3801,17 +3857,20 @@ function sendBankOrders(ctx: Ctx, source: T.Document, entry: T.Document) {
           journal_line_id: line.id,
           reverses_id: null,
           ordered_by: ctx.userId,
+          ...(cheque !== null && line.credit > 0
+            ? { cheque_number: cheque, presented_on: addDays(today, BANK_ACCOUNT_DEFAULTS.cheque_days) }
+            : {}),
         },
         today,
       ),
     )
   }
-  if (sent.length) settleBankOrders(ctx, company, sent)
+  if (sent.length) settleBankOrders(ctx, company)
 }
 
 /**
  * Al anular un asiento (o la operación que lo generó), el contraasiento retira la orden que el
- * banco todavía no procesó y, si ya la procesó, le manda la orden inversa (a validar).
+ * banco todavía no procesó o rechazó y, si ya la procesó, le manda la orden inversa (a validar).
  */
 function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
   const { db } = ctx
@@ -3822,6 +3881,7 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
   const today = businessDate(company)
   const sent: T.BankMovement[] = []
   let withdrawn = false
+  let rejected = false
   const registered = db.bankMovements.filter(
     (m) => m.origin === 'BANCO' && lines.some((l) => l.id === m.journal_line_id),
   )
@@ -3830,7 +3890,8 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
   for (const order of db.bankMovements.filter(
     (m) => m.origin === 'ORDEN' && m.reverses_id === null && lines.some((l) => l.id === m.journal_line_id),
   )) {
-    if (order.status === 'PENDIENTE') {
+    if (order.status === 'PENDIENTE' || order.status === 'RECHAZADO') {
+      if (order.status === 'RECHAZADO') rejected = true
       order.status = 'ANULADO'
       withdrawn = true
       continue
@@ -3862,23 +3923,35 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
       ),
     )
   }
-  if (sent.length) settleBankOrders(ctx, company, sent)
+  if (sent.length) settleBankOrders(ctx, company)
   else if (withdrawn) syncBankTask(ctx, company.id)
+  if (rejected) syncRejectedTask(ctx, company.id)
 }
 
-/** Lo que llega al banco: en modo automático se procesa en el momento; si no, espera en la bandeja. */
-function settleBankOrders(ctx: Ctx, company: T.Company, orders: T.BankMovement[]) {
+/**
+ * Lo que llega al banco: si lo opera el sistema, ejecuta en el orden de llegada todo lo pendiente
+ * que ya se puede cobrar (un cheque, desde que se presenta: 8b.2); si no, espera en la bandeja.
+ */
+function settleBankOrders(ctx: Ctx, company: T.Company) {
   if (bankMode(company) === 'AUTOMATICO') {
     const today = businessDate(company)
-    for (const order of orders) processBankMovement(ctx.db, order, today, null)
+    for (const order of ctx.db.bankMovements
+      .filter((m) => m.company_id === company.id && m.status === 'PENDIENTE' && bankPresented(m, today))
+      .sort((a, b) => a.seq - b.seq))
+      executeBankOrder(ctx, order, today, null)
   }
   syncBankTask(ctx, company.id)
 }
 
-/** Mientras haya órdenes pendientes, Tesorería tiene una tarea abierta para procesarlas en el banco. */
+/**
+ * Mientras haya órdenes pendientes, Tesorería tiene una tarea abierta para procesarlas en el banco.
+ * Si lo opera el sistema, no: un cheque que espera su fecha no le abre la tarea.
+ */
 function syncBankTask(ctx: Ctx, companyId: string) {
   const { db } = ctx
-  const pending = db.bankMovements.some((m) => m.company_id === companyId && m.status === 'PENDIENTE')
+  const pending =
+    bankMode(getCompany(db, companyId)) === 'ESTUDIANTES' &&
+    db.bankMovements.some((m) => m.company_id === companyId && m.status === 'PENDIENTE')
   const open = db.tasks.find(
     (t) =>
       t.company_id === companyId &&
@@ -3925,6 +3998,54 @@ function syncBankTask(ctx: Ctx, companyId: string) {
     link_path: `/e/${company.slug}/pagos/banco-aula/bandeja`,
     task_id: task.id,
   })
+}
+
+/**
+ * Mientras haya órdenes rechazadas, Tesorería tiene una tarea abierta para resolverlas: anular la
+ * operación y volver a pagar, o reenviarlas cuando haya fondos (8b.2). Devuelve la tarea abierta.
+ */
+function syncRejectedTask(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const rejected = db.bankMovements.some((m) => m.company_id === companyId && m.status === 'RECHAZADO')
+  const open = db.tasks.find(
+    (t) =>
+      t.company_id === companyId &&
+      t.task_type === 'RESOLVER_RECHAZO_BANCO' &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+  )
+  if (!rejected) {
+    if (open) {
+      open.status = 'RESUELTA'
+      open.completed_by = ctx.userId
+      open.completed_at = ctx.now
+    }
+    return null
+  }
+  if (open) return open
+  const task: T.Task = {
+    id: uid(),
+    company_id: companyId,
+    document_id: null,
+    task_type: 'RESOLVER_RECHAZO_BANCO',
+    title: 'Resolver las órdenes rechazadas por el Banco Aula',
+    description:
+      'El banco rechazó órdenes por falta de fondos: anulá la operación y volvé a pagar, o reenviá la orden desde la bandeja cuando haya fondos.',
+    origin_status: null,
+    context: {},
+    assigned_role: 'TESORERIA',
+    assigned_user_id: null,
+    status: 'PENDIENTE',
+    priority: 'ALTA',
+    source: 'SISTEMA',
+    claimed_by: null,
+    claimed_at: null,
+    completed_by: null,
+    completed_at: null,
+    created_by: null,
+    created_at: ctx.now,
+  }
+  db.tasks.push(task)
+  return task
 }
 
 /**
@@ -4062,9 +4183,24 @@ export function cmdProcessBankOrders(ctx: Ctx, companyId: string, ids: string[])
     })
     .sort((a, b) => a.seq - b.seq)
   const today = businessDate(getCompany(db, companyId))
-  for (const order of orders) processBankMovement(db, order, today, ctx.userId)
+  for (const order of orders) executeBankOrder(ctx, order, today, ctx.userId)
   syncBankTask(ctx, companyId)
   const account = db.bankAccounts.find((b) => b.id === orders[0].bank_account_id)!
+  const processed = orders.filter((o) => o.status === 'PROCESADO')
+  const rejected = orders.filter((o) => o.status === 'RECHAZADO')
+  const parts = [
+    processed.length
+      ? `Procesó ${processed.length === 1 ? 'la orden' : `${processed.length} órdenes`} del Banco Aula: ${processed
+          .map(
+            (o) =>
+              `${o.transaction_number} (${o.direction === 'CREDITO' ? 'crédito' : 'débito'} de ${money(o.amount)})`,
+          )
+          .join(', ')}`
+      : null,
+    rejected.length
+      ? `Rechazó por falta de fondos ${rejected.map((o) => `la orden N.º ${o.seq} (débito de ${money(o.amount)})`).join(', ')}`
+      : null,
+  ]
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -4072,11 +4208,47 @@ export function cmdProcessBankOrders(ctx: Ctx, companyId: string, ids: string[])
     entity_type: 'bank_account',
     entity_id: account.id,
     entity_label: `Banco Aula ${account.number}`,
-    summary: `Procesó ${orders.length === 1 ? 'la orden' : `${orders.length} órdenes`} del Banco Aula: ${orders
-      .map((o) => `${o.transaction_number} (${o.direction === 'CREDITO' ? 'crédito' : 'débito'} de ${money(o.amount)})`)
-      .join(', ')}`,
+    summary: parts.filter((p) => p !== null).join('. '),
   })
-  return { processed: orders.length }
+  return { processed: processed.length, rejected: rejected.length }
+}
+
+/**
+ * Tesorería reenvía al banco una orden rechazada, cuando hay fondos (8b.2): vuelve a la bandeja
+ * como pendiente, enviada por quien la reenvía (la procesa otro: SoD-12); un cheque se presenta otra
+ * vez en el momento. Si lo opera el sistema, el banco la ejecuta enseguida (y puede rechazarla de nuevo).
+ */
+export function cmdResendBankOrder(ctx: Ctx, companyId: string, id: string) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bank.operate')
+  const order = db.bankMovements.find((m) => m.id === id && m.company_id === companyId && m.origin === 'ORDEN')
+  if (!order) fail('DATO_INVALIDO', 'La orden no es de esta empresa.')
+  if (order.status !== 'RECHAZADO')
+    fail(
+      'TRANSICION_INVALIDA',
+      `La orden N.º ${order.seq} no está rechazada: está ${BANK_MOVEMENT_STATUSES[order.status].label.toLowerCase()}.`,
+    )
+  const company = getCompany(db, companyId)
+  const today = businessDate(company)
+  order.status = 'PENDIENTE'
+  order.received_on = today
+  order.processed_on = null
+  order.processed_by = null
+  order.ordered_by = ctx.userId
+  if (order.presented_on !== null) order.presented_on = today
+  const account = db.bankAccounts.find((b) => b.id === order.bank_account_id)!
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'RESEND',
+    entity_type: 'bank_account',
+    entity_id: account.id,
+    entity_label: `Banco Aula ${account.number}`,
+    summary: `Reenvió al Banco Aula la orden N.º ${order.seq} (débito de ${money(order.amount)}), rechazada por falta de fondos`,
+  })
+  settleBankOrders(ctx, company)
+  syncRejectedTask(ctx, companyId)
+  return { status: order.status }
 }
 
 /** "2026-10" → "2026-11". */
@@ -4149,6 +4321,8 @@ export function cmdCloseBankMonth(ctx: Ctx, companyId: string, period: string) {
     )
   const due = bankMonthToClose(db, account, today)
   if (due !== period) fail('DATO_INVALIDO', `Primero hay que cerrar ${periodLabel(due!)}.`)
+  // Si lo opera el sistema, antes cobra los cheques que ya se presentaron (8b.2).
+  settleBankOrders(ctx, getCompany(db, companyId))
   const { fee, tax, interest } = monthCharges(db, account, period)
   const debited: [T.BankCharge, number, string][] = [
     ['COMISION', fee, `${BANK_CHARGES.COMISION} · ${label}`],
@@ -8936,7 +9110,8 @@ const comparable = (settings: T.CompanySettings) => ({
 /**
  * El docente cambia el control interno (separación de funciones, stock negativo),
  * los porcentajes de la liquidación de sueldos, la alícuota de ingresos brutos o quién opera el
- * Banco Aula: al volver al sistema, el banco procesa lo pendiente con la fecha del día.
+ * Banco Aula: al pasar al sistema, el banco ejecuta lo pendiente con la fecha del día (un cheque,
+ * desde que se presenta); al volver a Tesorería, lo que espera le abre su tarea.
  */
 export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: Partial<T.CompanySettings>) {
   const actor = requireSupervisor(ctx, companyId)
@@ -8967,12 +9142,7 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
     after.bank_mode = settings.bank_mode
   }
   company.settings = after
-  if (bankMode(company) === 'AUTOMATICO') {
-    const pending = ctx.db.bankMovements
-      .filter((m) => m.company_id === companyId && m.status === 'PENDIENTE')
-      .sort((a, b) => a.seq - b.seq)
-    if (pending.length) settleBankOrders(ctx, company, pending)
-  }
+  if (settings.bank_mode !== undefined) settleBankOrders(ctx, company)
   logAudit(ctx, {
     company_id: companyId,
     actor,

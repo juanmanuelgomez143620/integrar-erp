@@ -50,16 +50,27 @@ const amountColumns: Column<BankMovementRow>[] = [
   },
 ]
 
+/** El concepto de una orden y, si es un cheque, su número y cuándo se presenta al cobro. */
+function OrderConcept({ row }: { row: BankMovementRow }) {
+  return (
+    <div className="whitespace-normal">
+      {row.concept}
+      {row.cheque_number && (
+        <div className="text-xs text-muted-foreground">
+          Cheque N.º {row.cheque_number} · {row.unpresented ? 'se presenta al cobro' : 'presentado'} el{' '}
+          {date(row.presented_on)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Lo que llegó al banco y todavía no procesó. */
 function pendingColumns(withSource: boolean): Column<BankMovementRow>[] {
   return [
     { key: 'seq', header: 'Orden', cell: (r) => <Mono>N.º {r.seq}</Mono> },
     { key: 'received', header: 'Llegó', cell: (r) => date(r.received_on) },
-    {
-      key: 'concept',
-      header: 'Concepto',
-      cell: (r) => <span className="whitespace-normal">{r.concept}</span>,
-    },
+    { key: 'concept', header: 'Concepto', cell: (r) => <OrderConcept row={r} /> },
     {
       key: 'ordered_by',
       header: 'Envió',
@@ -81,6 +92,26 @@ function pendingColumns(withSource: boolean): Column<BankMovementRow>[] {
     ...amountColumns,
   ]
 }
+
+/** Lo que el banco rechazó por falta de fondos: la empresa anula la operación o, con fondos, la reenvía. */
+function rejectedColumns(action?: Column<BankMovementRow>): Column<BankMovementRow>[] {
+  return [
+    { key: 'seq', header: 'Orden', cell: (r) => <Mono>N.º {r.seq}</Mono> },
+    { key: 'rejected', header: 'Rechazada', cell: (r) => date(r.processed_on) },
+    { key: 'concept', header: 'Concepto', cell: (r) => <OrderConcept row={r} /> },
+    { key: 'source', header: 'Operación', cell: (r) => <SourceCell row={r} /> },
+    {
+      key: 'amount',
+      header: 'Importe',
+      align: 'right',
+      cell: (r) => <span className="tabular">{money(r.amount)}</span>,
+    },
+    ...(action ? [action] : []),
+  ]
+}
+
+const REJECTED_HELP =
+  'El banco no las debitó (superaban el saldo más el acuerdo de descubierto) y cobró la comisión por rechazo. Tesorería anula la operación y vuelve a pagar o, cuando haya fondos, la reenvía: vuelve a la bandeja y la procesa otro integrante de Tesorería.'
 
 /** Lo procesado, con el saldo de cada momento: como en un extracto. */
 function movementColumns(withSource: boolean): Column<BankMovementRow>[] {
@@ -229,6 +260,11 @@ export function HomeBankingPage() {
               columns={pendingColumns(true)}
             />
           </Section>
+          {view.rejected.length > 0 && (
+            <Section title="Rechazadas por falta de fondos" description={REJECTED_HELP} bodyClassName="p-0">
+              <DataTable<BankMovementRow> rows={view.rejected} rowKey={(r) => r.id} columns={rejectedColumns()} />
+            </Section>
+          )}
           <Section
             title="Movimientos de la cuenta"
             description="Lo que el banco procesó, del más reciente al más viejo."
@@ -262,8 +298,29 @@ export function BankTrayPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const process = useCommand((ids: string[]) => commands.processBankOrders(company.companyId, ids), {
     success: (r) =>
-      r.processed === 1 ? 'Orden procesada: ya está en la cuenta.' : `${r.processed} órdenes procesadas.`,
+      [
+        r.processed === 1
+          ? 'Orden procesada: ya está en la cuenta.'
+          : r.processed
+            ? `${r.processed} órdenes procesadas.`
+            : '',
+        r.rejected === 1
+          ? 'El banco rechazó una orden por falta de fondos.'
+          : r.rejected
+            ? `El banco rechazó ${r.rejected} órdenes por falta de fondos.`
+            : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
     onSuccess: () => setSelected(new Set()),
+  })
+  const resend = useCommand((id: string) => commands.resendBankOrder(company.companyId, id), {
+    success: (r) =>
+      r.status === 'PENDIENTE'
+        ? 'Orden reenviada: espera en la bandeja.'
+        : r.status === 'PROCESADO'
+          ? 'Orden reenviada: el banco la procesó.'
+          : 'El banco la volvió a rechazar: sigue sin fondos.',
   })
   const closeMonth = useCommand((period: string) => commands.closeBankMonth(company.companyId, period), {
     success: (r) =>
@@ -286,7 +343,8 @@ export function BankTrayPage() {
   const pending = view.pending
   // Con la separación de funciones, quien envió una orden no la procesa (el docente, sí).
   const blocked = (r: BankMovementRow) => r.own && company.company.settings.sod_enabled && !company.supervisor
-  const processable = pending.filter((r) => !blocked(r)).map((r) => r.id)
+  // Un cheque que todavía no se presentó no entra en "todas": se procesa antes sólo si se lo elige.
+  const processable = pending.filter((r) => !blocked(r) && !r.unpresented).map((r) => r.id)
   const chosen = pending.filter((r) => selected.has(r.id) && !blocked(r)).map((r) => r.id)
   const toggle = (id: string, on: boolean) =>
     setSelected((prev) => {
@@ -347,7 +405,7 @@ export function BankTrayPage() {
         </Section>
         <Section
           title="Órdenes pendientes"
-          description="En el orden en que llegaron. Se procesan con la fecha de hoy."
+          description="En el orden en que llegaron. Se procesan con la fecha de hoy, cada una con el saldo que dejó la anterior: si una saca más que el saldo más el acuerdo de descubierto, el banco la rechaza. Un cheque entra cuando el proveedor lo presenta al cobro (tres días después del pago); antes, sólo si lo elegís."
           bodyClassName="p-0"
           actions={
             company.can('bank.operate') &&
@@ -386,7 +444,13 @@ export function BankTrayPage() {
                           disabled={blocked(r)}
                           onCheckedChange={(v) => toggle(r.id, v === true)}
                           aria-label={`Elegir la orden N.º ${r.seq}`}
-                          title={blocked(r) ? 'La enviaste vos: la procesa otro integrante de Tesorería.' : undefined}
+                          title={
+                            blocked(r)
+                              ? 'La enviaste vos: la procesa otro integrante de Tesorería.'
+                              : r.unpresented
+                                ? 'Todavía no se presentó al cobro: elegilo si el proveedor ya lo depositó.'
+                                : undefined
+                          }
                         />
                       ),
                     },
@@ -396,6 +460,33 @@ export function BankTrayPage() {
             ]}
           />
         </Section>
+        {view.rejected.length > 0 && (
+          <Section title="Rechazadas por falta de fondos" description={REJECTED_HELP} bodyClassName="p-0">
+            <DataTable<BankMovementRow>
+              rows={view.rejected}
+              rowKey={(r) => r.id}
+              columns={rejectedColumns(
+                company.can('bank.operate')
+                  ? {
+                      key: 'resend',
+                      header: <span className="sr-only">Reenviar</span>,
+                      align: 'right',
+                      cell: (r) => (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={resend.isPending}
+                          onClick={() => resend.mutate([r.id])}
+                        >
+                          Reenviar
+                        </Button>
+                      ),
+                    }
+                  : undefined,
+              )}
+            />
+          </Section>
+        )}
         <Section
           title="Procesadas"
           description="Los movimientos de la cuenta, del más reciente al más viejo."

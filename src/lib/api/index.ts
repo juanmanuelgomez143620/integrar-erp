@@ -476,6 +476,7 @@ const mockCommands = {
   closeBankMonth: (companyId: string, period: string) => command((c) => E.cmdCloseBankMonth(c, companyId, period)),
   registerBankCharges: (companyId: string, ids: string[]) =>
     command((c) => E.cmdRegisterBankCharges(c, companyId, ids)),
+  resendBankOrder: (companyId: string, id: string) => command((c) => E.cmdResendBankOrder(c, companyId, id)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

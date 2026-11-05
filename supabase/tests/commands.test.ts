@@ -269,6 +269,20 @@ async function linkPendingBankOrders() {
   return orders
 }
 
+/** Los cargos que debitó el Banco Aula, en el orden en que llegaron: el mismo registro en los dos lados. */
+async function linkBankCharges() {
+  const charges = mock.bankMovements
+    .filter((m) => m.company_id === company && m.origin === 'BANCO')
+    .sort((a, b) => a.seq - b.seq)
+  const rows = await db.admin<{ id: string }>(
+    `select id from public.bank_movements where company_id = $1 and origin = 'BANCO' order by seq`,
+    [pg(company)],
+  )
+  expect(rows.length, 'cargos en los dos lados').toBe(charges.length)
+  charges.forEach((charge, i) => loaded.link(charge.id, rows[i].id))
+  return charges
+}
+
 beforeAll(async () => {
   mock = buildScenario()
   db = await createTestDb()
@@ -4417,13 +4431,7 @@ describe('paridad de comandos', () => {
     expect(await close('el mismo mes otra vez', 'tesoreria2', previous)).toBeNull()
 
     // Los cargos: el mismo registro en los dos lados, por su orden.
-    const debited = charges()
-    const rows = await db.admin<{ id: string }>(
-      `select id from public.bank_movements where company_id = $1 and origin = 'BANCO' order by seq`,
-      [companyPg],
-    )
-    expect(rows.length, 'cargos en los dos lados').toBe(debited.length)
-    debited.forEach((m, i) => loaded.link(m.id, rows[i].id))
+    const debited = await linkBankCharges()
     await view('la cuenta con los cargos del mes', 'tesoreria')
     await candidates('los cargos sin registrar en la conciliación')
 
@@ -4458,6 +4466,171 @@ describe('paridad de comandos', () => {
       (b) => b.commands.registerBankCharges(companyPg, ids.map(pg)),
     )
     await view('la cuenta con los cargos registrados', 'contabilidad')
+  })
+
+  it('banco: cheques al cobro, rechazos por falta de fondos, reenviar y anular (8b.2)', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const today = todayAR()
+    const view = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.bankAccount(companyPg),
+        (u) => Q.bankAccountView(mock, u, company),
+      )
+    const settings = (label: string, value: Partial<CompanySettings>) =>
+      step(
+        label,
+        'docente',
+        (c) => E.cmdUpdateCompanySettings(c, company, value),
+        (b) => b.commands.updateCompanySettings(companyPg, value),
+      )
+    const process = (label: string, username: string, ids: string[]) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdProcessBankOrders(c, company, ids),
+        (b) => b.commands.processBankOrders(companyPg, ids.map(pg)),
+      )
+    const resend = (label: string, username: string, id: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdResendBankOrder(c, company, id),
+        (b) => b.commands.resendBankOrder(companyPg, pg(id)),
+      )
+    /** Un asiento manual registrado: si mueve el banco, le manda una orden. */
+    const entry = (label: string, amount: number, debit: string, credit: string, description: string) => {
+      const input: E.JournalEntryInput = {
+        document_date: today,
+        description,
+        lines: [
+          { account_id: account(debit), debit: amount, credit: 0 },
+          { account_id: account(credit), debit: 0, credit: amount },
+        ],
+      }
+      return created(
+        label,
+        'contabilidad',
+        (c) => E.cmdCreateJournalEntry(c, company, input, true),
+        (b) =>
+          b.commands.createJournalEntry(
+            companyPg,
+            { ...input, lines: input.lines.map((l) => ({ ...l, account_id: pg(l.account_id) })) },
+            true,
+          ),
+      )
+    }
+    // La factura del servicio de la prueba de las órdenes de pago: lo que le falta pagar, con cheques.
+    const service = mock.documents.find(
+      (d) =>
+        d.doc_type === 'SUPPLIER_INVOICE' &&
+        d.status === 'PAGADA_PARCIAL' &&
+        d.supplier_id === supplier('PRV-010') &&
+        d.si!.invoice_number === '00000077',
+    )!
+    const payByCheque = async (label: string, amount: number, number: string) => {
+      const input: E.PaymentOrderInput = {
+        supplier_id: service.supplier_id!,
+        treasury_account_id: account('1.1.01.03'),
+        notes: '',
+        lines: [{ invoice_id: service.id, amount }],
+      }
+      const id = await created(
+        `${label}: la orden de pago`,
+        'contabilidad',
+        (c) => E.cmdCreatePaymentOrder(c, company, input, true),
+        (b) =>
+          b.commands.createPaymentOrder(
+            companyPg,
+            {
+              ...input,
+              supplier_id: pg(input.supplier_id),
+              treasury_account_id: pg(input.treasury_account_id),
+              lines: input.lines.map((l) => ({ ...l, invoice_id: pg(l.invoice_id) })),
+            },
+            true,
+          ),
+      )
+      await ok(
+        `${label}: Gerencia la aprueba`,
+        'gerencia',
+        (c) => E.cmdApprovePaymentOrder(c, id, 'Autorizado'),
+        (b) => b.commands.approvePaymentOrder(pg(id), 'Autorizado'),
+      )
+      await ok(
+        `${label}: Tesorería la paga con cheque`,
+        'tesoreria',
+        (c) => E.cmdPayPaymentOrder(c, id, number, 'CHEQUE'),
+        (b) => b.commands.payPaymentOrder(pg(id), number, 'CHEQUE'),
+      )
+      return id
+    }
+    const open = E.round2(service.total - E.invoicePaid(mock, service.id) - E.invoiceCommitted(mock, service.id))
+    expect(open, 'lo que le falta pagar a la factura del servicio').toBeGreaterThan(10_000)
+
+    // Con fondos para pagar (el banco lo opera el sistema desde las pruebas anteriores), lo pasa a Tesorería.
+    await entry(
+      'los socios aportan dinero al banco',
+      5_000_000,
+      '1.1.01.03',
+      '3.1.01.01',
+      'Aporte de los socios depositado en el banco.',
+    )
+    expect(await settings('lo opera Tesorería', { bank_mode: 'ESTUDIANTES' })).not.toBeNull()
+
+    // El cheque llega con su número y espera que el proveedor lo presente al cobro.
+    const first = await payByCheque('un cheque', 10_000, '000555')
+    expect(await settings('cambiar la separación de funciones no mueve el banco', { sod_enabled: true })).not.toBeNull()
+    await view('el cheque espera su presentación', 'tesoreria2')
+
+    // Un pago más grande que el saldo más el acuerdo de descubierto: el banco lo rechaza.
+    const balance = Q.bankAccountView(mock, mockId('tesoreria'), company)!.balance
+    const big = await entry(
+      'un pago sin fondos',
+      E.round2(balance + 1_050_000),
+      '5.2.02.02',
+      '1.1.01.03',
+      'Pago de la ampliación del galpón con transferencia bancaria.',
+    )
+    const orders = (await linkPendingBankOrders()).map((m) => m.id)
+    const cheque = mock.bankMovements.find((m) => m.source_document_id === first)!.id
+    const refused = mock.bankMovements.find((m) => m.source_document_id === big)!.id
+    expect(orders).toEqual([cheque, refused])
+    expect(
+      await process('Tesorería procesa todo: cobra el cheque antes y rechaza el pago', 'tesoreria2', orders),
+    ).not.toBeNull()
+    await linkBankCharges()
+    await view('la orden rechazada y la comisión', 'tesoreria')
+
+    // Reenviarla: sólo quien opera el banco y sólo una rechazada; sin fondos, vuelve a rechazarse.
+    expect(await resend('Gerencia no reenvía', 'gerencia', refused)).toBeNull()
+    expect(await resend('una orden procesada no se reenvía', 'tesoreria', cheque)).toBeNull()
+    expect(await resend('reenviar la orden rechazada', 'tesoreria', refused)).not.toBeNull()
+    expect(await process('quien la reenvió no la procesa', 'tesoreria', [refused])).toBeNull()
+    expect(await process('sin fondos, otra vez rechazada', 'tesoreria2', [refused])).not.toBeNull()
+    await linkBankCharges()
+
+    // Anular la operación: la orden rechazada se retira y el banco no recibe nada.
+    expect(
+      await step(
+        'anular el pago rechazado',
+        'contabilidad',
+        (c) => E.cmdCancelJournalEntry(c, big, 'El banco lo rechazó por falta de fondos'),
+        (b) => b.commands.cancelJournalEntry(pg(big), 'El banco lo rechazó por falta de fondos'),
+      ),
+    ).not.toBeNull()
+    await view('sin órdenes rechazadas', 'tesoreria')
+
+    // Si lo opera el sistema, el cheque espera su fecha sin abrirle la tarea a Tesorería; al volver a
+    // Tesorería, la abre.
+    expect(await settings('lo opera el sistema', { bank_mode: 'AUTOMATICO' })).not.toBeNull()
+    await payByCheque('otro cheque', E.round2(open - 10_000), '000556')
+    await view('el cheque espera aunque lo opere el sistema', 'tesoreria')
+    expect(await settings('otra vez Tesorería', { bank_mode: 'ESTUDIANTES' })).not.toBeNull()
+    expect(await settings('y otra vez el sistema', { bank_mode: 'AUTOMATICO' })).not.toBeNull()
+    await view('el cheque sigue esperando su fecha', 'tesoreria2')
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {

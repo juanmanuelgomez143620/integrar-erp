@@ -1,15 +1,18 @@
 // Pruebas del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3): la cuenta de la empresa, las órdenes
 // que le llegan de los asientos, Tesorería que opera el banco (SoD-12: quien envía una orden no la
-// procesa), el modo del banco, el extracto y la conciliación (8a) y los cargos del mes (8b.1).
+// procesa), el modo del banco, el extracto y la conciliación (8a), los cargos del mes (8b.1) y los
+// cheques al cobro y los rechazos por falta de fondos (8b.2).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ROLES } from '../domain/catalog'
+import { money } from '../format'
 import type * as T from '../domain/types'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
   accountBalance,
   bankAlias,
+  cmdApprovePaymentOrder,
   cmdCancelFundsTransfer,
   cmdCancelJournalEntry,
   cmdCloseBankMonth,
@@ -17,8 +20,10 @@ import {
   cmdCreateCompanyFromTemplate,
   cmdCreateFundsTransfer,
   cmdCreateJournalEntry,
+  cmdPayPaymentOrder,
   cmdProcessBankOrders,
   cmdRegisterBankCharges,
+  cmdResendBankOrder,
   cmdUpdateCompanySettings,
   type Ctx,
 } from './engine'
@@ -142,7 +147,7 @@ describe('Banco Aula: Tesorería opera el banco', () => {
       companyId(),
       view('tesoreria2').pending.map((m) => m.id),
     )
-    expect(result).toEqual({ processed: 2 })
+    expect(result).toEqual({ processed: 2, rejected: 0 })
     const after = view()
     expect(after.pending).toEqual([])
     expect(after.balance).toBe(after.book_balance)
@@ -412,6 +417,184 @@ describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
         .map((r) => r.key)
         .sort(),
     ).toEqual(['COMISION', 'IMPUESTO_DC', 'INTERESES', 'RECHAZO'])
+  })
+})
+
+describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', () => {
+  const travel = (day: string) => vi.setSystemTime(new Date(`${day}T12:00:00-03:00`))
+  /** La orden de pago de la demo, aprobada por Gerencia y pagada con cheque. */
+  const payByCheque = () => {
+    const op = db.documents.find((d) => d.company_id === companyId() && d.display_number === 'OP-00001')!
+    cmdApprovePaymentOrder(ctx('gerencia'), op.id, 'ok')
+    cmdPayPaymentOrder(ctx('tesoreria'), op.id, '00012345', 'CHEQUE')
+    return op
+  }
+  /** Contabilidad registra un pago con transferencia: le llega al banco como una orden. */
+  const bankPayment = (amount: number) =>
+    cmdCreateJournalEntry(
+      ctx('contabilidad'),
+      companyId(),
+      {
+        document_date: '2027-05-14',
+        description: 'Pago de la ampliación del galpón con transferencia bancaria.',
+        lines: [
+          { account_id: account('5.2.02.02'), debit: amount, credit: 0 },
+          { account_id: account('1.1.01.03'), debit: 0, credit: amount },
+        ],
+      },
+      true,
+    )
+  const orderOf = (source: string) => db.bankMovements.find((m) => m.source_document_id === source)!
+  const rejectedTasks = (username = 'tesoreria2') =>
+    listTasks(db, userId(username), companyId(), 'mine').filter((t) => t.task_type === 'RESOLVER_RECHAZO_BANCO')
+
+  it('el cheque llega con su número y se presenta al cobro tres días después del pago', () => {
+    const op = payByCheque()
+    expect(pendingOf(op.id)).toMatchObject({
+      cheque_number: '00012345',
+      presented_on: '2027-05-17',
+      unpresented: true,
+      direction: 'DEBITO',
+      amount: op.total,
+    })
+    // Quien opera el banco lo cobra antes si lo elige (el proveedor ya lo depositó).
+    expect(cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [pendingOf(op.id).id])).toEqual({
+      processed: 1,
+      rejected: 0,
+    })
+    expect(orderOf(op.id)).toMatchObject({ status: 'PROCESADO', processed_on: '2027-05-14' })
+    // Una transferencia no es un cheque.
+    const transfer = deposit(1_000)
+    expect(pendingOf(transfer.id)).toMatchObject({ cheque_number: null, presented_on: null, unpresented: false })
+  })
+
+  it('si lo opera el sistema, el cheque espera su fecha y se cobra la próxima vez que el banco mueve la cuenta', () => {
+    systemOperates()
+    const op = payByCheque()
+    expect(orderOf(op.id)).toMatchObject({ status: 'PENDIENTE', presented_on: '2027-05-17' })
+    // El sistema no le deja a Tesorería la tarea de procesar; si vuelve a operarlo ella, la abre.
+    expect(bankTasks('tesoreria2')).toEqual([])
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { bank_mode: 'ESTUDIANTES' })
+    expect(bankTasks('tesoreria2')).toHaveLength(1)
+    systemOperates()
+    expect(bankTasks('tesoreria2')).toEqual([])
+    expect(orderOf(op.id).status).toBe('PENDIENTE')
+    // Llegó la fecha, pero la app no tiene reloj: se cobra con lo próximo que mueve la cuenta.
+    travel('2027-05-17')
+    expect(orderOf(op.id).status).toBe('PENDIENTE')
+    const transfer = deposit(1_000)
+    expect(orderOf(op.id)).toMatchObject({ status: 'PROCESADO', processed_on: '2027-05-17' })
+    expect(orderOf(op.id).seq).toBeLessThan(orderOf(transfer.id).seq)
+    expect(orderOf(transfer.id).status).toBe('PROCESADO')
+  })
+
+  it('sin fondos, el banco rechaza la orden: no la debita, cobra la comisión y avisa a Tesorería', () => {
+    const big = bankPayment(14_000_000)
+    const order = orderOf(big.id)
+    // En el orden de llegada: primero el depósito de la demo (12.800.000) y después el pago, que
+    // supera el saldo más el acuerdo de descubierto (1.000.000).
+    expect(
+      cmdProcessBankOrders(
+        ctx('tesoreria'),
+        companyId(),
+        view().pending.map((m) => m.id),
+      ),
+    ).toEqual({
+      processed: 1,
+      rejected: 1,
+    })
+    const v = view()
+    expect(v.pending).toEqual([])
+    expect(v.rejected.map((m) => [m.seq, m.status, m.amount, m.processed_on])).toEqual([
+      [order.seq, 'RECHAZADO', 14_000_000, '2027-05-14'],
+    ])
+    expect(v.balance).toBe(12_800_000 - 2_500)
+    expect(v.movements[0]).toMatchObject({
+      origin: 'BANCO',
+      charge: 'RECHAZO',
+      amount: 2_500,
+      concept: `Comisión por rechazo de la orden N.º ${order.seq}`,
+    })
+    expect(db.audit.at(-1)!.summary).toBe(
+      `Procesó la orden del Banco Aula: SIM-000001 (crédito de ${money(300_000)}). Rechazó por falta de fondos la orden N.º ${order.seq} (débito de ${money(14_000_000)})`,
+    )
+    // Tesorería: el aviso y la tarea; Contabilidad: la comisión, para registrarla desde la conciliación.
+    const notices = db.notifications.filter((n) => n.type === 'ORDEN_RECHAZADA')
+    expect(notices.map((n) => n.recipient_user_id).sort()).toEqual([userId('tesoreria'), userId('tesoreria2')].sort())
+    expect(rejectedTasks().map((t) => t.path)).toEqual(['/e/forestal-del-norte/pagos/banco-aula/bandeja'])
+    const charges = reconciliationCandidates(
+      db,
+      userId('contabilidad'),
+      companyId(),
+      account('1.1.01.03'),
+      '2027-05-14',
+    )!.bank!.charges
+    expect(charges.map((c) => [c.charge, c.amount])).toEqual([['RECHAZO', 2_500]])
+  })
+
+  it('la orden rechazada se resuelve anulando la operación o reenviándola cuando hay fondos', () => {
+    const first = bankPayment(14_000_000)
+    const second = bankPayment(13_900_000)
+    cmdProcessBankOrders(
+      ctx('tesoreria'),
+      companyId(),
+      view().pending.map((m) => m.id),
+    )
+    expect(view().rejected).toHaveLength(2)
+    // Anular la operación: la orden se retira; como el banco nunca la debitó, no hay reversión.
+    const movements = db.bankMovements.length
+    cmdCancelJournalEntry(ctx('contabilidad'), first.id, 'Se cargó dos veces')
+    expect(db.bankMovements.length).toBe(movements)
+    expect(orderOf(first.id).status).toBe('ANULADO')
+    expect(rejectedTasks()).toHaveLength(1)
+    // Reenviar: sólo quien opera el banco, sólo una rechazada.
+    const order = orderOf(second.id)
+    expectBusinessError(() => cmdResendBankOrder(ctx('contabilidad'), companyId(), order.id), 'SIN_PERMISO')
+    const deposited = view().movements.find((m) => m.origin === 'ORDEN')!
+    expect(
+      expectBusinessError(() => cmdResendBankOrder(ctx('tesoreria'), companyId(), deposited.id), 'TRANSICION_INVALIDA'),
+    ).toBe(`La orden N.º ${deposited.seq} no está rechazada: está procesada.`)
+    // Con fondos (un depósito que procesa el otro integrante), vuelve a la bandeja y la procesa otro.
+    const transfer = deposit(200_000)
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [orderOf(transfer.id).id])
+    expect(cmdResendBankOrder(ctx('tesoreria'), companyId(), order.id)).toEqual({ status: 'PENDIENTE' })
+    expect(pendingOf(second.id)).toMatchObject({ own: true, received_on: '2027-05-14', processed_on: null })
+    expect(rejectedTasks()).toEqual([])
+    expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria'), companyId(), [order.id]), 'SEPARACION_FUNCIONES')
+    expect(cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order.id])).toEqual({ processed: 1, rejected: 0 })
+    expect(db.audit.filter((a) => a.action === 'RESEND').map((a) => a.summary)).toEqual([
+      `Reenvió al Banco Aula la orden N.º ${order.seq} (débito de ${money(13_900_000)}), rechazada por falta de fondos`,
+    ])
+  })
+
+  it('un cheque sin fondos cuesta 4.000 de comisión; reenviado, el proveedor lo presenta en el momento', () => {
+    const op = payByCheque()
+    expect(op.total).toBeGreaterThan(100_000)
+    const cheque = pendingOf(op.id).id
+    // Un pago deja la cuenta 900.000 en descubierto: el cheque ya no entra en el acuerdo.
+    const big = bankPayment(13_400_000)
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [orderOf(big.id).id])
+    expect(cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [cheque])).toEqual({ processed: 0, rejected: 1 })
+    expect(view().movements[0]).toMatchObject({
+      charge: 'RECHAZO',
+      amount: 4_000,
+      concept: 'Comisión por rechazo del cheque N.º 00012345',
+    })
+    travel('2027-05-15')
+    cmdResendBankOrder(ctx('tesoreria'), companyId(), cheque)
+    expect(pendingOf(op.id)).toMatchObject({ presented_on: '2027-05-15', unpresented: false, own: true })
+  })
+
+  it('una base de la versión 24 recibe el número de cheque y la fecha de presentación vacíos', () => {
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    for (const m of old.bankMovements!) {
+      delete (m as Partial<T.BankMovement>).cheque_number
+      delete (m as Partial<T.BankMovement>).presented_on
+    }
+    old.version = 24
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    expect(db.bankMovements.every((m) => m.cheque_number === null && m.presented_on === null)).toBe(true)
   })
 })
 

@@ -379,7 +379,7 @@ export type BankMovementOrigin = 'APERTURA' | 'ORDEN' | 'BANCO'
 /** Como en un extracto: crédito, entra dinero a la cuenta; débito, sale. */
 export type BankDirection = 'CREDITO' | 'DEBITO'
 
-export type BankMovementStatus = 'PENDIENTE' | 'PROCESADO' | 'ANULADO'
+export type BankMovementStatus = 'PENDIENTE' | 'PROCESADO' | 'RECHAZADO' | 'ANULADO'
 
 /** Un movimiento de la cuenta en el Banco Aula (tabla bank_movements). */
 export interface BankMovement {
@@ -402,9 +402,14 @@ export interface BankMovement {
   ordered_by: string | null
   /** El tipo de cargo, si lo debitó el banco por su cuenta (origen BANCO). */
   charge: BankCharge | null
+  /** El número del cheque, si es el pago de una orden de pago con cheque (8b.2). */
+  cheque_number: string | null
+  /** Cuándo el proveedor presenta el cheque al cobro: antes, el banco no lo debita (8b.2). */
+  presented_on: string | null
   status: BankMovementStatus
   /** Cuándo llegó al banco. */
   received_on: string
+  /** Cuándo la procesó o, si no había fondos, la rechazó el banco. */
   processed_on: string | null
   /** SIM-000001: correlativo de la cuenta, al procesarla. */
   transaction_number: string | null
