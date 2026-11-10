@@ -120,6 +120,7 @@ async function snapshot(company: string) {
     'bank_closings',
     'bank_loans',
     'bank_loan_installments',
+    'taxpayers',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -327,6 +328,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_vehicle_id: B.vehicle,
     // El préstamo que se evalúa es el pedido de B.
     p_loan_id: B.loan,
+    // El contribuyente del padrón de B.
+    p_taxpayer_id: B.taxpayer,
     p_amount: 1000000,
     p_months: 12,
   }
@@ -715,6 +718,7 @@ beforeAll(async () => {
   ).id
   // El transporte de B: un transportista y el camión de la demo.
   B.carrier = (await one(`select id from public.carriers where company_id = $1 and code = 'TR-001'`, [B.id])).id
+  B.taxpayer = (await one(`select id from public.taxpayers where company_id = $1 limit 1`, [B.id])).id
   B.vehicle = (await one(`select id from public.vehicles where company_id = $1 and code = 'CAM-01'`, [B.id])).id
   B.bankMovement = (await one(`select id from public.bank_movements where company_id = $1 limit 1`, [B.id])).id
   // El pedido de préstamo de B, esperando la evaluación de su banco.

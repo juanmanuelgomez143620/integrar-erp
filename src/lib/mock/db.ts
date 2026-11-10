@@ -13,6 +13,7 @@ import { todayAR } from '../format'
 import {
   insertBaseChart,
   insertBasePostingRules,
+  insertPadron,
   insertBomOperations,
   insertBoms,
   insertCarriers,
@@ -87,6 +88,7 @@ export interface DB {
   bankClosings: T.BankClosing[]
   bankLoans: T.BankLoan[]
   bankLoanInstallments: T.BankLoanInstallment[]
+  taxpayers: T.Taxpayer[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -104,7 +106,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 27
+export const DB_VERSION = 28
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -169,6 +171,7 @@ const COLLECTIONS = [
   'bankClosings',
   'bankLoans',
   'bankLoanInstallments',
+  'taxpayers',
   'jobCategories',
   'employees',
   'pyLines',
@@ -224,6 +227,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   bankClosings: 24,
   bankLoans: 26,
   bankLoanInstallments: 26,
+  taxpayers: 28,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -529,6 +533,16 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     for (const loan of db.bankLoans) loan.opening ??= false
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) openBankLoan(ctx, company.id)
+  },
+  // v27 → v28: el padrón del fisco simulado (Fase 8d.1): la empresa y sus proveedores y clientes con un
+  // CUIT válido.
+  27: (db) => {
+    db.taxpayers ??= []
+    // Dos CUIT de la demo tenían el dígito mal calculado (daba 10): pasan al prefijo 33, como el oficial.
+    const fixed: Record<string, string> = { '30-00000102-9': '33-00000102-9', '30-00000200-9': '33-00000200-9' }
+    for (const p of [...db.suppliers, ...db.customers]) p.tax_id = fixed[p.tax_id] ?? p.tax_id
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertPadron(ctx, company.id)
   },
 }
 

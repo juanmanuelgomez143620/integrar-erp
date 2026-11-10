@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createSupabaseBackend } from '../../src/lib/api/supabase'
+import { cuitIsValid } from '../../src/lib/domain/cuit'
 import { addDays, todayAR } from '../../src/lib/format'
 import type { CompanySettings, DocType } from '../../src/lib/domain/types'
 import type { DB } from '../../src/lib/mock/db'
@@ -4793,6 +4794,101 @@ describe('paridad de comandos', () => {
     await loans('decidido por el sistema', 'gerencia')
   })
 
+  it('fisco: el padrón que opera Impuestos y la letra de la factura que sale de ahí (8d.1)', async () => {
+    const companyPg = pg(company)
+    const save = (label: string, username: string, input: E.TaxpayerInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveTaxpayer(c, company, input),
+        (b) => b.commands.saveTaxpayer(companyPg, input.id ? { ...input, id: pg(input.id) } : input),
+      )
+    const setActive = (label: string, username: string, id: string, active: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSetTaxpayerActive(c, company, id, active),
+        (b) => b.commands.setTaxpayerActive(companyPg, pg(id), active),
+      )
+    const read = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.padron(companyPg),
+        (u) => Q.padron(mock, u, company),
+      )
+    const invoiceable = (label: string) =>
+      sameRead(
+        label,
+        'ventas',
+        (b) => b.api.invoiceableSalesOrders(companyPg),
+        (u) => Q.invoiceableSalesOrders(mock, u, company),
+      )
+    // Un CUIT simulado que no está: el primero del rango 30-00000900 con dígito válido.
+    const fresh = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((dv) => `30-00000900-${dv}`).find((c) => cuitIsValid(c))!
+    const input: E.TaxpayerInput = {
+      id: '',
+      cuit: fresh,
+      legal_name: 'Carpintería del Litoral SRL (ficticia)',
+      vat_condition: 'RESPONSABLE_INSCRIPTO',
+      activity: 'Carpintería de obra',
+      province: 'Misiones',
+    }
+    await read('el padrón de la demo', 'contabilidad')
+    for (const [label, username, value] of [
+      ['un CUIT con otro formato', 'contabilidad', { ...input, cuit: '30-0000090-1' }],
+      [
+        'un dígito verificador que no coincide',
+        'contabilidad',
+        { ...input, cuit: fresh.replace(/\d$/, (d) => String((Number(d) + 1) % 10)) },
+      ],
+      ['un CUIT que ya está', 'contabilidad', { ...input, cuit: mock.companies.find((c) => c.id === company)!.tax_id }],
+      ['una razón social de una letra', 'contabilidad', { ...input, legal_name: 'X' }],
+      ['una condición que no existe', 'contabilidad', { ...input, vat_condition: 'OTRA' as never }],
+      ['Ventas no opera el fisco', 'ventas', input],
+    ] as const)
+      expect(await save(label, username, value), label).toBeNull()
+    const created = await save('Impuestos da de alta un contribuyente', 'contabilidad', input)
+    expect(created, 'el alta').not.toBeNull()
+    loaded.link(created!.mock.id, created!.pg.id)
+    expect(await save('lo mismo, sin cambios', 'contabilidad', { ...input, id: created!.mock.id })).not.toBeNull()
+    expect(
+      await save('pasa a monotributista', 'contabilidad', {
+        ...input,
+        id: created!.mock.id,
+        vat_condition: 'MONOTRIBUTO',
+      }),
+    ).not.toBeNull()
+    expect(await setActive('Ventas no lo da de baja', 'ventas', created!.mock.id, false)).toBeNull()
+    expect(await setActive('lo da de baja', 'contabilidad', created!.mock.id, false)).not.toBeNull()
+    expect(await setActive('de baja otra vez, sin cambios', 'contabilidad', created!.mock.id, false)).not.toBeNull()
+    await read('el padrón con el alta, el cambio y la baja', 'ventas')
+
+    // La letra de la factura: un cliente con pedido para facturar pasa en el padrón a exento.
+    await invoiceable('los pedidos para facturar con la letra del padrón')
+    const orders = Q.invoiceableSalesOrders(mock, mockId('ventas'), company)
+    const target = orders.find((o) => o.letter === 'A' && o.letter_source === 'PADRON')
+    expect(target, 'un pedido para facturar con la letra A del padrón').toBeDefined()
+    if (target) {
+      const customer = mock.customers.find((c) => c.tax_id === target.customer_cuit)!
+      const entry = mock.taxpayers.find((t) => t.company_id === company && t.cuit === customer.tax_id)!
+      expect(
+        await save('el cliente pasa a exento en el padrón', 'contabilidad', {
+          id: entry.id,
+          cuit: entry.cuit,
+          legal_name: entry.legal_name,
+          vat_condition: 'EXENTO',
+          activity: entry.activity,
+          province: entry.province,
+        }),
+      ).not.toBeNull()
+      await invoiceable('la letra cambia a B')
+      expect(await setActive('se da de baja del padrón', 'contabilidad', entry.id, false)).not.toBeNull()
+      await invoiceable('sin padrón, la letra sale de la ficha')
+      expect(await setActive('vuelve al padrón', 'contabilidad', entry.id, true)).not.toBeNull()
+    }
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -4975,6 +5071,12 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.bankLoans(companyPg),
         (u) => Q.bankLoans(mock, u, company),
+      )
+      await sameRead(
+        `el padrón del fisco (${username})`,
+        username,
+        (b) => b.api.padron(companyPg),
+        (u) => Q.padron(mock, u, company),
       )
       for (const code of ['PRV-001', 'PRV-010'])
         await sameRead(

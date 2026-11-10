@@ -85,6 +85,7 @@ export type {
   BankLoansView,
   LoanInstallmentRow,
   LoanRow,
+  TaxpayerRow,
   ProductionCostRow,
   ProductionNeedRow,
   ProductionOrderView,
@@ -252,6 +253,7 @@ const mockApi = {
   bankStatement: (companyId: string, from: string, to: string) =>
     query((db, u) => Q.bankStatement(db, u, companyId, from, to)),
   bankLoans: (companyId: string) => query((db, u) => Q.bankLoans(db, u, companyId)),
+  padron: (companyId: string) => query((db, u) => Q.padron(db, u, companyId)),
   loanPreview: (companyId: string, amount: number, months: number) =>
     query((db, u) => Q.loanPreview(db, u, companyId, amount, months)),
   cashFlow: (companyId: string, from: string, to: string) => query((db, u) => Q.cashFlow(db, u, companyId, from, to)),
@@ -486,6 +488,9 @@ const mockCommands = {
   requestLoan: (companyId: string, input: E.LoanRequestInput) => command((c) => E.cmdRequestLoan(c, companyId, input)),
   evaluateLoan: (loanId: string, decision: E.LoanDecision) => command((c) => E.cmdEvaluateLoan(c, loanId, decision)),
   debitLoanInstallments: (companyId: string) => command((c) => E.cmdDebitLoanInstallments(c, companyId)),
+  saveTaxpayer: (companyId: string, input: E.TaxpayerInput) => command((c) => E.cmdSaveTaxpayer(c, companyId, input)),
+  setTaxpayerActive: (companyId: string, taxpayerId: string, active: boolean) =>
+    command((c) => E.cmdSetTaxpayerActive(c, companyId, taxpayerId, active)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

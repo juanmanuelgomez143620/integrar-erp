@@ -358,6 +358,11 @@ describe('tesorería', () => {
     }
   })
 
+  it('el padrón del fisco simulado (8d.1)', async () => {
+    for (const u of [...USERS, 'tesoreria2'])
+      await same(u, () => Q.padron(mock, userId(u), company), 'padron', [companyPg])
+  })
+
   it('el extracto del Banco Aula: un año, un mes sin movimientos y períodos mal armados', async () => {
     const year = new Date().getFullYear()
     const periods: [string, string][] = [

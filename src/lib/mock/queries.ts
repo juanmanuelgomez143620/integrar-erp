@@ -25,6 +25,7 @@ import {
   bankPresented,
   bankSigned,
   loanIndicators,
+  padronCondition,
   processedBankMovements,
   accountLabel,
   activeBomOf,
@@ -3031,6 +3032,9 @@ export interface InvoiceableSalesOrder {
   order: DocumentListItem
   /** La letra que tendrá la factura (según la condición del cliente). */
   letter: T.SalesInvoiceHeader['letter']
+  /** De dónde sale la condición del cliente: del padrón del fisco o, si su CUIT no está, de su ficha (8d.1). */
+  letter_source: 'PADRON' | 'FICHA'
+  customer_cuit: string
   lines: {
     line: T.SalesOrderLine
     product: T.Product
@@ -3039,6 +3043,12 @@ export interface InvoiceableSalesOrder {
     pending: number
   }[]
 }
+
+/** De dónde sale la condición del cliente para la letra: el padrón o su ficha. */
+const letterSource = (db: DB, companyId: string, customer: T.Customer) => ({
+  letter_source: padronCondition(db, companyId, customer.tax_id) ? ('PADRON' as const) : ('FICHA' as const),
+  customer_cuit: customer.tax_id,
+})
 
 /** Pedidos con algo entregado y todavía sin facturar (para emitir la factura de venta). */
 export function invoiceableSalesOrders(db: DB, userId: string, companyId: string): InvoiceableSalesOrder[] {
@@ -3055,7 +3065,13 @@ export function invoiceableSalesOrders(db: DB, userId: string, companyId: string
     .map((d) => ({
       order: listItem(db, d),
       letter: salesLetter(
+        db,
         company,
+        db.customers.find((c) => c.id === d.customer_id)!,
+      ),
+      ...letterSource(
+        db,
+        companyId,
         db.customers.find((c) => c.id === d.customer_id)!,
       ),
       lines: salesOrderLines(db, d.id)
@@ -3709,6 +3725,22 @@ export function loanPreview(db: DB, userId: string, companyId: string, amount: n
   )
     return null
   return loanIndicators(db, companyId, amount, months)
+}
+
+/** Un contribuyente del padrón del fisco. */
+export interface TaxpayerRow extends T.Taxpayer {
+  /** La empresa misma. */
+  is_company: boolean
+}
+
+/** El padrón del fisco de la empresa (8d.1), por CUIT. */
+export function padron(db: DB, userId: string, companyId: string): TaxpayerRow[] {
+  assertPerm(db, userId, companyId, 'fisco.read')
+  const company = db.companies.find((c) => c.id === companyId)!
+  return db.taxpayers
+    .filter((t) => t.company_id === companyId)
+    .sort((a, b) => (a.cuit < b.cuit ? -1 : a.cuit > b.cuit ? 1 : 0))
+    .map((t) => ({ ...t, is_company: t.cuit === company.tax_id }))
 }
 
 /** Una línea del extracto: lo que el banco procesó un día, con el saldo después del movimiento. */

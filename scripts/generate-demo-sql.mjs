@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 8c.1).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 8d.1).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261109120200_demo_template_prestamos.sql'
+const target = process.argv[2] ?? '20261111120200_demo_template_fisco.sql'
 
 const server = await createServer({
   root,
@@ -593,6 +593,7 @@ ${stockBlocks}
   perform private.start_accounting(v_id);
   -- La cuenta en el Banco Aula, con el saldo inicial del asiento de apertura (Fase 8a).
   perform private.bank_open_account(v_id);
+  perform private.insert_padron(v_id);
   perform private.scan_stock_alerts(v_id);
   return v_id;
 end;

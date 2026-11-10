@@ -32,6 +32,7 @@ export type ModuleCode =
   | 'management'
   | 'audit'
   | 'bank'
+  | 'fisco'
 
 export type PermissionAction =
   'read' | 'create' | 'update' | 'approve' | 'cancel' | 'delete' | 'export' | 'pay' | 'award' | 'issue' | 'operate'
@@ -416,6 +417,20 @@ export interface BankMovement {
   transaction_number: string | null
   processed_by: string | null
   created_at: string
+}
+
+/** Un contribuyente del padrón del fisco simulado de la empresa (Fase 8d). */
+export interface Taxpayer extends Audited {
+  id: string
+  company_id: string
+  /** 30-12345678-9, con dígito verificador válido; no cambia. */
+  cuit: string
+  legal_name: string
+  vat_condition: VatCondition
+  activity: string
+  province: string
+  /** Dado de baja: deja de contar para la letra de las facturas (no se borra). */
+  is_active: boolean
 }
 
 export type LoanStatus = 'SOLICITADO' | 'RECHAZADO' | 'VIGENTE' | 'CANCELADO'

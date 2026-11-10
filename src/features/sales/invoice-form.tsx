@@ -117,7 +117,15 @@ function SalesInvoiceForm({ orders }: { orders: InvoiceableSalesOrder[] }) {
                 label="Pedido de venta"
                 required
                 className="sm:col-span-2"
-                hint={order ? LETTER_HINT[order.letter] : undefined}
+                hint={
+                  order
+                    ? `${LETTER_HINT[order.letter]}${
+                        order.letter_source === 'FICHA' && order.customer_cuit
+                          ? ` El CUIT ${order.customer_cuit} no está en el padrón del fisco: la letra sale de la ficha del cliente.`
+                          : ''
+                      }`
+                    : undefined
+                }
               >
                 <SimpleSelect
                   value={orderId}

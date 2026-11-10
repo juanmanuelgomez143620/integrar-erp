@@ -14,6 +14,7 @@ import { VAT_CONDITIONS } from '@/lib/domain/catalog'
 import type { Customer, Supplier, VatCondition } from '@/lib/domain/types'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { padronStatus, usePadron } from '@/features/fisco/padron-page'
 
 const schema = z.object({
   code: z.string().trim().min(1, 'Ingresá el código'),
@@ -132,6 +133,9 @@ export function PartnerSheet({
   // useWatch (no form.watch) para no perder la memoización: form.watch() devuelve
   // una función que React Compiler no puede memoizar de forma segura.
   const vatCondition = useWatch({ control: form.control, name: 'vat_condition' })
+  const taxId = useWatch({ control: form.control, name: 'tax_id' })
+  // Lo que dice el padrón del fisco de ese CUIT (Fase 8d), para quien lo puede leer.
+  const padron = usePadron()
   const priceListId = useWatch({ control: form.control, name: 'price_list_id' })
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -148,7 +152,11 @@ export function PartnerSheet({
           <Field label="Código" required error={err.code?.message}>
             <Input {...form.register('code')} />
           </Field>
-          <Field label="CUIT (simulado)" error={err.tax_id?.message}>
+          <Field
+            label="CUIT (simulado)"
+            error={err.tax_id?.message}
+            hint={padronStatus(padron.data, taxId ?? '', vatCondition)?.text}
+          >
             <Input {...form.register('tax_id')} placeholder="30-00000000-0" />
           </Field>
           <Field label="Razón social" required className="sm:col-span-2" error={err.legal_name?.message}>

@@ -16,6 +16,7 @@ import { money } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { PartnerSheet } from './partner-form'
+import { padronStatus, usePadron } from '@/features/fisco/padron-page'
 
 type Row = Customer & Supplier
 
@@ -46,6 +47,7 @@ function csvColumns(isCustomer: boolean): CsvColumn<Row>[] {
 export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
   const company = useCompany()
   const isCustomer = kind === 'customer'
+  const padron = usePadron()
   const { data = [], isLoading } = useQuery<Row[]>({
     queryKey: [isCustomer ? 'customers' : 'suppliers', company.companyId],
     queryFn: async () =>
@@ -130,6 +132,19 @@ export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
             cell: (r) => <span className="font-medium">{r.legal_name}</span>,
           },
           { key: 'tax', header: 'CUIT', cell: (r) => <span className="font-mono text-xs">{r.tax_id || '—'}</span> },
+          // Lo que dice el padrón del fisco de ese CUIT (Fase 8d), para quien lo puede leer.
+          ...(padron.data
+            ? [
+                {
+                  key: 'padron',
+                  header: 'Padrón',
+                  cell: (r: Customer | Supplier) => {
+                    const status = padronStatus(padron.data, r.tax_id, r.vat_condition)
+                    return status ? <StatusBadge label={status.label} badge={status.badge} /> : '—'
+                  },
+                },
+              ]
+            : []),
           {
             key: 'vat',
             header: 'Condición IVA',

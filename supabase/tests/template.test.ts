@@ -297,6 +297,29 @@ const mockBank = (() => {
   }
 })()
 
+/** El padrón del fisco de la demo (Fase 8d.1): CUIT, razón social, condición, actividad y provincia. */
+const mockPadron = seed.taxpayers
+  .filter((t) => t.company_id === mockTemplate.id)
+  .map((t) => [t.cuit, t.legal_name, t.vat_condition, t.activity, t.province, t.is_active])
+  .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+
+async function padron(company: string) {
+  return (
+    await db.admin<{
+      cuit: string
+      legal_name: string
+      vat_condition: string
+      activity: string
+      province: string
+      is_active: boolean
+    }>(
+      `select cuit, legal_name, vat_condition, activity, province, is_active from public.taxpayers
+        where company_id = $1 order by cuit collate "C"`,
+      [company],
+    )
+  ).map((t) => [t.cuit, t.legal_name, t.vat_condition, t.activity, t.province, t.is_active])
+}
+
 /** El préstamo de la apertura de la demo (Fase 8c.2) y su cronograma. */
 const mockOpeningLoan = (() => {
   const loan = seed.bankLoans.find((l) => l.company_id === mockTemplate.id && l.opening)!
@@ -554,6 +577,11 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await vehicles(template)).toEqual(mockVehicles)
   })
 
+  it('tiene el mismo padrón del fisco que la demo (8d.1)', async () => {
+    expect(mockPadron.length).toBeGreaterThan(10)
+    expect(await padron(template)).toEqual(mockPadron)
+  })
+
   it('tiene el préstamo de la apertura con el mismo cronograma que la demo (8c.2)', async () => {
     expect(mockOpeningLoan.loan).toMatchObject({ number: 1, amount: 10_000_000, months: 24, rate: 48 })
     expect(mockOpeningLoan.installments).toHaveLength(24)
@@ -678,6 +706,7 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(account).toMatchObject({ number: mockBank.account.number, alias: 'FORESTAL.NORTE.BA' })
     expect(movements).toEqual([mockBank.start])
     expect(await openingLoan(created.id)).toEqual(mockOpeningLoan)
+    expect(await padron(created.id)).toEqual(mockPadron)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

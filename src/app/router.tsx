@@ -109,6 +109,8 @@ const TreasuryPage = lazyPage(() => import('@/features/payables/payables-pages')
 const HomeBankingPage = lazyPage(() => import('@/features/bank/bank-pages').then((m) => m.HomeBankingPage))
 const BankTrayPage = lazyPage(() => import('@/features/bank/bank-pages').then((m) => m.BankTrayPage))
 const LoansPage = lazyPage(() => import('@/features/bank/loans-page').then((m) => m.LoansPage))
+const PadronPage = lazyPage(() => import('@/features/fisco/padron-page').then((m) => m.PadronPage))
+const ConstanciaPrintPage = lazyPage(() => import('@/features/fisco/padron-page').then((m) => m.ConstanciaPrintPage))
 const BankStatementPrintPage = lazyPage(() =>
   import('@/features/bank/bank-statement').then((m) => m.BankStatementPrintPage),
 )
@@ -155,6 +157,7 @@ export const router = createBrowserRouter(
             { path: 'documentos/:docId/imprimir', element: <PrintPage /> },
             { path: 'contabilidad/imprimir/:book', element: <BookPrintPage /> },
             { path: 'pagos/banco-aula/extracto/imprimir', element: <BankStatementPrintPage /> },
+            { path: 'fisco/constancia/:cuit/imprimir', element: <ConstanciaPrintPage /> },
             {
               element: <AppShell />,
               children: [
@@ -197,6 +200,7 @@ export const router = createBrowserRouter(
                 { path: 'pagos/banco-aula', element: <HomeBankingPage /> },
                 { path: 'pagos/banco-aula/bandeja', element: <BankTrayPage /> },
                 { path: 'pagos/prestamos', element: <LoansPage /> },
+                { path: 'fisco/padron', element: <PadronPage /> },
                 { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },

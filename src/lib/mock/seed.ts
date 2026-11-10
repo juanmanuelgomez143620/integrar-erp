@@ -37,6 +37,7 @@ import {
   insertWorkCenters,
   openBankAccount,
   scanStockAlerts,
+  insertPadron,
   startAccounting,
   type Ctx,
 } from './engine'
@@ -44,14 +45,19 @@ import { addDays, todayAR } from '../format'
 
 export const DEMO_PASSWORD = 'demo1234'
 
-/** CUIT simulado con dígito verificador válido (rango reservado 000000xx). */
+/**
+ * CUIT simulado con dígito verificador válido (rango reservado 000000xx). Como el oficial: si el
+ * dígito da 10, la empresa pasa al prefijo 33 (y el dígito queda en 9).
+ */
 function cuit(prefix: number, body: number): string {
-  const digits = `${prefix}${String(body).padStart(8, '0')}`
   const weights = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
-  const sum = digits.split('').reduce((s, d, i) => s + Number(d) * weights[i], 0)
-  let dv = 11 - (sum % 11)
-  if (dv === 11) dv = 0
-  if (dv === 10) dv = 9
+  const digit = (p: number) => {
+    const digits = `${p}${String(body).padStart(8, '0')}`
+    const dv = 11 - (digits.split('').reduce((s, d, i) => s + Number(d) * weights[i], 0) % 11)
+    return dv === 11 ? 0 : dv
+  }
+  const dv = digit(prefix)
+  if (dv === 10) return `33-${String(body).padStart(8, '0')}-${digit(33)}`
   return `${prefix}-${String(body).padStart(8, '0')}-${dv}`
 }
 
@@ -158,6 +164,7 @@ export function buildSeed(): DB {
     bankClosings: [],
     bankLoans: [],
     bankLoanInstallments: [],
+    taxpayers: [],
     jobCategories: [],
     employees: [],
     pyLines: [],
@@ -489,6 +496,8 @@ export function buildSeed(): DB {
   startAccounting(ctx(null, 290), companyId)
   // La cuenta en el Banco Aula, con el saldo inicial: lo que sigue mueve el banco con órdenes.
   openBankAccount(ctx(null, 290), companyId)
+  // El padrón del fisco simulado: la empresa y sus proveedores y clientes con CUIT.
+  insertPadron(ctx(null, 290), companyId)
 
   // ------------------------------------------------------------ Listas de materiales y centros de trabajo (a validar)
   insertWorkCenters(ctx(null, 289), companyId, DEMO_WORK_CENTERS)

@@ -42,6 +42,7 @@ export const MODULES: Record<ModuleCode, { name: string; lockable: boolean }> = 
   management: { name: 'Tablero de gestión', lockable: true },
   audit: { name: 'Auditoría', lockable: true },
   bank: { name: 'Banco Aula', lockable: true },
+  fisco: { name: 'Fisco simulado', lockable: true },
 }
 
 export const RESOURCE_MODULE: Record<string, ModuleCode> = {
@@ -89,6 +90,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   audit: 'audit',
   bank: 'bank',
   loan: 'bank',
+  fisco: 'fisco',
 }
 
 export function permissionModule(permission: string): ModuleCode {
@@ -165,6 +167,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'payroll.read', 'payroll.approve',
     // La cuenta en el Banco Aula: el homebanking de la empresa (Fase 8a); pide los préstamos (8c).
     'bank.read', 'loan.create',
+    // Consulta el padrón del fisco (Fase 8d).
+    'fisco.read',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -179,6 +183,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'supplier_quote.read', 'supplier_quote.create', 'supplier_quote.cancel',
     // Ve qué se fabrica y con qué materiales, para comprarlos a tiempo.
     'bom.read', 'production_order.read',
+    // Consulta en el padrón del fisco a los proveedores (Fase 8d).
+    'fisco.read',
   ],
   VENTAS: [
     ...CORE_READ, 'customer.read', 'customer.create', 'customer.update', 'customer.export', 'product.read', 'stock.read',
@@ -188,6 +194,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'sales_quote.read', 'sales_quote.create', 'sales_quote.cancel', 'production_order.read',
     // Sigue la entrega de lo que vendió (Fase 7c.2).
     'route_sheet.read',
+    // Consulta en el padrón del fisco a los clientes: la letra de la factura sale de ahí (Fase 8d).
+    'fisco.read',
   ],
   DEPOSITO: [
     ...CORE_READ,
@@ -224,7 +232,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
     'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read',
-    'bank.read',
+    'bank.read', 'fisco.read',
   ],
   TESORERIA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ,
@@ -249,8 +257,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     ...CORE_READ, 'customer.read', 'supplier.read', 'purchase_order.read', ...LEDGER_READ, 'supplier_invoice.read',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'sales_quote.read',
-    // Liquida los impuestos (Fase 7a); Tesorería los paga.
-    'tax_return.read', 'tax_return.create', 'tax_return.cancel',
+    // Liquida los impuestos (Fase 7a); Tesorería los paga. Opera el fisco simulado (Fase 8d).
+    'tax_return.read', 'tax_return.create', 'tax_return.cancel', 'fisco.read', 'fisco.operate',
   ],
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
@@ -269,7 +277,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
-    'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read', 'bank.read',
+    'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read', 'bank.read', 'fisco.read',
   ],
   DOCENTE: [],
 }

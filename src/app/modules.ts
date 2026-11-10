@@ -220,6 +220,11 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    // El fisco del entorno de la empresa, que opera Impuestos (Fase 8d).
+    label: 'Fisco simulado',
+    items: [{ label: 'Padrón', path: 'fisco/padron', icon: ScrollText, permission: 'fisco.read' }],
+  },
+  {
     label: 'Contabilidad',
     items: [
       { label: 'Asientos', path: 'contabilidad/asientos', icon: NotebookPen, permission: 'journal_entry.read' },

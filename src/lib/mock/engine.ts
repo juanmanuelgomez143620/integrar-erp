@@ -45,6 +45,7 @@ import {
   normalSideOf,
   parentCode,
 } from '../domain/chart-of-accounts'
+import { cuitIsValid } from '../domain/cuit'
 import { MONTH_HOURS } from '../domain/employees'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
@@ -4990,6 +4991,168 @@ function syncLoanTask(ctx: Ctx, companyId: string) {
   })
 }
 
+// ============================================================ Fisco simulado (docs/FASE_8_BANCO_Y_FISCO.md §4, 8d)
+
+/**
+ * El padrón del fisco de la empresa (8d.1): la empresa y sus proveedores y clientes con un CUIT
+ * válido, sin repetir CUIT. Idempotente: lo que ya está no cambia.
+ */
+export function insertPadron(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const company = getCompany(db, companyId)
+  const rows: Pick<T.Taxpayer, 'cuit' | 'legal_name' | 'vat_condition' | 'activity' | 'province'>[] = [
+    {
+      cuit: company.tax_id,
+      legal_name: company.legal_name,
+      vat_condition: company.vat_condition,
+      activity: company.activity,
+      province: company.province,
+    },
+    ...db.suppliers
+      .filter((s) => s.company_id === companyId)
+      .sort((a, b) => byText(a.code, b.code))
+      .map((s) => ({
+        cuit: s.tax_id,
+        legal_name: s.legal_name,
+        vat_condition: s.vat_condition,
+        activity: s.category,
+        province: s.province,
+      })),
+    ...db.customers
+      .filter((c) => c.company_id === companyId)
+      .sort((a, b) => byText(a.code, b.code))
+      .map((c) => ({
+        cuit: c.tax_id,
+        legal_name: c.legal_name,
+        vat_condition: c.vat_condition,
+        activity: '',
+        province: c.province,
+      })),
+  ]
+  for (const row of rows) {
+    if (!cuitIsValid(row.cuit) || db.taxpayers.some((t) => t.company_id === companyId && t.cuit === row.cuit)) continue
+    db.taxpayers.push({
+      id: uid(),
+      company_id: companyId,
+      ...row,
+      is_active: true,
+      created_at: ctx.now,
+      created_by: ctx.userId,
+      updated_at: ctx.now,
+      updated_by: ctx.userId,
+    })
+  }
+}
+
+/** La condición frente al IVA de un CUIT en el padrón, si está activo; null si no está. */
+export function padronCondition(db: DB, companyId: string, cuit: string): T.VatCondition | null {
+  if (!cuit) return null
+  return db.taxpayers.find((t) => t.company_id === companyId && t.cuit === cuit && t.is_active)?.vat_condition ?? null
+}
+
+export interface TaxpayerInput {
+  /** Vacío para uno nuevo. */
+  id: string
+  /** Sólo al darlo de alta: después no cambia. */
+  cuit: string
+  legal_name: string
+  vat_condition: T.VatCondition
+  activity: string
+  province: string
+}
+
+export const taxpayerLabel = (t: T.Taxpayer) => `${t.legal_name} (CUIT ${t.cuit})`
+
+/**
+ * Quien opera el fisco (Impuestos) da de alta o modifica un contribuyente del padrón: el CUIT con
+ * dígito verificador válido y sin repetir; si cambia la condición frente al IVA, cambia la letra de
+ * las facturas que se le emitan.
+ */
+export function cmdSaveTaxpayer(ctx: Ctx, companyId: string, input: TaxpayerInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'fisco.operate')
+  const existing = input.id ? db.taxpayers.find((t) => t.id === input.id && t.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'El contribuyente no está en el padrón.')
+  const cuit = existing ? existing.cuit : (input.cuit ?? '').trim()
+  if (!existing) {
+    if (!cuitIsValid(cuit))
+      fail(
+        'DATO_INVALIDO',
+        'El CUIT no es válido: tiene el formato 30-12345678-9 y el último número es el dígito verificador.',
+      )
+    if (db.taxpayers.some((t) => t.company_id === companyId && t.cuit === cuit))
+      fail('DATO_INVALIDO', `El CUIT ${cuit} ya está en el padrón.`)
+  }
+  const legalName = (input.legal_name ?? '').trim()
+  if (legalName.length < 2 || legalName.length > 80)
+    fail('DATO_INVALIDO', 'La razón social tiene de 2 a 80 caracteres.')
+  if (!Object.hasOwn(VAT_CONDITIONS, input.vat_condition))
+    fail('DATO_INVALIDO', 'Elegí una condición frente al IVA válida.')
+  const activity = (input.activity ?? '').trim()
+  if (activity.length > 120) fail('DATO_INVALIDO', 'La actividad tiene hasta 120 caracteres.')
+  const province = (input.province ?? '').trim()
+  if (province.length > 60) fail('DATO_INVALIDO', 'La provincia tiene hasta 60 caracteres.')
+  const fields = { legal_name: legalName, vat_condition: input.vat_condition, activity, province }
+  if (existing) {
+    const changes = diff(existing, { ...existing, ...fields }, ['legal_name', 'vat_condition', 'activity', 'province'])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, fields, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'taxpayer',
+      entity_id: existing.id,
+      entity_label: taxpayerLabel(existing),
+      summary: `Modificó en el padrón a ${taxpayerLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const taxpayer: T.Taxpayer = {
+    id: uid(),
+    company_id: companyId,
+    cuit,
+    ...fields,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.taxpayers.push(taxpayer)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'taxpayer',
+    entity_id: taxpayer.id,
+    entity_label: taxpayerLabel(taxpayer),
+    summary: `Dio de alta en el padrón a ${taxpayerLabel(taxpayer)}: ${VAT_CONDITIONS[taxpayer.vat_condition].toLowerCase()}`,
+  })
+  return { id: taxpayer.id }
+}
+
+/** El fisco da de baja (o vuelve a dar de alta) a un contribuyente: dado de baja, no cuenta para la letra. */
+export function cmdSetTaxpayerActive(ctx: Ctx, companyId: string, taxpayerId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'fisco.operate')
+  const taxpayer = db.taxpayers.find((t) => t.id === taxpayerId && t.company_id === companyId)
+  if (!taxpayer) fail('DATO_INVALIDO', 'El contribuyente no está en el padrón.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si el contribuyente está activo.')
+  if (taxpayer.is_active === active) return
+  Object.assign(taxpayer, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'taxpayer',
+    entity_id: taxpayer.id,
+    entity_label: taxpayerLabel(taxpayer),
+    summary: `${active ? 'Volvió a dar de alta en el padrón' : 'Dio de baja del padrón'} a ${taxpayerLabel(taxpayer)}`,
+  })
+}
+
 // ============================================================ Pedidos de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2)
 
 export interface SalesOrderInput {
@@ -5693,11 +5856,13 @@ const INVOICEABLE_SALES_STATUSES = ['ENTREGADO_PARCIAL', 'ENTREGADO', 'CERRADO']
 /**
  * Letra de la factura (a validar): la empresa responsable inscripta emite A a
  * responsables inscriptos y monotributistas (Ley 27.618) y B a exentos y
- * consumidores finales; si no es responsable inscripta, C.
+ * consumidores finales; si no es responsable inscripta, C. La condición del
+ * cliente sale del padrón del fisco (8d.1); si su CUIT no está, de su ficha.
  */
-export function salesLetter(company: T.Company, customer: T.Customer): T.SalesInvoiceHeader['letter'] {
+export function salesLetter(db: DB, company: T.Company, customer: T.Customer): T.SalesInvoiceHeader['letter'] {
   if (company.vat_condition !== 'RESPONSABLE_INSCRIPTO') return 'C'
-  return customer.vat_condition === 'RESPONSABLE_INSCRIPTO' || customer.vat_condition === 'MONOTRIBUTO' ? 'A' : 'B'
+  const condition = padronCondition(db, company.id, customer.tax_id) ?? customer.vat_condition
+  return condition === 'RESPONSABLE_INSCRIPTO' || condition === 'MONOTRIBUTO' ? 'A' : 'B'
 }
 
 export const salesInvoiceLabel = (fv: T.SalesInvoiceHeader) =>
@@ -5750,7 +5915,7 @@ export function cmdCreateSalesInvoice(ctx: Ctx, companyId: string, input: SalesI
   const customer = db.customers.find((c) => c.id === order.customer_id)!
   const fv: T.SalesInvoiceHeader = {
     sales_order_id: order.id,
-    letter: salesLetter(company, customer),
+    letter: salesLetter(db, company, customer),
     point_of_sale: SALES_POINT_OF_SALE,
     invoice_number: '',
     due_date: addDays(businessDate(company), order.so!.payment_terms_days),
@@ -9987,6 +10152,7 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   scanStockAlerts(system, companyId)
   startAccounting(system, companyId)
   openBankAccount(system, companyId)
+  insertPadron(system, companyId)
   return { id: companyId, slug }
 }
 
