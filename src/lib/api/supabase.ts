@@ -263,6 +263,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     treasuryAccounts: (companyId) => rpc('treasury_accounts', company(companyId)),
     bankAccount: (companyId) => rpc('bank_account_view', company(companyId)),
     bankStatement: (companyId, from, to) => rpc('bank_statement', { ...company(companyId), p_from: from, p_to: to }),
+    bankLoans: (companyId) => rpc('bank_loans', company(companyId)),
+    loanPreview: (companyId, amount, months) =>
+      rpc('loan_preview', { ...company(companyId), p_amount: amount, p_months: months }),
     cashFlow: (companyId, from, to) => rpc('cash_flow', { ...company(companyId), p_from: from, p_to: to }),
     cashProjection: (companyId) => rpc('cash_projection', company(companyId)),
     issuedCheques: (companyId) => rpc('issued_cheques', company(companyId)),
@@ -465,6 +468,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     closeBankMonth: (companyId, period) => rpc('bank_month_close', { ...company(companyId), p_period: period }),
     registerBankCharges: (companyId, ids) => rpc('bank_charges_register', { ...company(companyId), p_ids: ids }),
     resendBankOrder: (companyId, id) => rpc('bank_order_resend', { ...company(companyId), p_id: id }),
+    requestLoan: (companyId, input) => rpc('loan_request', { ...company(companyId), p_input: input }),
+    evaluateLoan: (loanId, decision) => rpc('loan_evaluate', { p_loan_id: loanId, p_input: decision }),
+    debitLoanInstallments: (companyId) => rpc('loan_installments_debit', company(companyId)),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

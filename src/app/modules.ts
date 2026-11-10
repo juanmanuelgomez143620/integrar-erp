@@ -40,6 +40,7 @@ import {
   PackageCheck,
   PackageOpen,
   PackageSearch,
+  PiggyBank,
   ReceiptText,
   Route,
   Scale,
@@ -130,6 +131,8 @@ export const NAV: NavGroup[] = [
       { label: 'Cajas y bancos', path: 'pagos/cajas-y-bancos', icon: Landmark, permission: 'treasury.read' },
       // La cuenta en el Banco Aula, vista desde el banco (Fase 8a).
       { label: 'Banco Aula', path: 'pagos/banco-aula', icon: Vault, permission: 'bank.read' },
+      // Los préstamos del banco: los pide Gerencia y los evalúa Tesorería (Fase 8c).
+      { label: 'Préstamos', path: 'pagos/prestamos', icon: PiggyBank, permission: 'bank.read' },
       // Tesorería opera el banco: procesa las órdenes que no envió (SoD-12).
       { label: 'Bandeja del banco', path: 'pagos/banco-aula/bandeja', icon: Inbox, permission: 'bank.operate' },
       {

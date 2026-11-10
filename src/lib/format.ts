@@ -96,6 +96,16 @@ export function addDays(isoDate: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+/** 'aaaa-mm-dd' más n meses, el mismo día o el último del mes si no lo tiene (como la base). */
+export function addMonths(isoDate: string, months: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  const total = m - 1 + months
+  const year = y + Math.floor(total / 12)
+  const month = (total % 12) + 1
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  return `${year}-${String(month).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`
+}
+
 export function initials(first: string, last: string): string {
   return `${first[0] ?? ''}${last[0] ?? ''}`.toUpperCase()
 }

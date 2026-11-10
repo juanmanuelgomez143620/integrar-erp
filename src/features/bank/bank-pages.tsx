@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { StatementSection } from './bank-statement'
+import { LoanTraySections } from './loans-page'
 
 function useBankAccount() {
   const company = useCompany()
@@ -131,7 +132,14 @@ function movementColumns(withSource: boolean): Column<BankMovementRow>[] {
           {r.origin === 'BANCO' && (
             <>
               {' '}
-              <StatusBadge label="Cargo del banco" badge="warning" />
+              {/* Lo que el banco hizo por su cuenta: un cargo, o un préstamo y sus cuotas (8c). */}
+              {r.charge === 'PRESTAMO' ? (
+                <StatusBadge label="Préstamo" badge="info" />
+              ) : r.charge === 'CUOTA_CAPITAL' || r.charge === 'CUOTA_INTERES' ? (
+                <StatusBadge label="Cuota de préstamo" badge="info" />
+              ) : (
+                <StatusBadge label="Cargo del banco" badge="warning" />
+              )}
             </>
           )}
           {r.processed_by_name && <div className="text-xs text-muted-foreground">Procesó {r.processed_by_name}</div>}
@@ -403,6 +411,7 @@ export function BankTrayPage() {
             </p>
           )}
         </Section>
+        <LoanTraySections />
         <Section
           title="Órdenes pendientes"
           description="En el orden en que llegaron. Se procesan con la fecha de hoy, cada una con el saldo que dejó la anterior: si una saca más que el saldo más el acuerdo de descubierto, el banco la rechaza. Un cheque entra cuando el proveedor lo presenta al cobro (tres días después del pago); antes, sólo si lo elegís."

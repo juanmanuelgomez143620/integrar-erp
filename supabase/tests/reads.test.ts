@@ -340,6 +340,24 @@ describe('tesorería', () => {
       await same(u, () => Q.bankAccountView(mock, userId(u), company), 'bank_account_view', [companyPg])
   })
 
+  it('los préstamos del Banco Aula y lo que vería el banco de un pedido (8c)', async () => {
+    const cases: [number, number][] = [
+      [1_000_000, 12],
+      [2_500_000.5, 24],
+      [0, 12],
+      [1_000, 10],
+    ]
+    for (const u of [...USERS, 'tesoreria2']) {
+      await same(u, () => Q.bankLoans(mock, userId(u), company), 'bank_loans', [companyPg])
+      for (const [amount, months] of cases)
+        await same(u, () => Q.loanPreview(mock, userId(u), company, amount, months), 'loan_preview', [
+          companyPg,
+          amount,
+          months,
+        ])
+    }
+  })
+
   it('el extracto del Banco Aula: un año, un mes sin movimientos y períodos mal armados', async () => {
     const year = new Date().getFullYear()
     const periods: [string, string][] = [

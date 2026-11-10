@@ -411,12 +411,13 @@ describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
     expect(db.version).toBe(DB_VERSION)
     expect(db.bankAccounts[0]).toMatchObject({ monthly_fee: 15_000, overdraft_rate: 6, charges_from: '2027-05-01' })
     expect(db.bankMovements.every((m) => m.charge === null)).toBe(true)
+    // Hasta la versión actual: también las de los préstamos (8c).
     expect(
       db.postingRules
         .filter((r) => r.event === 'CARGOS_BANCARIOS')
         .map((r) => r.key)
         .sort(),
-    ).toEqual(['COMISION', 'IMPUESTO_DC', 'INTERESES', 'RECHAZO'])
+    ).toEqual(['COMISION', 'CUOTA_CAPITAL', 'CUOTA_INTERES', 'IMPUESTO_DC', 'INTERESES', 'PRESTAMO', 'RECHAZO'])
   })
 })
 

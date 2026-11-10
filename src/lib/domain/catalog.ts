@@ -12,6 +12,7 @@ import type {
   DeliveryStatus,
   DocType,
   JournalEntryOrigin,
+  LoanStatus,
   ModuleCode,
   MovementType,
   PayBasis,
@@ -87,6 +88,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   task: 'management',
   audit: 'audit',
   bank: 'bank',
+  loan: 'bank',
 }
 
 export function permissionModule(permission: string): ModuleCode {
@@ -161,8 +163,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'carrier.read', 'route_sheet.read',
     // Autoriza las liquidaciones de sueldos o las devuelve a RRHH (Fase 6d; SoD-11).
     'payroll.read', 'payroll.approve',
-    // La cuenta en el Banco Aula: el homebanking de la empresa (Fase 8a).
-    'bank.read',
+    // La cuenta en el Banco Aula: el homebanking de la empresa (Fase 8a); pide los préstamos (8c).
+    'bank.read', 'loan.create',
   ],
   COMPRAS: [
     ...CORE_READ,
@@ -850,8 +852,9 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   PAGAR_DJ: 'Pagar impuesto',
   REPONER_STOCK: 'Evaluar reposición',
   PROCESAR_BANCO: 'Procesar órdenes del banco',
-  REGISTRAR_CARGOS_BANCO: 'Registrar cargos del banco',
+  REGISTRAR_CARGOS_BANCO: 'Registrar movimientos del banco',
   RESOLVER_RECHAZO_BANCO: 'Resolver órdenes rechazadas por el banco',
+  EVALUAR_PRESTAMO: 'Evaluar pedido de préstamo',
   CONSIGNA: 'Consigna del docente',
 }
 
@@ -887,6 +890,13 @@ export const BANK_ACCOUNT_DEFAULTS = {
   /** Comisión por rechazar por falta de fondos una transferencia y un cheque (Fase 8b.2). */
   rejection_fee: 2_500,
   cheque_rejection_fee: 4_000,
+  /** Préstamos (Fase 8c): la tasa nominal anual de referencia, el importe máximo y los plazos en meses. */
+  loan_rate: 48,
+  loan_max: 50_000_000,
+  loan_terms: [6, 12, 18, 24],
+  /** Si lo opera el sistema, aprueba con liquidez corriente de al menos 1 y una cuota de hasta el 30 % de las ventas. */
+  loan_min_liquidity: 1,
+  loan_max_sales_share: 30,
 }
 
 export const BANK_CHARGES: Record<BankCharge, string> = {
@@ -894,6 +904,16 @@ export const BANK_CHARGES: Record<BankCharge, string> = {
   IMPUESTO_DC: 'Impuesto a los débitos y créditos',
   INTERESES: 'Intereses por descubierto',
   RECHAZO: 'Comisión por rechazo',
+  PRESTAMO: 'Acreditación de préstamo',
+  CUOTA_CAPITAL: 'Cuota de préstamo: capital',
+  CUOTA_INTERES: 'Cuota de préstamo: intereses',
+}
+
+export const LOAN_STATUSES: Record<LoanStatus, { label: string; badge: Badge }> = {
+  SOLICITADO: { label: 'Para evaluar', badge: 'warning' },
+  RECHAZADO: { label: 'Rechazado', badge: 'danger' },
+  VIGENTE: { label: 'Vigente', badge: 'success' },
+  CANCELADO: { label: 'Cancelado', badge: 'neutral' },
 }
 
 export const BANK_MOVEMENT_STATUSES: Record<BankMovementStatus, { label: string; badge: Badge }> = {
@@ -916,6 +936,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   PEDIDO_DESPACHADO: 'Pedido despachado',
   PRODUCCION_TERMINADA: 'Producción terminada',
   ORDEN_RECHAZADA: 'Orden rechazada por el banco',
+  PRESTAMO: 'Préstamo del banco',
 }
 
 // ---------------------------------------------------------------- Etiquetas
@@ -1111,13 +1132,16 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
     },
   },
   CARGOS_BANCARIOS: {
-    label: 'Cargos del Banco Aula (registrados desde la conciliación)',
+    label: 'Movimientos del Banco Aula (registrados desde la conciliación)',
     keys: {
-      // La contrapartida es la cuenta del banco que los debitó, no una regla.
+      // La contrapartida es la cuenta del banco que los movió, no una regla.
       COMISION: 'Comisión de mantenimiento de cuenta',
       IMPUESTO_DC: 'Impuesto a los débitos y créditos',
       INTERESES: 'Intereses por descubierto',
       RECHAZO: 'Comisión por rechazo',
+      PRESTAMO: 'Acreditación de préstamos (al haber)',
+      CUOTA_CAPITAL: 'Cuotas de préstamos: capital',
+      CUOTA_INTERES: 'Cuotas de préstamos: intereses',
     },
   },
   CONVERSION_PRODUCCION: {

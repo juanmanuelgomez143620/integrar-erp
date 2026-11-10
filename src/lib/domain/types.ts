@@ -356,7 +356,8 @@ export interface BankAccount extends Audited {
 }
 
 /** Los cargos que el banco debita por su cuenta (Fase 8b): no llegan como orden de la empresa. */
-export type BankCharge = 'COMISION' | 'IMPUESTO_DC' | 'INTERESES' | 'RECHAZO'
+export type BankCharge =
+  'COMISION' | 'IMPUESTO_DC' | 'INTERESES' | 'RECHAZO' | 'PRESTAMO' | 'CUOTA_CAPITAL' | 'CUOTA_INTERES'
 
 /** El cierre de un mes en el Banco Aula (tabla bank_closings): lo que debitó por la cuenta. */
 export interface BankClosing {
@@ -415,6 +416,53 @@ export interface BankMovement {
   transaction_number: string | null
   processed_by: string | null
   created_at: string
+}
+
+export type LoanStatus = 'SOLICITADO' | 'RECHAZADO' | 'VIGENTE' | 'CANCELADO'
+
+/** Un préstamo del Banco Aula (Fase 8c): lo pide Gerencia y lo evalúa quien opera el banco. */
+export interface BankLoan {
+  id: string
+  company_id: string
+  bank_account_id: string
+  /** N.º del préstamo en la cuenta. */
+  number: number
+  amount: number
+  /** Cantidad de cuotas mensuales. */
+  months: number
+  /** El destino que declaró Gerencia. */
+  purpose: string
+  status: LoanStatus
+  requested_by: string | null
+  requested_on: string
+  /** Los indicadores del libro mayor el día del pedido (null si no se pueden calcular). */
+  liquidity: number | null
+  debt_ratio: number | null
+  /** La cuota con la tasa de referencia, como por ciento de las ventas netas del mes. */
+  sales_share: number | null
+  /** Tasa nominal anual, al aprobarlo. */
+  rate: number | null
+  evaluated_by: string | null
+  evaluated_on: string | null
+  rejection_reason: string | null
+  /** Cuándo el banco lo acreditó. */
+  granted_on: string | null
+  created_at: string
+}
+
+export type LoanInstallmentStatus = 'PENDIENTE' | 'DEBITADA'
+
+/** Una cuota del cronograma de un préstamo (sistema francés). */
+export interface BankLoanInstallment {
+  id: string
+  company_id: string
+  loan_id: string
+  n: number
+  due_on: string
+  principal: number
+  interest: number
+  status: LoanInstallmentStatus
+  debited_on: string | null
 }
 
 export interface WorkCenter extends Audited {

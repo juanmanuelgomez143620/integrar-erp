@@ -2,6 +2,7 @@
 // `security_invoker`; la forma de los datos devueltos se mantiene.
 
 import {
+  BANK_ACCOUNT_DEFAULTS,
   DOC_STATUSES,
   DOC_TYPES,
   MODULES,
@@ -23,6 +24,7 @@ import {
   bankMonthToClose,
   bankPresented,
   bankSigned,
+  loanIndicators,
   processedBankMovements,
   accountLabel,
   activeBomOf,
@@ -3590,6 +3592,122 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
   }
 }
 
+/** Una cuota del cronograma de un préstamo. */
+export interface LoanInstallmentRow {
+  n: number
+  due_on: string
+  principal: number
+  interest: number
+  total: number
+  status: T.LoanInstallmentStatus
+  debited_on: string | null
+  /** Vencida y sin debitar: el banco la tiene que debitar. */
+  due: boolean
+}
+
+/** Un préstamo del Banco Aula, con su cronograma. */
+export interface LoanRow {
+  id: string
+  number: number
+  amount: number
+  months: number
+  purpose: string
+  status: T.LoanStatus
+  requested_on: string
+  requested_by_name: string | null
+  /** Si lo pidió quien mira: no lo puede evaluar (SoD-13). */
+  own: boolean
+  liquidity: number | null
+  debt_ratio: number | null
+  sales_share: number | null
+  rate: number | null
+  evaluated_by_name: string | null
+  evaluated_on: string | null
+  rejection_reason: string | null
+  granted_on: string | null
+  /** El capital que falta pagar: el de las cuotas sin debitar. */
+  outstanding: number
+  installments: LoanInstallmentRow[]
+}
+
+export interface BankLoansView {
+  /** Del más nuevo al más viejo. */
+  loans: LoanRow[]
+  /** Las condiciones del banco: la tasa de referencia, el importe máximo y los plazos. */
+  reference_rate: number
+  max_amount: number
+  terms: number[]
+}
+
+/** Los préstamos de la empresa en el Banco Aula (8c), con su cronograma. */
+export function bankLoans(db: DB, userId: string, companyId: string): BankLoansView {
+  assertPerm(db, userId, companyId, 'bank.read')
+  const today = businessDate(db.companies.find((c) => c.id === companyId)!)
+  const loans = db.bankLoans
+    .filter((l) => l.company_id === companyId)
+    .sort((a, b) => b.number - a.number)
+    .map((l): LoanRow => {
+      const installments = db.bankLoanInstallments
+        .filter((i) => i.loan_id === l.id)
+        .sort((a, b) => a.n - b.n)
+        .map((i) => ({
+          n: i.n,
+          due_on: i.due_on,
+          principal: i.principal,
+          interest: i.interest,
+          total: round2(i.principal + i.interest),
+          status: i.status,
+          debited_on: i.debited_on,
+          due: l.status === 'VIGENTE' && i.status === 'PENDIENTE' && i.due_on <= today,
+        }))
+      return {
+        id: l.id,
+        number: l.number,
+        amount: l.amount,
+        months: l.months,
+        purpose: l.purpose,
+        status: l.status,
+        requested_on: l.requested_on,
+        requested_by_name: l.requested_by ? nameOf(db, l.requested_by) : null,
+        own: l.requested_by === userId,
+        liquidity: l.liquidity,
+        debt_ratio: l.debt_ratio,
+        sales_share: l.sales_share,
+        rate: l.rate,
+        evaluated_by_name: l.evaluated_by ? nameOf(db, l.evaluated_by) : null,
+        evaluated_on: l.evaluated_on,
+        rejection_reason: l.rejection_reason,
+        granted_on: l.granted_on,
+        outstanding: round2(
+          installments.filter((i) => i.status === 'PENDIENTE').reduce((sum, i) => sum + i.principal, 0),
+        ),
+        installments,
+      }
+    })
+  return {
+    loans,
+    reference_rate: BANK_ACCOUNT_DEFAULTS.loan_rate,
+    max_amount: BANK_ACCOUNT_DEFAULTS.loan_max,
+    terms: BANK_ACCOUNT_DEFAULTS.loan_terms,
+  }
+}
+
+/**
+ * Lo que vería el banco si Gerencia pidiera hoy un préstamo: los indicadores del libro mayor y la
+ * cuota con la tasa de referencia. null si el importe o el plazo no son válidos.
+ */
+export function loanPreview(db: DB, userId: string, companyId: string, amount: number, months: number) {
+  assertPerm(db, userId, companyId, 'loan.create')
+  if (
+    !BANK_ACCOUNT_DEFAULTS.loan_terms.includes(months) ||
+    !(amount > 0) ||
+    amount > BANK_ACCOUNT_DEFAULTS.loan_max ||
+    round2(amount) !== amount
+  )
+    return null
+  return loanIndicators(db, companyId, amount, months)
+}
+
 /** Una línea del extracto: lo que el banco procesó un día, con el saldo después del movimiento. */
 export interface BankStatementLine {
   id: string
@@ -3947,6 +4065,7 @@ function bankStatementSince(db: DB, ledgerAccountId: string, since: string | nul
       date: m.processed_on!,
       transaction_number: m.transaction_number,
       charge: m.charge!,
+      direction: m.direction,
       concept: m.concept,
       amount: m.amount,
     }))
@@ -3957,12 +4076,13 @@ function bankStatementSince(db: DB, ledgerAccountId: string, since: string | nul
   }
 }
 
-/** Un cargo del banco sin registrar en los libros. */
+/** Un movimiento que el banco hizo por su cuenta (un cargo, un préstamo) sin registrar en los libros. */
 export interface BankChargeRow {
   id: string
   date: string
   transaction_number: string | null
   charge: T.BankCharge
+  direction: T.BankDirection
   concept: string
   amount: number
 }
@@ -4104,7 +4224,7 @@ export function listTasks(
                 ? `/e/${company.slug}/pagos/banco-aula/bandeja`
                 : t.task_type === 'REGISTRAR_CARGOS_BANCO'
                   ? `/e/${company.slug}/pagos/conciliaciones/nueva`
-                  : t.task_type === 'RESOLVER_RECHAZO_BANCO'
+                  : t.task_type === 'RESOLVER_RECHAZO_BANCO' || t.task_type === 'EVALUAR_PRESTAMO'
                     ? `/e/${company.slug}/pagos/banco-aula/bandeja`
                     : null,
           assignee_label: t.assigned_user_id

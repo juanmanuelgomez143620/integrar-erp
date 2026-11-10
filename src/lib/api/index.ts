@@ -82,6 +82,9 @@ export type {
   BankMovementRow,
   BankStatement,
   BankStatementLine,
+  BankLoansView,
+  LoanInstallmentRow,
+  LoanRow,
   ProductionCostRow,
   ProductionNeedRow,
   ProductionOrderView,
@@ -248,6 +251,9 @@ const mockApi = {
   bankAccount: (companyId: string) => query((db, u) => Q.bankAccountView(db, u, companyId)),
   bankStatement: (companyId: string, from: string, to: string) =>
     query((db, u) => Q.bankStatement(db, u, companyId, from, to)),
+  bankLoans: (companyId: string) => query((db, u) => Q.bankLoans(db, u, companyId)),
+  loanPreview: (companyId: string, amount: number, months: number) =>
+    query((db, u) => Q.loanPreview(db, u, companyId, amount, months)),
   cashFlow: (companyId: string, from: string, to: string) => query((db, u) => Q.cashFlow(db, u, companyId, from, to)),
   cashProjection: (companyId: string) => query((db, u) => Q.cashProjection(db, u, companyId)),
   issuedCheques: (companyId: string) => query((db, u) => Q.issuedCheques(db, u, companyId)),
@@ -477,6 +483,9 @@ const mockCommands = {
   registerBankCharges: (companyId: string, ids: string[]) =>
     command((c) => E.cmdRegisterBankCharges(c, companyId, ids)),
   resendBankOrder: (companyId: string, id: string) => command((c) => E.cmdResendBankOrder(c, companyId, id)),
+  requestLoan: (companyId: string, input: E.LoanRequestInput) => command((c) => E.cmdRequestLoan(c, companyId, input)),
+  evaluateLoan: (loanId: string, decision: E.LoanDecision) => command((c) => E.cmdEvaluateLoan(c, loanId, decision)),
+  debitLoanInstallments: (companyId: string) => command((c) => E.cmdDebitLoanInstallments(c, companyId)),
 
   createJournalEntry: (companyId: string, input: E.JournalEntryInput, confirm: boolean) =>
     command((c) => E.cmdCreateJournalEntry(c, companyId, input, confirm)),

@@ -84,6 +84,8 @@ export interface DB {
   bankAccounts: T.BankAccount[]
   bankMovements: T.BankMovement[]
   bankClosings: T.BankClosing[]
+  bankLoans: T.BankLoan[]
+  bankLoanInstallments: T.BankLoanInstallment[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -101,7 +103,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 25
+export const DB_VERSION = 26
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -164,6 +166,8 @@ const COLLECTIONS = [
   'bankAccounts',
   'bankMovements',
   'bankClosings',
+  'bankLoans',
+  'bankLoanInstallments',
   'jobCategories',
   'employees',
   'pyLines',
@@ -217,6 +221,8 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   bankAccounts: 22,
   bankMovements: 22,
   bankClosings: 24,
+  bankLoans: 26,
+  bankLoanInstallments: 26,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -507,6 +513,14 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       m.cheque_number ??= null
       m.presented_on ??= null
     }
+  },
+  // v25 → v26: los préstamos del Banco Aula (Fase 8c.1): sus tablas y las reglas de la acreditación
+  // y de las cuotas.
+  25: (db) => {
+    db.bankLoans ??= []
+    db.bankLoanInstallments ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) insertBasePostingRules(ctx, company.id)
   },
 }
 

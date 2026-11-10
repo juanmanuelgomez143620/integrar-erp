@@ -10,6 +10,7 @@ import {
   BANK_CHARGES,
   BANK_MODES,
   BANK_MOVEMENT_STATUSES,
+  LOAN_STATUSES,
   BOM_COMPONENT_TYPES,
   DOC_STATUSES,
   DOC_TYPES,
@@ -47,7 +48,7 @@ import {
 import { MONTH_HOURS } from '../domain/employees'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
-import { addDays, date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
+import { addDays, addMonths, date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
 import type { DB } from './db'
 
 // ============================================================ Infraestructura
@@ -3929,18 +3930,25 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
 }
 
 /**
- * Lo que llega al banco: si lo opera el sistema, ejecuta en el orden de llegada todo lo pendiente
- * que ya se puede cobrar (un cheque, desde que se presenta: 8b.2); si no, espera en la bandeja.
+ * Lo que llega al banco: si lo opera el sistema, decide los préstamos pedidos, debita las cuotas
+ * vencidas (8c) y ejecuta en el orden de llegada todo lo pendiente que ya se puede cobrar (un cheque,
+ * desde que se presenta: 8b.2); si no, espera en la bandeja, con sus tareas para Tesorería.
  */
 function settleBankOrders(ctx: Ctx, company: T.Company) {
   if (bankMode(company) === 'AUTOMATICO') {
     const today = businessDate(company)
+    for (const loan of ctx.db.bankLoans
+      .filter((l) => l.company_id === company.id && l.status === 'SOLICITADO')
+      .sort((a, b) => a.number - b.number))
+      autoDecideLoan(ctx, loan)
+    debitDueInstallments(ctx, company, null)
     for (const order of ctx.db.bankMovements
       .filter((m) => m.company_id === company.id && m.status === 'PENDIENTE' && bankPresented(m, today))
       .sort((a, b) => a.seq - b.seq))
       executeBankOrder(ctx, order, today, null)
   }
   syncBankTask(ctx, company.id)
+  syncLoanTask(ctx, company.id)
 }
 
 /**
@@ -4401,9 +4409,9 @@ function syncChargesTask(ctx: Ctx, companyId: string) {
     company_id: companyId,
     document_id: null,
     task_type: 'REGISTRAR_CARGOS_BANCO',
-    title: 'Registrar los cargos del Banco Aula',
+    title: 'Registrar los movimientos del Banco Aula',
     description:
-      'El banco debitó cargos que no están en los libros: registralos desde la conciliación de la cuenta del banco.',
+      'El banco registró movimientos que no están en los libros (cargos, la acreditación o las cuotas de un préstamo): registralos desde la conciliación de la cuenta del banco.',
     origin_status: null,
     context: {},
     assigned_role: 'CONTABILIDAD',
@@ -4421,66 +4429,506 @@ function syncChargesTask(ctx: Ctx, companyId: string) {
   db.tasks.push(task)
   notifyRoles(ctx, companyId, ['CONTABILIDAD'], {
     type: 'NUEVA_TAREA',
-    title: 'Cargos del Banco Aula',
-    body: 'El banco debitó cargos que no están en los libros: registralos desde la conciliación.',
+    title: 'Movimientos del Banco Aula',
+    body: 'El banco registró movimientos que no están en los libros: registralos desde la conciliación.',
     link_path: `/e/${company.slug}/pagos/conciliaciones/nueva`,
     task_id: task.id,
   })
 }
 
 /**
- * Contabilidad registra cargos que el banco ya debitó: un asiento automático con la cuenta de cada
- * tipo de cargo al debe y el banco al haber. No le manda una orden al banco: registra lo que ya pasó.
+ * Contabilidad registra lo que el banco movió por su cuenta (los cargos, la acreditación y las cuotas
+ * de un préstamo): un asiento automático con la cuenta de cada tipo de movimiento y el banco del otro
+ * lado. No le manda una orden al banco: registra lo que ya pasó.
  */
 export function cmdRegisterBankCharges(ctx: Ctx, companyId: string, ids: string[]) {
   const { db } = ctx
   const actor = requirePermission(ctx, companyId, 'bank_reconciliation.create')
-  if (!ids.length) fail('DATO_INVALIDO', 'Elegí los cargos del banco que se registran.')
-  if (new Set(ids).size !== ids.length) fail('DATO_INVALIDO', 'Un cargo está dos veces.')
+  if (!ids.length) fail('DATO_INVALIDO', 'Elegí los movimientos del banco que se registran.')
+  if (new Set(ids).size !== ids.length) fail('DATO_INVALIDO', 'Un movimiento está dos veces.')
   const chosen = ids
     .map((id) => {
-      const charge = db.bankMovements.find(
+      const movement = db.bankMovements.find(
         (m) => m.id === id && m.company_id === companyId && m.origin === 'BANCO' && m.status === 'PROCESADO',
       )
-      if (!charge) fail('DATO_INVALIDO', 'Uno de los cargos no es de esta empresa.')
-      if (charge.journal_line_id)
-        fail('TRANSICION_INVALIDA', `El cargo ${charge.transaction_number} ya está registrado.`)
-      return charge
+      if (!movement) fail('DATO_INVALIDO', 'Uno de los movimientos no es de esta empresa.')
+      if (movement.journal_line_id)
+        fail('TRANSICION_INVALIDA', `El movimiento ${movement.transaction_number} ya está registrado.`)
+      return movement
     })
     .sort((a, b) => a.seq - b.seq)
   const account = db.bankAccounts.find((b) => b.id === chosen[0].bank_account_id)!
-  const total = round2(chosen.reduce((sum, c) => sum + c.amount, 0))
-  // Al debe, la cuenta de cada tipo de cargo (en el orden en que aparecen); al haber, el banco.
+  const total = (direction: T.BankDirection) =>
+    round2(chosen.filter((c) => c.direction === direction).reduce((sum, c) => sum + c.amount, 0))
+  const debited = total('DEBITO')
+  const credited = total('CREDITO')
+  // Lo que el banco debitó va al debe de la cuenta de su tipo y lo que acreditó, al haber (en el orden
+  // en que aparecen); el banco, del otro lado de cada uno.
   const debits = new Map<string, number>()
+  const credits = new Map<string, number>()
   for (const c of chosen) {
     const target = ruleAccount(db, companyId, 'CARGOS_BANCARIOS', c.charge!)
-    debits.set(target.id, round2((debits.get(target.id) ?? 0) + c.amount))
+    const side = c.direction === 'DEBITO' ? debits : credits
+    side.set(target.id, round2((side.get(target.id) ?? 0) + c.amount))
   }
+  const amounts = [
+    debited > 0 ? `débitos por ${money(debited)}` : null,
+    credited > 0 ? `créditos por ${money(credited)}` : null,
+  ].filter((a) => a !== null)
   const entry = newEntry(
     ctx,
     companyId,
     actor,
     businessDate(getCompany(db, companyId)),
     {
-      description: `Cargos del Banco Aula registrados desde la conciliación: ${chosen.length} cargo${chosen.length === 1 ? '' : 's'} por ${money(total)}.`,
+      description: `Movimientos del Banco Aula registrados desde la conciliación: ${chosen.length === 1 ? 'un movimiento' : `${chosen.length} movimientos`} (${amounts.join(' y ')}).`,
       origin: 'AUTOMATICO',
       reverses_id: null,
     },
     [
       ...[...debits].map(([account_id, debit]) => ({ account_id, debit, credit: 0, notes: '' })),
-      { account_id: account.ledger_account_id, debit: 0, credit: total, notes: '' },
+      ...(credited > 0 ? [{ account_id: account.ledger_account_id, debit: credited, credit: 0, notes: '' }] : []),
+      ...(debited > 0 ? [{ account_id: account.ledger_account_id, debit: 0, credit: debited, notes: '' }] : []),
+      ...[...credits].map(([account_id, credit]) => ({ account_id, debit: 0, credit, notes: '' })),
     ],
   )
   postEntry(
     ctx,
     entry,
-    (n) => `Registró ${entry.display_number}, asiento automático N.º ${n} de los cargos del Banco Aula`,
+    (n) => `Registró ${entry.display_number}, asiento automático N.º ${n} de los movimientos del Banco Aula`,
     actor,
   )
-  const bankLine = db.jeLines.find((l) => l.document_id === entry.id && l.account_id === account.ledger_account_id)!
-  for (const c of chosen) c.journal_line_id = bankLine.id
+  const bankLine = (direction: T.BankDirection) =>
+    db.jeLines.find(
+      (l) =>
+        l.document_id === entry.id &&
+        l.account_id === account.ledger_account_id &&
+        (direction === 'DEBITO' ? l.credit > 0 : l.debit > 0),
+    )!.id
+  for (const c of chosen) c.journal_line_id = bankLine(c.direction)
   syncChargesTask(ctx, companyId)
   return { id: entry.id, display_number: entry.display_number }
+}
+
+// ============================================================ Préstamos del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3, 8c)
+
+/**
+ * El cronograma de un préstamo por sistema francés, como el de Banco Aula: cuota fija con la tasa
+ * mensual (la anual dividida 12), el interés de cada cuota redondeado al centavo y la última que
+ * ajusta el capital. Vence el mismo día de cada mes siguiente (o el último, si el mes no lo tiene).
+ */
+export function loanSchedule(amount: number, rate: number, months: number, from: string) {
+  const cents = Math.round(amount * 100)
+  const r = rate / 1200
+  const payment = r === 0 ? Math.round(cents / months) : Math.round((cents * r) / (1 - Math.pow(1 + r, -months)))
+  // El interés, en centavos enteros con la tasa en centésimos y la mitad hacia arriba: igual que la base.
+  const points = Math.round(rate * 100)
+  let balance = cents
+  const rows: { n: number; due_on: string; principal: number; interest: number }[] = []
+  for (let n = 1; n <= months; n++) {
+    const interest = Math.floor((2 * balance * points + 120_000) / 240_000)
+    const principal = n === months ? balance : Math.min(balance, payment - interest)
+    rows.push({ n, due_on: addMonths(from, n), principal: principal / 100, interest: interest / 100 })
+    balance -= principal
+  }
+  return rows
+}
+
+/**
+ * Los indicadores del libro mayor con que el banco evalúa un préstamo: la liquidez corriente (activo
+ * corriente / pasivo corriente), el endeudamiento (pasivo / patrimonio neto, el activo menos el
+ * pasivo) y la cuota que saldría con la tasa de referencia, como por ciento de las ventas netas del
+ * mes. null si no se pueden calcular.
+ */
+export function loanIndicators(db: DB, companyId: string, amount: number, months: number) {
+  const today = businessDate(getCompany(db, companyId))
+  const month = today.slice(0, 7)
+  const posted = new Map(db.documents.filter((d) => d.company_id === companyId && isPosted(d)).map((d) => [d.id, d]))
+  const codes = new Map(db.accounts.filter((a) => a.company_id === companyId).map((a) => [a.id, a.code]))
+  let assets = 0
+  let currentAssets = 0
+  let liabilities = 0
+  let currentLiabilities = 0
+  let sales = 0
+  for (const line of db.jeLines) {
+    const doc = posted.get(line.document_id)
+    if (!doc) continue
+    const code = codes.get(line.account_id) ?? ''
+    const net = line.debit - line.credit
+    if (code.startsWith('1.')) {
+      assets += net
+      if (code.startsWith('1.1.')) currentAssets += net
+    } else if (code.startsWith('2.')) {
+      liabilities -= net
+      if (code.startsWith('2.1.')) currentLiabilities -= net
+    } else if (code.startsWith('4.1.') && doc.document_date.slice(0, 7) === month && doc.document_date <= today)
+      sales -= net
+  }
+  const first = loanSchedule(amount, BANK_ACCOUNT_DEFAULTS.loan_rate, months, today)[0]
+  const installment = round2(first.principal + first.interest)
+  const equity = round2(round2(assets) - round2(liabilities))
+  return {
+    liquidity: round2(currentLiabilities) > 0 ? round2(round2(currentAssets) / round2(currentLiabilities)) : null,
+    debt_ratio: equity > 0 ? round2(round2(liabilities) / equity) : null,
+    installment,
+    sales: round2(sales),
+    sales_share: round2(sales) > 0 ? round2((installment / round2(sales)) * 100) : null,
+  }
+}
+
+export interface LoanRequestInput {
+  amount: number
+  /** Cantidad de cuotas mensuales: 6, 12, 18 o 24. */
+  months: number
+  purpose: string
+}
+
+export type LoanDecision = { approve: true; rate: number; months: number } | { approve: false; reason: string }
+
+/** "48" o "48,5": una tasa o un indicador como lo escribe la base en sus textos. */
+const decimalText = (n: number) => String(n).replace('.', ',')
+
+function requireLoanTerm(months: number) {
+  if (!BANK_ACCOUNT_DEFAULTS.loan_terms.includes(months))
+    fail('DATO_INVALIDO', 'El plazo es de 6, 12, 18 o 24 cuotas mensuales.')
+}
+
+/**
+ * Gerencia pide un préstamo al Banco Aula: guarda los indicadores del día y espera la evaluación de
+ * Tesorería (si lo opera el sistema, decide en el momento). Uno por vez.
+ */
+export function cmdRequestLoan(ctx: Ctx, companyId: string, input: LoanRequestInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'loan.create')
+  const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (!account) fail('DATO_INVALIDO', 'La empresa no tiene cuenta en el Banco Aula.')
+  const { amount, months } = input
+  if (
+    typeof amount !== 'number' ||
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    amount > BANK_ACCOUNT_DEFAULTS.loan_max ||
+    round2(amount) !== amount
+  )
+    fail(
+      'DATO_INVALIDO',
+      `Indicá el importe del préstamo: hasta ${money(BANK_ACCOUNT_DEFAULTS.loan_max)}, con hasta 2 decimales.`,
+    )
+  requireLoanTerm(months)
+  const purpose = (input.purpose ?? '').trim()
+  if (purpose.length < 3 || purpose.length > 200)
+    fail('DATO_INVALIDO', 'Indicá el destino del préstamo (hasta 200 caracteres).')
+  const waiting = db.bankLoans.find((l) => l.company_id === companyId && l.status === 'SOLICITADO')
+  if (waiting)
+    fail(
+      'TRANSICION_INVALIDA',
+      `El préstamo N.º ${waiting.number} todavía espera la evaluación del banco: se pide de a uno.`,
+    )
+  const company = getCompany(db, companyId)
+  const indicators = loanIndicators(db, companyId, amount, months)
+  const loan: T.BankLoan = {
+    id: uid(),
+    company_id: companyId,
+    bank_account_id: account.id,
+    number: db.bankLoans.reduce((max, l) => (l.bank_account_id === account.id ? Math.max(max, l.number) : max), 0) + 1,
+    amount,
+    months,
+    purpose,
+    status: 'SOLICITADO',
+    requested_by: ctx.userId,
+    requested_on: businessDate(company),
+    liquidity: indicators.liquidity,
+    debt_ratio: indicators.debt_ratio,
+    sales_share: indicators.sales_share,
+    rate: null,
+    evaluated_by: null,
+    evaluated_on: null,
+    rejection_reason: null,
+    granted_on: null,
+    created_at: ctx.now,
+  }
+  db.bankLoans.push(loan)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'REQUEST',
+    entity_type: 'bank_loan',
+    entity_id: loan.id,
+    entity_label: `Préstamo N.º ${loan.number}`,
+    summary: `Pidió al Banco Aula el préstamo N.º ${loan.number}: ${money(amount)} en ${months} cuotas, para ${purpose}`,
+  })
+  settleBankOrders(ctx, company)
+  return { id: loan.id, number: loan.number, status: loan.status }
+}
+
+/**
+ * El banco decide un préstamo: lo rechaza con el motivo o lo acredita con la tasa y el plazo, con su
+ * cronograma. Gerencia recibe el aviso; Contabilidad registra la acreditación desde la conciliación.
+ */
+function decideLoan(
+  ctx: Ctx,
+  loan: T.BankLoan,
+  decision: { rate: number; months: number } | { reason: string },
+  userId: string | null,
+) {
+  const { db } = ctx
+  const company = getCompany(db, loan.company_id)
+  const today = businessDate(company)
+  loan.evaluated_by = userId
+  loan.evaluated_on = today
+  const link = `/e/${company.slug}/pagos/prestamos`
+  if ('reason' in decision) {
+    loan.status = 'RECHAZADO'
+    loan.rejection_reason = decision.reason
+    notifyRoles(ctx, loan.company_id, ['GERENCIA'], {
+      type: 'PRESTAMO',
+      title: `El Banco Aula rechazó el préstamo N.º ${loan.number}`,
+      body: `Motivo: ${decision.reason}`,
+      link_path: link,
+    })
+    return
+  }
+  loan.status = 'VIGENTE'
+  loan.rate = decision.rate
+  loan.months = decision.months
+  loan.granted_on = today
+  const account = db.bankAccounts.find((b) => b.id === loan.bank_account_id)!
+  const credit = addBankMovement(
+    ctx,
+    account,
+    {
+      origin: 'BANCO',
+      direction: 'CREDITO',
+      amount: loan.amount,
+      concept: `Acreditación del préstamo N.º ${loan.number}`,
+      source_document_id: null,
+      journal_line_id: null,
+      reverses_id: null,
+      ordered_by: null,
+      charge: 'PRESTAMO',
+    },
+    today,
+  )
+  processBankMovement(db, credit, today, userId)
+  const schedule = loanSchedule(loan.amount, decision.rate, decision.months, today)
+  for (const row of schedule)
+    db.bankLoanInstallments.push({
+      id: uid(),
+      company_id: loan.company_id,
+      loan_id: loan.id,
+      ...row,
+      status: 'PENDIENTE',
+      debited_on: null,
+    })
+  syncChargesTask(ctx, loan.company_id)
+  notifyRoles(ctx, loan.company_id, ['GERENCIA'], {
+    type: 'PRESTAMO',
+    title: `El Banco Aula aprobó el préstamo N.º ${loan.number}`,
+    body: `Acreditó ${money(loan.amount)} en la cuenta: ${decision.months} cuotas de ${money(round2(schedule[0].principal + schedule[0].interest))} al ${decimalText(decision.rate)} % anual. Contabilidad lo registra desde la conciliación.`,
+    link_path: link,
+  })
+}
+
+/**
+ * Si lo opera el sistema, el banco decide en el momento con la tasa de referencia y el plazo pedido:
+ * lo aprueba si la liquidez corriente y la cuota alcanzan; si no, lo rechaza diciendo cuál no.
+ */
+function autoDecideLoan(ctx: Ctx, loan: T.BankLoan) {
+  const d = BANK_ACCOUNT_DEFAULTS
+  const reason =
+    loan.liquidity !== null && loan.liquidity < d.loan_min_liquidity
+      ? `La liquidez corriente es ${decimalText(loan.liquidity)}: el banco pide al menos ${d.loan_min_liquidity}.`
+      : loan.sales_share !== null && loan.sales_share > d.loan_max_sales_share
+        ? `La cuota sería el ${decimalText(loan.sales_share)} % de las ventas del mes: el banco acepta hasta el ${d.loan_max_sales_share} %.`
+        : null
+  decideLoan(ctx, loan, reason ? { reason } : { rate: d.loan_rate, months: loan.months }, null)
+}
+
+/**
+ * Quien opera el banco evalúa un pedido de préstamo: lo aprueba con la tasa nominal anual y el plazo
+ * o lo rechaza con el motivo. Quien lo pidió no lo evalúa (SoD-13).
+ */
+export function cmdEvaluateLoan(ctx: Ctx, loanId: string, decision: LoanDecision): { status: T.LoanStatus } {
+  const { db } = ctx
+  const loan = db.bankLoans.find((l) => l.id === loanId)
+  if (!loan) fail('DATO_INVALIDO', 'El préstamo no existe.')
+  const actor = requirePermission(ctx, loan.company_id, 'bank.operate')
+  if (loan.status !== 'SOLICITADO')
+    fail(
+      'TRANSICION_INVALIDA',
+      `El préstamo N.º ${loan.number} ya está ${LOAN_STATUSES[loan.status].label.toLowerCase()}.`,
+    )
+  const sod =
+    getCompany(db, loan.company_id).settings.sod_enabled &&
+    !effectivePermissions(db, ctx.userId!, loan.company_id).supervisor
+  if (sod && loan.requested_by === ctx.userId)
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés evaluar el préstamo N.º ${loan.number}: lo pediste vos.`,
+      'Separación de funciones (SoD-13): quien pide un préstamo no lo evalúa. Lo evalúa otro integrante de Tesorería.',
+    )
+  if (decision.approve) {
+    const { rate } = decision
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 200 || round2(rate) !== rate)
+      fail('DATO_INVALIDO', 'La tasa nominal anual va de 0 a 200, con hasta 2 decimales.')
+    requireLoanTerm(decision.months)
+    decideLoan(ctx, loan, { rate, months: decision.months }, ctx.userId)
+  } else {
+    const reason = (decision.reason ?? '').trim()
+    if (reason.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo del rechazo: lo recibe Gerencia.')
+    decideLoan(ctx, loan, { reason }, ctx.userId)
+  }
+  syncLoanTask(ctx, loan.company_id)
+  logAudit(ctx, {
+    company_id: loan.company_id,
+    actor,
+    action: decision.approve ? 'APPROVE' : 'REJECT',
+    entity_type: 'bank_loan',
+    entity_id: loan.id,
+    entity_label: `Préstamo N.º ${loan.number}`,
+    summary: decision.approve
+      ? `Aprobó el préstamo N.º ${loan.number}: acreditó ${money(loan.amount)} en ${loan.months} cuotas al ${decimalText(loan.rate!)} % anual`
+      : `Rechazó el préstamo N.º ${loan.number}: ${loan.rejection_reason}`,
+  })
+  return { status: loan.status }
+}
+
+/** Las cuotas vencidas sin debitar de los préstamos vigentes, por vencimiento. */
+function dueInstallments(db: DB, companyId: string, today: string) {
+  const loans = new Map(
+    db.bankLoans.filter((l) => l.company_id === companyId && l.status === 'VIGENTE').map((l) => [l.id, l]),
+  )
+  return db.bankLoanInstallments
+    .filter((i) => loans.has(i.loan_id) && i.status === 'PENDIENTE' && i.due_on <= today)
+    .sort(
+      (a, b) => byText(a.due_on, b.due_on) || loans.get(a.loan_id)!.number - loans.get(b.loan_id)!.number || a.n - b.n,
+    )
+    .map((installment) => ({ installment, loan: loans.get(installment.loan_id)! }))
+}
+
+/**
+ * El banco debita las cuotas vencidas, cada una en dos movimientos (capital e intereses), aunque no
+ * haya fondos. Con la última, el préstamo queda cancelado.
+ */
+function debitDueInstallments(ctx: Ctx, company: T.Company, userId: string | null) {
+  const { db } = ctx
+  const today = businessDate(company)
+  const due = dueInstallments(db, company.id, today)
+  for (const { installment, loan } of due) {
+    const account = db.bankAccounts.find((b) => b.id === loan.bank_account_id)!
+    const label = `Préstamo N.º ${loan.number} · cuota ${installment.n} de ${loan.months}`
+    const parts: [T.BankCharge, number, string][] = [
+      ['CUOTA_CAPITAL', installment.principal, 'capital'],
+      ['CUOTA_INTERES', installment.interest, 'intereses'],
+    ]
+    for (const [charge, amount, part] of parts) {
+      if (amount <= 0) continue
+      const movement = addBankMovement(
+        ctx,
+        account,
+        {
+          origin: 'BANCO',
+          direction: 'DEBITO',
+          amount,
+          concept: `${label}: ${part}`,
+          source_document_id: null,
+          journal_line_id: null,
+          reverses_id: null,
+          ordered_by: null,
+          charge,
+        },
+        today,
+      )
+      processBankMovement(db, movement, today, userId)
+    }
+    installment.status = 'DEBITADA'
+    installment.debited_on = today
+    if (db.bankLoanInstallments.every((i) => i.loan_id !== loan.id || i.status === 'DEBITADA'))
+      loan.status = 'CANCELADO'
+  }
+  if (due.length) syncChargesTask(ctx, company.id)
+  return due
+}
+
+/** Quien opera el banco debita las cuotas vencidas de los préstamos (la app no tiene reloj). */
+export function cmdDebitLoanInstallments(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'bank.operate')
+  const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (!account) fail('DATO_INVALIDO', 'La empresa no tiene cuenta en el Banco Aula.')
+  const company = getCompany(db, companyId)
+  if (!dueInstallments(db, companyId, businessDate(company)).length)
+    fail('DATO_INVALIDO', 'No hay cuotas vencidas para debitar.')
+  const due = debitDueInstallments(ctx, company, ctx.userId)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'DEBIT',
+    entity_type: 'bank_account',
+    entity_id: account.id,
+    entity_label: `Banco Aula ${account.number}`,
+    summary: `Debitó ${due.length === 1 ? 'la cuota' : `${due.length} cuotas`} de préstamos: ${due
+      .map(
+        ({ installment, loan }) =>
+          `préstamo N.º ${loan.number}, cuota ${installment.n} (${money(round2(installment.principal + installment.interest))})`,
+      )
+      .join(', ')}`,
+  })
+  return { debited: due.length }
+}
+
+/** Mientras haya un pedido de préstamo sin evaluar y lo opere Tesorería, Tesorería tiene la tarea de evaluarlo. */
+function syncLoanTask(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const company = getCompany(db, companyId)
+  const pending =
+    bankMode(company) === 'ESTUDIANTES' &&
+    db.bankLoans.some((l) => l.company_id === companyId && l.status === 'SOLICITADO')
+  const open = db.tasks.find(
+    (t) =>
+      t.company_id === companyId &&
+      t.task_type === 'EVALUAR_PRESTAMO' &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+  )
+  if (!pending) {
+    if (open) {
+      open.status = 'RESUELTA'
+      open.completed_by = ctx.userId
+      open.completed_at = ctx.now
+    }
+    return
+  }
+  if (open) return
+  const task: T.Task = {
+    id: uid(),
+    company_id: companyId,
+    document_id: null,
+    task_type: 'EVALUAR_PRESTAMO',
+    title: 'Evaluar el pedido de préstamo de Gerencia',
+    description:
+      'Gerencia pidió un préstamo al Banco Aula: lo evalúa desde la bandeja un integrante de Tesorería que no lo pidió.',
+    origin_status: null,
+    context: {},
+    assigned_role: 'TESORERIA',
+    assigned_user_id: null,
+    status: 'PENDIENTE',
+    priority: 'NORMAL',
+    source: 'SISTEMA',
+    claimed_by: null,
+    claimed_at: null,
+    completed_by: null,
+    completed_at: null,
+    created_by: null,
+    created_at: ctx.now,
+  }
+  db.tasks.push(task)
+  notifyRoles(ctx, companyId, ['TESORERIA'], {
+    type: 'NUEVA_TAREA',
+    title: 'Pedido de préstamo',
+    body: 'Gerencia pidió un préstamo al Banco Aula: evalualo desde la bandeja.',
+    link_path: `/e/${company.slug}/pagos/banco-aula/bandeja`,
+    task_id: task.id,
+  })
 }
 
 // ============================================================ Pedidos de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2)

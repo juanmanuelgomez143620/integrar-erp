@@ -114,7 +114,7 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
         company.companyId,
         (data.bank?.charges ?? []).map((c) => c.id),
       ),
-    { success: (r) => `Cargos del banco registrados en ${r.display_number}.` },
+    { success: (r) => `Movimientos del banco registrados en ${r.display_number}.` },
   )
   const save = useCommand(
     () =>
@@ -158,8 +158,8 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
       {data.bank && data.bank.charges.length > 0 && (
         <Section
           className="lg:col-start-1"
-          title={`Cargos del banco sin registrar (${data.bank.charges.length})`}
-          description="El banco los debitó y no están en los libros: registralos (con la fecha de hoy) para que la conciliación cierre."
+          title={`Movimientos del banco sin registrar (${data.bank.charges.length})`}
+          description="El banco los hizo por su cuenta (cargos, la acreditación o las cuotas de un préstamo) y no están en los libros: registralos (con la fecha de hoy) para que la conciliación cierre."
           actions={
             <Button size="sm" disabled={register.isPending} onClick={() => register.mutate([])}>
               Registrar en los libros
@@ -173,7 +173,9 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
                 <span>
                   {date(c.date)} · {c.transaction_number} · {c.concept}
                 </span>
-                <span className="tabular">{money(c.amount)}</span>
+                <span className="tabular">
+                  {c.direction === 'CREDITO' ? 'Crédito' : 'Débito'} {money(c.amount)}
+                </span>
               </li>
             ))}
           </ul>
@@ -252,7 +254,7 @@ function ReconciliationWork({ data, statementDate }: { data: ReconciliationCandi
                 ? 'Cierra: libros y extracto coinciden.'
                 : `No cierra: diferencia de ${money(difference)}. ${
                     data.bank
-                      ? 'Marcá lo que figura en el extracto; los cargos que debitó el banco se registran desde «Cargos del banco sin registrar».'
+                      ? 'Marcá lo que figura en el extracto; lo que el banco hizo por su cuenta se registra desde «Movimientos del banco sin registrar».'
                       : 'Revisá qué figura en el extracto; si el banco registró comisiones o intereses, Contabilidad los registra con un asiento.'
                   }`}
             </p>

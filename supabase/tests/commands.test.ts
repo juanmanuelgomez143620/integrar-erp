@@ -4633,6 +4633,166 @@ describe('paridad de comandos', () => {
     await view('el cheque sigue esperando su fecha', 'tesoreria2')
   })
 
+  it('banco: préstamos pedidos por Gerencia, evaluados por Tesorería o por el sistema, cuotas y su registro (8c.1)', async () => {
+    const companyPg = pg(company)
+    const today = todayAR()
+    const ledger = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
+    const loans = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.bankLoans(companyPg),
+        (u) => Q.bankLoans(mock, u, company),
+      )
+    const preview = (label: string, username: string, amount: number, months: number) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.loanPreview(companyPg, amount, months),
+        (u) => Q.loanPreview(mock, u, company, amount, months),
+      )
+    const settings = (label: string, value: Partial<CompanySettings>) =>
+      step(
+        label,
+        'docente',
+        (c) => E.cmdUpdateCompanySettings(c, company, value),
+        (b) => b.commands.updateCompanySettings(companyPg, value),
+      )
+    /** Un pedido de préstamo: si sale bien, el mismo préstamo en los dos lados. */
+    const request = async (label: string, username: string, input: E.LoanRequestInput) => {
+      const result = await step(
+        label,
+        username,
+        (c) => E.cmdRequestLoan(c, company, input),
+        (b) => b.commands.requestLoan(companyPg, input),
+      )
+      if (result) loaded.link(result.mock.id, result.pg.id)
+      return result
+    }
+    const evaluate = (label: string, username: string, id: string, decision: E.LoanDecision) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdEvaluateLoan(c, id, decision),
+        (b) => b.commands.evaluateLoan(pg(id), decision),
+      )
+    const debit = (label: string, username: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdDebitLoanInstallments(c, company),
+        (b) => b.commands.debitLoanInstallments(companyPg),
+      )
+    const input: E.LoanRequestInput = {
+      amount: 1_200_000,
+      months: 12,
+      purpose: 'Capital de trabajo para la temporada alta',
+    }
+
+    // Lo opera Tesorería (desde la prueba anterior lo operaba el sistema).
+    expect(await settings('lo opera Tesorería', { bank_mode: 'ESTUDIANTES' })).not.toBeNull()
+    await preview('lo que vería el banco', 'gerencia', 1_200_000, 12)
+    await preview('un plazo que no existe', 'gerencia', 1_200_000, 10)
+    await preview('Tesorería no pide préstamos', 'tesoreria', 1_200_000, 12)
+    for (const [label, username, value] of [
+      ['Tesorería no pide préstamos', 'tesoreria', input],
+      ['un plazo que no existe', 'gerencia', { ...input, months: 10 }],
+      ['importe con tres decimales', 'gerencia', { ...input, amount: 1_000.005 }],
+      ['más que el máximo', 'gerencia', { ...input, amount: 50_000_000.01 }],
+      ['sin destino', 'gerencia', { ...input, purpose: ' x ' }],
+    ] as const)
+      expect(await request(label, username, value), label).toBeNull()
+    const first = (await request('Gerencia pide un préstamo', 'gerencia', input))!
+    expect(first, 'el pedido').not.toBeNull()
+    expect(await request('otro mientras espera', 'gerencia', input)).toBeNull()
+    await loans('el pedido para evaluar', 'tesoreria')
+
+    // La evaluación: sólo quien opera el banco y no quien lo pidió (SoD-13).
+    const id = first.mock.id
+    expect(
+      await evaluate('Gerencia no opera el banco', 'gerencia', id, { approve: true, rate: 48, months: 12 }),
+    ).toBeNull()
+    const tes = mock.sectors.find((s) => s.company_id === company && s.code === 'TES')!.id
+    await ok(
+      'el docente le suma Tesorería a Gerencia',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('gerencia'), 'TESORERIA', tes),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('gerencia')), 'TESORERIA', pg(tes)),
+    )
+    expect(
+      await evaluate('quien lo pidió no lo evalúa', 'gerencia', id, { approve: true, rate: 48, months: 12 }),
+    ).toBeNull()
+    expect(
+      await evaluate('una tasa fuera de rango', 'tesoreria', id, { approve: true, rate: 200.01, months: 12 }),
+    ).toBeNull()
+    expect(await evaluate('un plazo que no existe', 'tesoreria', id, { approve: true, rate: 48, months: 9 })).toBeNull()
+    expect(await evaluate('rechazar sin motivo', 'tesoreria', id, { approve: false, reason: ' ' })).toBeNull()
+    expect(
+      await evaluate('Tesorería lo aprueba a 6 meses y al 36,5 %', 'tesoreria', id, {
+        approve: true,
+        rate: 36.5,
+        months: 6,
+      }),
+    ).not.toBeNull()
+    expect(await evaluate('ya evaluado', 'tesoreria2', id, { approve: false, reason: 'Tarde' })).toBeNull()
+    await linkBankCharges()
+    await loans('el préstamo vigente con su cronograma', 'gerencia')
+
+    // Un rechazo, con el motivo.
+    const second = (await request('otro pedido', 'gerencia', { ...input, amount: 500_000 }))!
+    expect(
+      await evaluate('Tesorería lo rechaza', 'tesoreria2', second.mock.id, {
+        approve: false,
+        reason: 'Falta el plan de negocios',
+      }),
+    ).not.toBeNull()
+
+    // Las cuotas: nada vencido todavía; en los dos lados, las dos primeras vencen hoy.
+    expect(await debit('sin cuotas vencidas', 'tesoreria')).toBeNull()
+    for (const i of mock.bankLoanInstallments.filter((x) => x.loan_id === id && x.n <= 2)) i.due_on = today
+    await db.admin('update public.bank_loan_installments set due_on = $1 where loan_id = $2 and n <= 2', [
+      today,
+      pg(id),
+    ])
+    await loans('las cuotas vencidas', 'tesoreria2')
+    expect(await debit('Producción no opera el banco', 'produccion')).toBeNull()
+    expect(await debit('Tesorería debita las vencidas', 'tesoreria2')).not.toBeNull()
+    await linkBankCharges()
+    await sameRead(
+      'la cuenta con la acreditación y las cuotas',
+      'tesoreria',
+      (b) => b.api.bankAccount(companyPg),
+      (u) => Q.bankAccountView(mock, u, company),
+    )
+
+    // Contabilidad registra todo lo que el banco movió por su cuenta: créditos y débitos juntos.
+    await sameRead(
+      'lo que el banco movió sin registrar',
+      'contabilidad',
+      (b) => b.api.reconciliationCandidates(companyPg, pg(ledger), today),
+      (u) => Q.reconciliationCandidates(mock, u, company, ledger, today),
+    )
+    const pending = mock.bankMovements
+      .filter((m) => m.company_id === company && m.origin === 'BANCO' && !m.journal_line_id)
+      .sort((a, b) => a.seq - b.seq)
+      .map((m) => m.id)
+    expect(pending.length, 'movimientos del banco sin registrar').toBeGreaterThanOrEqual(5)
+    await created(
+      'Contabilidad registra la acreditación y las cuotas',
+      'contabilidad',
+      (c) => E.cmdRegisterBankCharges(c, company, pending),
+      (b) => b.commands.registerBankCharges(companyPg, pending.map(pg)),
+    )
+
+    // Si lo opera el sistema, decide el pedido en el momento.
+    expect(await settings('lo opera el sistema', { bank_mode: 'AUTOMATICO' })).not.toBeNull()
+    expect(
+      await request('con el sistema decide en el momento', 'gerencia', { ...input, amount: 300_000 }),
+    ).not.toBeNull()
+    await linkBankCharges()
+    await loans('decidido por el sistema', 'gerencia')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -4809,6 +4969,12 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.bankStatement(companyPg, `${year}-01-01`, `${year}-12-31`),
         (u) => Q.bankStatement(mock, u, company, `${year}-01-01`, `${year}-12-31`),
+      )
+      await sameRead(
+        `los préstamos (${username})`,
+        username,
+        (b) => b.api.bankLoans(companyPg),
+        (u) => Q.bankLoans(mock, u, company),
       )
       for (const code of ['PRV-001', 'PRV-010'])
         await sameRead(

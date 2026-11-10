@@ -224,6 +224,9 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'CARGOS_BANCARIOS', key: 'IMPUESTO_DC', code: '5.3.01.03' },
   { event: 'CARGOS_BANCARIOS', key: 'INTERESES', code: '5.3.01.01' },
   { event: 'CARGOS_BANCARIOS', key: 'RECHAZO', code: '5.3.01.03' },
+  { event: 'CARGOS_BANCARIOS', key: 'PRESTAMO', code: '2.1.02.01' },
+  { event: 'CARGOS_BANCARIOS', key: 'CUOTA_CAPITAL', code: '2.1.02.01' },
+  { event: 'CARGOS_BANCARIOS', key: 'CUOTA_INTERES', code: '5.3.01.01' },
 ]
 
 /** Rubro de las cajas y los bancos: sus cuentas imputables son desde donde se paga. */
