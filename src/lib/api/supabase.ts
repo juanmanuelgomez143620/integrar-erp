@@ -265,6 +265,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     bankStatement: (companyId, from, to) => rpc('bank_statement', { ...company(companyId), p_from: from, p_to: to }),
     bankLoans: (companyId) => rpc('bank_loans', company(companyId)),
     padron: (companyId) => rpc('padron', company(companyId)),
+    pointsOfSale: (companyId) => rpc('points_of_sale', company(companyId)),
+    authorizedVouchers: (companyId, month) => rpc('authorized_vouchers', { ...company(companyId), p_month: month }),
     loanPreview: (companyId, amount, months) =>
       rpc('loan_preview', { ...company(companyId), p_amount: amount, p_months: months }),
     cashFlow: (companyId, from, to) => rpc('cash_flow', { ...company(companyId), p_from: from, p_to: to }),
@@ -475,6 +477,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     saveTaxpayer: (companyId, input) => rpc('taxpayer_save', { ...company(companyId), p_input: input }),
     setTaxpayerActive: (companyId, taxpayerId, active) =>
       rpc('taxpayer_set_active', { ...company(companyId), p_taxpayer_id: taxpayerId, p_active: active }),
+    requestPointOfSale: (companyId, input) => rpc('point_of_sale_request', { ...company(companyId), p_input: input }),
+    decidePointOfSale: (id, decision) => rpc('point_of_sale_decide', { p_id: id, p_input: decision }),
 
     createJournalEntry: (companyId, input, confirm) =>
       rpc('je_create', { ...company(companyId), p_input: input, p_confirm: confirm }),

@@ -11,6 +11,7 @@ import type {
   BankMovementStatus,
   DeliveryStatus,
   DocType,
+  FiscoMode,
   JournalEntryOrigin,
   LoanStatus,
   ModuleCode,
@@ -18,6 +19,7 @@ import type {
   PayBasis,
   PaymentMethod,
   PayrollRates,
+  PointOfSaleStatus,
   Priority,
   ProductType,
   RoleCode,
@@ -863,6 +865,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   REGISTRAR_CARGOS_BANCO: 'Registrar movimientos del banco',
   RESOLVER_RECHAZO_BANCO: 'Resolver órdenes rechazadas por el banco',
   EVALUAR_PRESTAMO: 'Evaluar pedido de préstamo',
+  HABILITAR_PUNTO_VENTA: 'Habilitar punto de venta',
   CONSIGNA: 'Consigna del docente',
 }
 
@@ -934,6 +937,35 @@ export const BANK_MOVEMENT_STATUSES: Record<BankMovementStatus, { label: string;
   ANULADO: { label: 'Anulada', badge: 'neutral' },
 }
 
+// ---------------------------------------------------------------- Fisco simulado (Fase 8d.2)
+
+export const FISCO_MODES: Record<FiscoMode, { label: string; description: string }> = {
+  AUTOMATICO: {
+    label: 'Lo opera el sistema',
+    description: 'El fisco habilita cada punto de venta en el momento en que la empresa lo pide.',
+  },
+  ESTUDIANTES: {
+    label: 'Lo opera Impuestos',
+    description:
+      'Cada pedido de punto de venta espera hasta que lo habilita o lo rechaza un integrante de Impuestos que no lo pidió.',
+  },
+}
+
+/** Datos propios del fisco simulado (a validar). La autorización de las facturas es siempre automática. */
+export const FISCO_DEFAULTS = {
+  /** El punto de venta de la apertura de cada empresa, habilitado. */
+  opening_point_of_sale: '00001',
+  opening_point_of_sale_description: 'Casa central',
+  /** Días de vigencia del código de autorización de una factura. */
+  authorization_days: 10,
+}
+
+export const POINT_OF_SALE_STATUSES: Record<PointOfSaleStatus, { label: string; badge: Badge }> = {
+  SOLICITADO: { label: 'Pedido', badge: 'warning' },
+  HABILITADO: { label: 'Habilitado', badge: 'success' },
+  RECHAZADO: { label: 'Rechazado', badge: 'danger' },
+}
+
 // ---------------------------------------------------------------- Notificaciones
 
 export const NOTIFICATION_TYPES: Record<string, string> = {
@@ -948,6 +980,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   PRODUCCION_TERMINADA: 'Producción terminada',
   ORDEN_RECHAZADA: 'Orden rechazada por el banco',
   PRESTAMO: 'Préstamo del banco',
+  PUNTO_VENTA: 'Punto de venta',
 }
 
 // ---------------------------------------------------------------- Etiquetas

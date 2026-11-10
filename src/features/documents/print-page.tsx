@@ -399,6 +399,12 @@ export function PrintPage() {
                 {doc.fv.invoice_number || 'sin número (borrador)'}
               </div>
               <div>
+                <b>Código de autorización (simulado):</b>{' '}
+                {doc.fv.authorization_code
+                  ? `${doc.fv.authorization_code} · vence el ${date(doc.fv.authorization_due!)}`
+                  : 'sin autorizar (borrador)'}
+              </div>
+              <div>
                 <b>Vencimiento:</b> {date(doc.fv.due_date)}
               </div>
               <div>

@@ -363,6 +363,15 @@ describe('tesorería', () => {
       await same(u, () => Q.padron(mock, userId(u), company), 'padron', [companyPg])
   })
 
+  it('los puntos de venta y los comprobantes autorizados del fisco (8d.2)', async () => {
+    const month = todayAR().slice(0, 7)
+    for (const u of [...USERS, 'tesoreria2']) {
+      await same(u, () => Q.pointsOfSale(mock, userId(u), company), 'points_of_sale', [companyPg])
+      for (const m of [month, '2020-01', '2027-13', 'no-es-mes'])
+        await same(u, () => Q.authorizedVouchers(mock, userId(u), company, m), 'authorized_vouchers', [companyPg, m])
+    }
+  })
+
   it('el extracto del Banco Aula: un año, un mes sin movimientos y períodos mal armados', async () => {
     const year = new Date().getFullYear()
     const periods: [string, string][] = [

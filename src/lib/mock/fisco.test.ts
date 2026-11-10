@@ -1,20 +1,28 @@
-// Pruebas del fisco simulado (docs/FASE_8_BANCO_Y_FISCO.md §4, 8d.1): el padrón de la empresa, su
+// Pruebas del fisco simulado (docs/FASE_8_BANCO_Y_FISCO.md §4, 8d): el padrón de la empresa, su
 // alta, modificación y baja por quien opera el fisco (Impuestos) y la letra de la factura de venta,
-// que sale del padrón.
+// que sale del padrón (8d.1); los puntos de venta que pide Ventas y habilita Impuestos, y la
+// autorización de cada factura de venta (8d.2).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cuitIsValid } from '../domain/cuit'
+import type * as T from '../domain/types'
+import { addDays } from '../format'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
+  cmdAssignRole,
   cmdConfirmDeliveryNote,
+  cmdConfirmSalesInvoice,
   cmdCreateSalesInvoice,
+  cmdDecidePointOfSale,
+  cmdRequestPointOfSale,
   cmdSaveTaxpayer,
   cmdSetTaxpayerActive,
+  cmdUpdateCompanySettings,
   type Ctx,
   type TaxpayerInput,
 } from './engine'
-import { invoiceableSalesOrders, padron } from './queries'
+import { authorizedVouchers, invoiceableSalesOrders, padron, pointsOfSale } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -192,6 +200,181 @@ describe('Fisco: la letra de la factura sale del padrón', () => {
   })
 })
 
+describe('Fisco: los puntos de venta (8d.2)', () => {
+  const rows = (u = 'ventas') => pointsOfSale(db, userId(u), companyId())
+  const pending = () =>
+    db.tasks.filter(
+      (t) => t.company_id === companyId() && t.task_type === 'HABILITAR_PUNTO_VENTA' && t.status === 'PENDIENTE',
+    )
+  const request = (description = 'Local de ventas', username = 'ventas') =>
+    cmdRequestPointOfSale(ctx(username), companyId(), { description })
+  /** Una factura registrada de una unidad de la primera línea del PV-00001 (ya entregado), en ese punto de venta. */
+  const invoice = (point_of_sale?: string) => {
+    const pv = byNumber('PV-00001')
+    const line = db.soLines.find((l) => l.document_id === pv.id && l.line_no === 1)!
+    return cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      { sales_order_id: pv.id, notes: '', lines: [{ so_line_id: line.id, quantity: 1 }], point_of_sale },
+      true,
+    )
+  }
+
+  it('la demo trae el 00001 habilitado; lo ven quien lee el fisco y quien factura', () => {
+    expect(rows().map((p) => [p.number, p.description, p.status, p.requested_by_name, p.decided_by_name])).toEqual([
+      ['00001', 'Casa central', 'HABILITADO', null, null],
+    ])
+    expect(rows('contabilidad')).toHaveLength(1)
+    expect(() => rows('tesoreria')).toThrow()
+  })
+
+  it('Ventas pide uno, Impuestos lo habilita y la factura de venta lo puede usar', () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    expectBusinessError(() => request('X'), 'DATO_INVALIDO')
+    expectBusinessError(() => request('Local de ventas', 'contabilidad'), 'SIN_PERMISO')
+    const { id, number, status } = request()
+    expect([number, status]).toEqual(['00002', 'SOLICITADO'])
+    expect(db.audit.at(-1)).toMatchObject({
+      action: 'REQUEST',
+      entity_type: 'point_of_sale',
+      summary: 'Pidió al fisco habilitar el punto de venta 00002: Local de ventas',
+    })
+    expect(pending().map((t) => t.assigned_role)).toEqual(['IMPUESTOS'])
+    expect(expectBusinessError(() => request('Otro local'), 'TRANSICION_INVALIDA')).toBe(
+      'El punto de venta 00002 todavía espera la respuesta del fisco: se pide de a uno.',
+    )
+    // Mientras espera, la factura no lo puede usar.
+    expect(expectBusinessError(() => invoice('00002'), 'DATO_INVALIDO')).toBe(
+      'El punto de venta 00002 no está habilitado por el fisco: elegí uno habilitado.',
+    )
+    expectBusinessError(() => cmdDecidePointOfSale(ctx('ventas'), id, { approve: true }), 'SIN_PERMISO')
+    expectBusinessError(
+      () => cmdDecidePointOfSale(ctx('contabilidad'), id, { approve: false, reason: ' ' }),
+      'MOTIVO_REQUERIDO',
+    )
+    expect(cmdDecidePointOfSale(ctx('contabilidad'), id, { approve: true })).toEqual({ status: 'HABILITADO' })
+    expect(rows()[1]).toMatchObject({ number: '00002', status: 'HABILITADO', decided_by: userId('contabilidad') })
+    expect(rows()[1].decided_by_name).toBeTruthy()
+    expect(pending()).toEqual([])
+    expect(db.audit.at(-1)).toMatchObject({
+      action: 'APPROVE',
+      summary: 'Habilitó el punto de venta 00002: Local de ventas',
+    })
+    expect(db.notifications.at(-1)).toMatchObject({
+      type: 'PUNTO_VENTA',
+      title: 'El fisco habilitó el punto de venta 00002',
+    })
+    expectBusinessError(() => cmdDecidePointOfSale(ctx('contabilidad'), id, { approve: true }), 'TRANSICION_INVALIDA')
+    // La numeración sigue siendo por letra y punto de venta.
+    expect(byNumber(invoice('00002').display_number).fv).toMatchObject({
+      point_of_sale: '00002',
+      invoice_number: '00000001',
+    })
+    expect(byNumber(invoice().display_number).fv).toMatchObject({ point_of_sale: '00001', invoice_number: '00000001' })
+  })
+
+  it('el rechazo lleva el motivo, y su número no se vuelve a usar', () => {
+    const { id } = request('Feria de la madera')
+    cmdDecidePointOfSale(ctx('contabilidad'), id, { approve: false, reason: 'Falta la habilitación municipal' })
+    expect(rows()[1]).toMatchObject({
+      number: '00002',
+      status: 'RECHAZADO',
+      rejection_reason: 'Falta la habilitación municipal',
+    })
+    expect(db.notifications.at(-1)).toMatchObject({
+      type: 'PUNTO_VENTA',
+      title: 'El fisco rechazó el punto de venta 00002',
+      body: 'Motivo: Falta la habilitación municipal',
+    })
+    expect(db.audit.at(-1)!.summary).toBe('Rechazó el punto de venta 00002: Falta la habilitación municipal')
+    expect(request('Feria de la madera').number).toBe('00003')
+  })
+
+  it('quien lo pidió no lo decide (SoD-14)', () => {
+    const imp = db.sectors.find((s) => s.company_id === companyId() && s.code === 'IMP')!.id
+    cmdAssignRole(ctx('docente'), companyId(), userId('ventas'), 'IMPUESTOS', imp)
+    const { id } = request()
+    expect(
+      expectBusinessError(() => cmdDecidePointOfSale(ctx('ventas'), id, { approve: true }), 'SEPARACION_FUNCIONES'),
+    ).toBe('No podés decidir el punto de venta 00002: lo pediste vos.')
+    cmdDecidePointOfSale(ctx('contabilidad'), id, { approve: true })
+    expect(rows()[1].status).toBe('HABILITADO')
+  })
+
+  it('si el fisco lo opera el sistema, habilita en el momento; al pasarlo al sistema, habilita lo que esperaba', () => {
+    request()
+    expect(pending()).toHaveLength(1)
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { fisco_mode: 'AUTOMATICO' })
+    expect(rows()[1]).toMatchObject({ number: '00002', status: 'HABILITADO', decided_by: null })
+    expect(pending()).toEqual([])
+    expect(db.audit.at(-1)).toMatchObject({
+      summary: 'Cambió quién opera el fisco simulado: lo opera el sistema',
+      changes: { fisco_mode: { from: null, to: 'AUTOMATICO' } },
+    })
+    expect(request('Feria de la madera')).toMatchObject({ number: '00003', status: 'HABILITADO' })
+    expect(pending()).toEqual([])
+    expectBusinessError(
+      () => cmdUpdateCompanySettings(ctx('docente'), companyId(), { fisco_mode: 'OTRO' as never }),
+      'DATO_INVALIDO',
+    )
+    // De vuelta a Impuestos, el pedido espera con su tarea.
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { fisco_mode: 'ESTUDIANTES' })
+    request('Depósito del puerto')
+    expect(pending()).toHaveLength(1)
+  })
+})
+
+describe('Fisco: la autorización de las facturas de venta (8d.2)', () => {
+  it('al registrarla, el fisco le asigna SIM-, la fecha y el correlativo de la empresa, con 10 días de vigencia', () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const pv = byNumber('PV-00001')
+    const [first, second] = db.soLines.filter((l) => l.document_id === pv.id).sort((a, b) => a.line_no - b.line_no)
+    const draft = cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      { sales_order_id: pv.id, notes: '', lines: [{ so_line_id: first.id, quantity: first.qty_delivered }] },
+      false,
+    )
+    expect(byNumber(draft.display_number).fv).toMatchObject({
+      point_of_sale: '00001',
+      authorization_code: null,
+      authorization_due: null,
+    })
+    cmdConfirmSalesInvoice(ctx('ventas'), draft.id)
+    const fv = byNumber(draft.display_number)
+    const day = fv.document_date.replaceAll('-', '')
+    expect(fv.fv).toMatchObject({
+      authorization_code: `SIM-${day}000001`,
+      authorization_due: addDays(fv.document_date, 10),
+    })
+    expect(db.audit.find((a) => a.document_id === draft.id && a.action === 'CONFIRM')!.summary).toMatch(
+      new RegExp(`, autorizada por el fisco con el código SIM-${day}000001$`),
+    )
+    const other = cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      { sales_order_id: pv.id, notes: '', lines: [{ so_line_id: second.id, quantity: second.qty_delivered }] },
+      true,
+    )
+    expect(byNumber(other.display_number).fv!.authorization_code).toBe(`SIM-${day}000002`)
+    const month = fv.document_date.slice(0, 7)
+    expect(
+      authorizedVouchers(db, userId('contabilidad'), companyId(), month).map((v) => [
+        v.display_number,
+        v.authorization_code,
+        v.invoice_label,
+        v.status,
+      ]),
+    ).toEqual([
+      [draft.display_number, `SIM-${day}000001`, 'A 00001-00000001', 'REGISTRADA'],
+      [other.display_number, `SIM-${day}000002`, 'A 00001-00000002', 'REGISTRADA'],
+    ])
+    expect(authorizedVouchers(db, userId('contabilidad'), companyId(), '2020-01')).toEqual([])
+    expectBusinessError(() => authorizedVouchers(db, userId('contabilidad'), companyId(), '2027-13'), 'DATO_INVALIDO')
+    expect(() => authorizedVouchers(db, userId('tesoreria'), companyId(), month)).toThrow()
+  })
+})
+
 describe('Fisco: las bases guardadas', () => {
   it('una base de la versión 27 recibe el padrón', () => {
     const old = structuredClone(db) as Partial<DB> & { version: number }
@@ -205,5 +388,40 @@ describe('Fisco: las bases guardadas', () => {
     expect(db.taxpayers.some((t) => t.cuit === db.companies[0].tax_id)).toBe(true)
     expect(db.suppliers.find((x) => x.code === 'PRV-003')!.tax_id).toBe('33-00000102-9')
     expect(db.taxpayers.some((t) => t.cuit === '33-00000102-9')).toBe(true)
+  })
+
+  it('una base de la versión 28 recibe el punto de venta 00001 y el código de sus facturas registradas', () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const pv = byNumber('PV-00001')
+    const line = db.soLines.find((l) => l.document_id === pv.id && l.line_no === 1)!
+    const sale = (register: boolean) =>
+      cmdCreateSalesInvoice(
+        ctx('ventas'),
+        companyId(),
+        { sales_order_id: pv.id, notes: '', lines: [{ so_line_id: line.id, quantity: 1 }] },
+        register,
+      )
+    const registered = sale(true)
+    const draft = sale(false)
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    delete old.pointsOfSale
+    for (const d of old.documents!)
+      if (d.fv) {
+        const fv: Partial<T.SalesInvoiceHeader> = d.fv
+        delete fv.authorization_code
+        delete fv.authorization_due
+      }
+    old.version = 28
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    expect(pointsOfSale(db, userId('ventas'), companyId()).map((p) => [p.number, p.status])).toEqual([
+      ['00001', 'HABILITADO'],
+    ])
+    const fv = byNumber(registered.display_number)
+    expect(fv.fv).toMatchObject({
+      authorization_code: `SIM-${fv.document_date.replaceAll('-', '')}000001`,
+      authorization_due: addDays(fv.document_date, 10),
+    })
+    expect(byNumber(draft.display_number).fv).toMatchObject({ authorization_code: null, authorization_due: null })
   })
 })

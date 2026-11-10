@@ -13,6 +13,7 @@ import { money, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+import { usePointsOfSale } from '@/features/fisco/points-of-sale-page'
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
 
@@ -45,6 +46,9 @@ function SalesInvoiceForm({ orders }: { orders: InvoiceableSalesOrder[] }) {
   )
   const order = orders.find((o) => o.order.id === orderId)
   const [notes, setNotes] = useState('')
+  // Un punto de venta habilitado por el fisco simulado (8d.2): el 00001 por defecto.
+  const [pointOfSale, setPointOfSale] = useState('00001')
+  const enabled = (usePointsOfSale().data ?? []).filter((p) => p.status === 'HABILITADO')
   const [quantities, setQuantities] = useState<Record<string, string>>(() => pendingOf(order))
   const [confirming, setConfirming] = useState(false)
 
@@ -75,6 +79,7 @@ function SalesInvoiceForm({ orders }: { orders: InvoiceableSalesOrder[] }) {
         {
           sales_order_id: orderId,
           notes,
+          point_of_sale: pointOfSale,
           lines: (order?.lines ?? []).map((l) => ({ so_line_id: l.line.id, quantity: parsed[l.line.id] ?? 0 })),
         },
         register,
@@ -107,7 +112,7 @@ function SalesInvoiceForm({ orders }: { orders: InvoiceableSalesOrder[] }) {
       <PageHeader
         crumbs={crumbs}
         title="Nueva factura de venta"
-        description="Se factura lo entregado y todavía sin facturar, a los precios del pedido. Al registrarla recibe su número, genera el asiento de venta y la deuda del cliente."
+        description="Se factura lo entregado y todavía sin facturar, a los precios del pedido, desde un punto de venta habilitado por el fisco simulado. Al registrarla recibe su número y el código de autorización del fisco, y genera el asiento de venta y la deuda del cliente."
       />
       <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
         <div className="flex min-w-0 flex-col gap-4">
@@ -137,6 +142,19 @@ function SalesInvoiceForm({ orders }: { orders: InvoiceableSalesOrder[] }) {
                   placeholder="Elegí el pedido"
                 />
               </Field>
+              {order && (
+                <Field label="Punto de venta" required hint="Los pide Ventas y los habilita el fisco simulado.">
+                  <SimpleSelect
+                    value={pointOfSale}
+                    onChange={setPointOfSale}
+                    options={(enabled.length ? enabled : [{ number: '00001', description: '' }]).map((p) => ({
+                      value: p.number,
+                      label: p.description ? `${p.number} · ${p.description}` : p.number,
+                    }))}
+                    aria-label="Punto de venta"
+                  />
+                </Field>
+              )}
               {order && (
                 <Field label="Observaciones" className="sm:col-span-2">
                   <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional" />
@@ -219,7 +237,7 @@ function SalesInvoiceForm({ orders }: { orders: InvoiceableSalesOrder[] }) {
           open={confirming}
           onOpenChange={setConfirming}
           title="Registrar factura"
-          description={`Se emite la factura ${order.letter} a ${order.order.customer_name} por ${money(totals.total)}: recibe su número, se genera el asiento de venta y la deuda queda en la cuenta corriente del cliente.`}
+          description={`Se emite la factura ${order.letter} del punto de venta ${pointOfSale} a ${order.order.customer_name} por ${money(totals.total)}: recibe su número y el código de autorización del fisco, se genera el asiento de venta y la deuda queda en la cuenta corriente del cliente.`}
           confirmLabel="Registrar"
           busy={save.isPending}
           onConfirm={() => save.mutate([true])}

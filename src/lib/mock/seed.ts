@@ -38,6 +38,7 @@ import {
   openBankAccount,
   scanStockAlerts,
   insertPadron,
+  openPointOfSale,
   startAccounting,
   type Ctx,
 } from './engine'
@@ -165,6 +166,7 @@ export function buildSeed(): DB {
     bankLoans: [],
     bankLoanInstallments: [],
     taxpayers: [],
+    pointsOfSale: [],
     jobCategories: [],
     employees: [],
     pyLines: [],
@@ -498,6 +500,8 @@ export function buildSeed(): DB {
   openBankAccount(ctx(null, 290), companyId)
   // El padrón del fisco simulado: la empresa y sus proveedores y clientes con CUIT.
   insertPadron(ctx(null, 290), companyId)
+  // El punto de venta 00001, habilitado por el fisco (Fase 8d.2).
+  openPointOfSale(ctx(null, 290), companyId)
 
   // ------------------------------------------------------------ Listas de materiales y centros de trabajo (a validar)
   insertWorkCenters(ctx(null, 289), companyId, DEMO_WORK_CENTERS)

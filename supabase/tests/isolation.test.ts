@@ -121,6 +121,7 @@ async function snapshot(company: string) {
     'bank_loans',
     'bank_loan_installments',
     'taxpayers',
+    'points_of_sale',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -272,8 +273,8 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_user_id: u.alumnoB,
     p_user_ids: `{${u.alumnoB}}`,
     p_member_role_id: B.memberRole,
-    // La orden que se reenvía al banco es un movimiento de la cuenta de B.
-    p_id: fn === 'bank_order_resend' ? B.bankMovement : B.product,
+    // La orden que se reenvía al banco es un movimiento de la cuenta de B; el punto de venta, el pedido de B.
+    p_id: fn === 'bank_order_resend' ? B.bankMovement : fn === 'point_of_sale_decide' ? B.pointOfSale : B.product,
     p_kind: fn === 'export_rows' ? 'stock' : 'product',
     p_slug: B.slug,
     // La lista de B se busca por su código.
@@ -332,6 +333,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_taxpayer_id: B.taxpayer,
     p_amount: 1000000,
     p_months: 12,
+    p_month: '2027-05',
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {
@@ -726,6 +728,13 @@ beforeAll(async () => {
     await rpc<{ id: string }>('docenteB', 'loan_request', {
       p_company_id: B.id,
       p_input: JSON.stringify({ amount: 1000000, months: 12, purpose: 'Capital de trabajo' }),
+    })
+  ).id
+  // El pedido de punto de venta de B, esperando que lo decida su fisco.
+  B.pointOfSale = (
+    await rpc<{ id: string }>('docenteB', 'point_of_sale_request', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({ description: 'Local de B' }),
     })
   ).id
   // La hoja de ruta de B, con su remito despachado.

@@ -320,6 +320,28 @@ async function padron(company: string) {
   ).map((t) => [t.cuit, t.legal_name, t.vat_condition, t.activity, t.province, t.is_active])
 }
 
+/** Los puntos de venta de la demo (Fase 8d.2): el 00001, habilitado por el sistema. */
+const mockPointsOfSale = seed.pointsOfSale
+  .filter((p) => p.company_id === mockTemplate.id)
+  .map((p) => [p.number, p.description, p.status, p.requested_by, p.decided_by, p.rejection_reason])
+
+async function pointsOfSale(company: string) {
+  return (
+    await db.admin<{
+      number: string
+      description: string
+      status: string
+      requested_by: string | null
+      decided_by: string | null
+      rejection_reason: string | null
+    }>(
+      `select number, description, status, requested_by, decided_by, rejection_reason from public.points_of_sale
+        where company_id = $1 order by number collate "C"`,
+      [company],
+    )
+  ).map((p) => [p.number, p.description, p.status, p.requested_by, p.decided_by, p.rejection_reason])
+}
+
 /** El préstamo de la apertura de la demo (Fase 8c.2) y su cronograma. */
 const mockOpeningLoan = (() => {
   const loan = seed.bankLoans.find((l) => l.company_id === mockTemplate.id && l.opening)!
@@ -577,6 +599,11 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await vehicles(template)).toEqual(mockVehicles)
   })
 
+  it('tiene el punto de venta 00001 habilitado, como la demo (8d.2)', async () => {
+    expect(mockPointsOfSale).toEqual([['00001', 'Casa central', 'HABILITADO', null, null, null]])
+    expect(await pointsOfSale(template)).toEqual(mockPointsOfSale)
+  })
+
   it('tiene el mismo padrón del fisco que la demo (8d.1)', async () => {
     expect(mockPadron.length).toBeGreaterThan(10)
     expect(await padron(template)).toEqual(mockPadron)
@@ -707,6 +734,7 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(movements).toEqual([mockBank.start])
     expect(await openingLoan(created.id)).toEqual(mockOpeningLoan)
     expect(await padron(created.id)).toEqual(mockPadron)
+    expect(await pointsOfSale(created.id)).toEqual(mockPointsOfSale)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {

@@ -147,10 +147,15 @@ export interface CompanySettings {
   iibb_pct?: number
   /** Quién opera el Banco Aula (Fase 8a); sin el dato, Tesorería. */
   bank_mode?: BankMode
+  /** Quién opera el fisco simulado (Fase 8d.2); sin el dato, Impuestos. */
+  fisco_mode?: FiscoMode
 }
 
 /** El Banco Aula lo operan los estudiantes de Tesorería o, si el docente lo pide, el sistema (responde en el momento). */
 export type BankMode = 'AUTOMATICO' | 'ESTUDIANTES'
+
+/** El fisco simulado lo operan los estudiantes de Impuestos o, si el docente lo pide, el sistema (habilita en el momento). */
+export type FiscoMode = 'AUTOMATICO' | 'ESTUDIANTES'
 
 /** Porcentajes de la liquidación de sueldos (a validar: sin pretensión de exactitud legal). */
 export interface PayrollRates {
@@ -431,6 +436,28 @@ export interface Taxpayer extends Audited {
   province: string
   /** Dado de baja: deja de contar para la letra de las facturas (no se borra). */
   is_active: boolean
+}
+
+export type PointOfSaleStatus = 'SOLICITADO' | 'HABILITADO' | 'RECHAZADO'
+
+/**
+ * Un punto de venta de la empresa ante el fisco simulado (Fase 8d.2): lo pide quien factura y lo
+ * habilita o lo rechaza quien opera el fisco. Sólo se factura con uno habilitado.
+ */
+export interface PointOfSale extends Audited {
+  id: string
+  company_id: string
+  /** 00001: el que sigue a los que ya hay, también a los rechazados. */
+  number: string
+  description: string
+  status: PointOfSaleStatus
+  /** null: el de la apertura de la empresa. */
+  requested_by: string | null
+  requested_on: string
+  /** null: lo habilitó el sistema (el de la apertura o con el fisco operado por el sistema). */
+  decided_by: string | null
+  decided_on: string | null
+  rejection_reason: string | null
 }
 
 export type LoanStatus = 'SOLICITADO' | 'RECHAZADO' | 'VIGENTE' | 'CANCELADO'
@@ -864,12 +891,17 @@ export interface SalesInvoiceHeader {
   sales_order_id: string
   /** A a responsables inscriptos y monotributistas, B a exentos y consumidores finales; C si la empresa no es responsable inscripta. */
   letter: 'A' | 'B' | 'C'
+  /** Uno habilitado por el fisco simulado (Fase 8d.2): el 00001 por defecto. */
   point_of_sale: string
   /** Correlativo por letra: se asigna al registrarla (vacío en borrador). */
   invoice_number: string
   /** Fecha de la factura más la condición de pago del pedido. */
   due_date: string
   registered_at: string | null
+  /** Código de autorización simulado que asigna el fisco al registrarla (SIM- y 14 dígitos); null en borrador. */
+  authorization_code: string | null
+  /** Vencimiento del código: 10 días después de la fecha de la factura. */
+  authorization_due: string | null
 }
 
 /** Presupuesto (tabla sales_quotes, 1 a 1 con documents): lo que Ventas le cotiza a un cliente y hasta cuándo vale la oferta. */

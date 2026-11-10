@@ -19,7 +19,7 @@ import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { AuditTimeline } from '@/components/common/audit-timeline'
 import { api, commands, type MemberView } from '@/lib/api'
-import { BANK_MODES, MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
+import { BANK_MODES, FISCO_MODES, MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
 import type { ModuleCode, RoleCode } from '@/lib/domain/types'
 import { relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
@@ -246,6 +246,22 @@ export function TeacherPage() {
                   disabled={setSettings.isPending}
                   checked={(company.company.settings.bank_mode ?? 'ESTUDIANTES') === 'ESTUDIANTES'}
                   onCheckedChange={(v) => setSettings.mutate([{ bank_mode: v ? 'ESTUDIANTES' : 'AUTOMATICO' }])}
+                />
+              </li>
+              <li className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium">Fisco simulado operado por Impuestos</div>
+                  <div className="text-xs text-muted-foreground">
+                    {FISCO_MODES[company.company.settings.fisco_mode ?? 'ESTUDIANTES'].description} Desactivado, el
+                    fisco habilita solo los puntos de venta que pide Ventas; al desactivarlo, habilita los que
+                    esperaban. La autorización de las facturas es siempre automática.
+                  </div>
+                </div>
+                <Switch
+                  aria-label="Fisco simulado operado por Impuestos"
+                  disabled={setSettings.isPending}
+                  checked={(company.company.settings.fisco_mode ?? 'ESTUDIANTES') === 'ESTUDIANTES'}
+                  onCheckedChange={(v) => setSettings.mutate([{ fisco_mode: v ? 'ESTUDIANTES' : 'AUTOMATICO' }])}
                 />
               </li>
             </ul>

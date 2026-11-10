@@ -1207,6 +1207,16 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
             <span className="text-muted-foreground">sin número (se asigna al registrarla)</span>
           )}
         </InfoRow>
+        <InfoRow label="Autorización del fisco">
+          {doc.fv.authorization_code ? (
+            <>
+              <span className="font-mono">{doc.fv.authorization_code}</span> · vence el{' '}
+              {date(doc.fv.authorization_due!)}
+            </>
+          ) : (
+            <span className="text-muted-foreground">el fisco simulado la autoriza al registrarla</span>
+          )}
+        </InfoRow>
         <InfoRow label="Fecha">{date(doc.document_date)}</InfoRow>
         <InfoRow label="Vencimiento">{date(doc.fv.due_date)}</InfoRow>
         <InfoRow label="Pedido de venta">

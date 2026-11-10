@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261111120200_demo_template_fisco.sql'
+const target = process.argv[2] ?? '20261112120100_demo_template_puntos_de_venta.sql'
 
 const server = await createServer({
   root,
@@ -594,6 +594,8 @@ ${stockBlocks}
   -- La cuenta en el Banco Aula, con el saldo inicial del asiento de apertura (Fase 8a).
   perform private.bank_open_account(v_id);
   perform private.insert_padron(v_id);
+  -- El punto de venta 00001, habilitado por el fisco (Fase 8d.2).
+  perform private.open_point_of_sale(v_id);
   perform private.scan_stock_alerts(v_id);
   return v_id;
 end;

@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createSupabaseBackend } from '../../src/lib/api/supabase'
 import { cuitIsValid } from '../../src/lib/domain/cuit'
 import { addDays, todayAR } from '../../src/lib/format'
-import type { CompanySettings, DocType } from '../../src/lib/domain/types'
+import type { CompanySettings, DocType, FiscoMode } from '../../src/lib/domain/types'
 import type { DB } from '../../src/lib/mock/db'
 import * as E from '../../src/lib/mock/engine'
 import * as Q from '../../src/lib/mock/queries'
@@ -4889,6 +4889,152 @@ describe('paridad de comandos', () => {
     }
   })
 
+  it('fisco: los puntos de venta que pide Ventas y habilita Impuestos, y la autorización de la factura (8d.2)', async () => {
+    const companyPg = pg(company)
+    const request = (label: string, username: string, description: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdRequestPointOfSale(c, company, { description }),
+        (b) => b.commands.requestPointOfSale(companyPg, { description }),
+      )
+    const requested = async (label: string, description: string) => {
+      const result = await ok(
+        label,
+        'ventas',
+        (c) => E.cmdRequestPointOfSale(c, company, { description }),
+        (b) => b.commands.requestPointOfSale(companyPg, { description }),
+      )
+      expect(result.pg).toMatchObject({ number: result.mock.number, status: result.mock.status })
+      loaded.link(result.mock.id, result.pg.id)
+      return result.mock.id
+    }
+    const decide = (label: string, username: string, id: string, decision: E.PointOfSaleDecision) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdDecidePointOfSale(c, id, decision),
+        (b) => b.commands.decidePointOfSale(pg(id), decision),
+      )
+    const fiscoMode = (label: string, fisco_mode: FiscoMode) =>
+      ok(
+        label,
+        'docente',
+        (c) => E.cmdUpdateCompanySettings(c, company, { fisco_mode }),
+        (b) => b.commands.updateCompanySettings(companyPg, { fisco_mode }),
+      )
+    const read = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.pointsOfSale(companyPg),
+        (u) => Q.pointsOfSale(mock, u, company),
+      )
+    // Las tareas creadas en el mismo instante no tienen un orden definido entre sí.
+    const tasks = (label: string, username: string) =>
+      sameRead(
+        label,
+        username,
+        (b) => b.api.tasks(companyPg, 'mine', true),
+        (u) => Q.listTasks(mock, u, company, 'mine', true),
+        (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
+      )
+
+    await read('los puntos de venta de la demo', 'ventas')
+    expect(await request('una descripción de una letra', 'ventas', 'X')).toBeNull()
+    expect(await request('Impuestos no pide puntos de venta', 'contabilidad', 'Local de ventas')).toBeNull()
+    const rejected = await requested('Ventas pide uno', 'Local de ventas')
+    await tasks('la tarea de Impuestos', 'contabilidad')
+    expect(await request('se pide de a uno', 'ventas', 'Otro local')).toBeNull()
+    expect(await decide('Ventas no lo decide', 'ventas', rejected, { approve: true })).toBeNull()
+    expect(await decide('rechazarlo sin motivo', 'contabilidad', rejected, { approve: false, reason: ' ' })).toBeNull()
+    expect(
+      await decide('Impuestos lo rechaza', 'contabilidad', rejected, {
+        approve: false,
+        reason: 'Falta la habilitación municipal',
+      }),
+    ).not.toBeNull()
+    expect(await decide('ya está rechazado', 'contabilidad', rejected, { approve: true })).toBeNull()
+    const enabled = await requested('lo pide otra vez', 'Local de ventas')
+    expect(await decide('Impuestos lo habilita', 'contabilidad', enabled, { approve: true })).not.toBeNull()
+    await read('el rechazado y el habilitado', 'contabilidad')
+    await tasks('sin la tarea', 'contabilidad')
+
+    // SoD-14: con el rol de Impuestos, Ventas no decide lo que pidió.
+    const imp = mock.sectors.find((s) => s.company_id === company && s.code === 'IMP')!.id
+    await ok(
+      'el docente le suma Impuestos a Ventas',
+      'docente',
+      (c) => E.cmdAssignRole(c, company, mockId('ventas'), 'IMPUESTOS', imp),
+      (b) => b.commands.assignRole(companyPg, pg(mockId('ventas')), 'IMPUESTOS', pg(imp)),
+    )
+    const waiting = await requested('un pedido que espera', 'Feria de la madera')
+    expect(await decide('quien lo pidió no lo decide', 'ventas', waiting, { approve: true })).toBeNull()
+
+    // El fisco operado por el sistema: habilita lo que esperaba y lo que se pide.
+    await fiscoMode('el fisco pasa al sistema', 'AUTOMATICO')
+    await requested('con el sistema, se habilita en el momento', 'Depósito del puerto')
+    await fiscoMode('vuelve a Impuestos', 'ESTUDIANTES')
+    await read('los habilitados por el sistema', 'ventas')
+
+    // La factura de venta elige un punto de venta habilitado y el fisco la autoriza al registrarla.
+    const target = Q.invoiceableSalesOrders(mock, mockId('ventas'), company).find((o) =>
+      o.lines.some((l) => l.pending >= 1),
+    )
+    expect(target, 'un pedido con algo para facturar').toBeTruthy()
+    const line = target!.lines.find((l) => l.pending >= 1)!.line
+    const invoice = (point_of_sale: string) => ({
+      input: {
+        sales_order_id: target!.order.id,
+        notes: '',
+        lines: [{ so_line_id: line.id, quantity: 1 }],
+        point_of_sale,
+      },
+      pgInput: {
+        sales_order_id: pg(target!.order.id),
+        notes: '',
+        lines: [{ so_line_id: pg(line.id), quantity: 1 }],
+        point_of_sale,
+      },
+    })
+    for (const [label, pos] of [
+      ['un punto de venta rechazado', '00002'],
+      ['uno que no existe', '00009'],
+    ] as const)
+      expect(
+        await step(
+          label,
+          'ventas',
+          (c) => E.cmdCreateSalesInvoice(c, company, invoice(pos).input, true),
+          (b) => b.commands.createSalesInvoice(companyPg, invoice(pos).pgInput, true),
+        ),
+        label,
+      ).toBeNull()
+    const number = Q.pointsOfSale(mock, mockId('ventas'), company).find((p) => p.id === enabled)!.number
+    const fv = await created(
+      'una factura en el punto de venta habilitado',
+      'ventas',
+      (c) => E.cmdCreateSalesInvoice(c, company, invoice(number).input, true),
+      (b) => b.commands.createSalesInvoice(companyPg, invoice(number).pgInput, true),
+    )
+    const doc = mock.documents.find((d) => d.id === fv)!
+    expect(doc.fv).toMatchObject({ point_of_sale: number, invoice_number: '00000001' })
+    expect(doc.fv!.authorization_code).toMatch(/^SIM-\d{14}$/)
+    await sameRead(
+      'la factura autorizada',
+      'ventas',
+      (b) => b.api.document(companyPg, 'SALES_INVOICE', doc.display_number),
+      (u) => Q.documentDetail(mock, u, company, 'SALES_INVOICE', doc.display_number),
+    )
+    for (const username of ['contabilidad', 'gerencia', 'tesoreria'])
+      await sameRead(
+        `los comprobantes autorizados del mes (${username})`,
+        username,
+        (b) => b.api.authorizedVouchers(companyPg, doc.document_date.slice(0, 7)),
+        (u) => Q.authorizedVouchers(mock, u, company, doc.document_date.slice(0, 7)),
+      )
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [
@@ -5077,6 +5223,18 @@ describe('paridad de comandos', () => {
         username,
         (b) => b.api.padron(companyPg),
         (u) => Q.padron(mock, u, company),
+      )
+      await sameRead(
+        `los puntos de venta (${username})`,
+        username,
+        (b) => b.api.pointsOfSale(companyPg),
+        (u) => Q.pointsOfSale(mock, u, company),
+      )
+      await sameRead(
+        `los comprobantes autorizados del mes (${username})`,
+        username,
+        (b) => b.api.authorizedVouchers(companyPg, todayAR().slice(0, 7)),
+        (u) => Q.authorizedVouchers(mock, u, company, todayAR().slice(0, 7)),
       )
       for (const code of ['PRV-001', 'PRV-010'])
         await sameRead(

@@ -4,6 +4,7 @@
 import type { ComponentType } from 'react'
 import {
   ArrowLeftRight,
+  BadgeCheck,
   BadgeDollarSign,
   Banknote,
   Bell,
@@ -47,6 +48,7 @@ import {
   ScrollText,
   ShoppingCart,
   SlidersHorizontal,
+  Store,
   Tags,
   TrendingUp,
   Truck,
@@ -222,7 +224,11 @@ export const NAV: NavGroup[] = [
   {
     // El fisco del entorno de la empresa, que opera Impuestos (Fase 8d).
     label: 'Fisco simulado',
-    items: [{ label: 'Padrón', path: 'fisco/padron', icon: ScrollText, permission: 'fisco.read' }],
+    items: [
+      { label: 'Padrón', path: 'fisco/padron', icon: ScrollText, permission: 'fisco.read' },
+      { label: 'Puntos de venta', path: 'fisco/puntos-de-venta', icon: Store, permission: 'fisco.read' },
+      { label: 'Comprobantes autorizados', path: 'fisco/comprobantes', icon: BadgeCheck, permission: 'fisco.read' },
+    ],
   },
   {
     label: 'Contabilidad',

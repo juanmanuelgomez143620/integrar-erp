@@ -14,9 +14,12 @@ import {
   BOM_COMPONENT_TYPES,
   DOC_STATUSES,
   DOC_TYPES,
+  FISCO_DEFAULTS,
+  FISCO_MODES,
   MODULES,
   IIBB_DEFAULT_PCT,
   PAYROLL_DEFAULT_RATES,
+  POINT_OF_SALE_STATUSES,
   POSTING_EVENTS,
   PRODUCT_TYPES,
   ROLES,
@@ -5153,6 +5156,217 @@ export function cmdSetTaxpayerActive(ctx: Ctx, companyId: string, taxpayerId: st
   })
 }
 
+// Puntos de venta (8d.2): los pide quien factura y los habilita o rechaza quien opera el fisco.
+
+export const fiscoMode = (company: T.Company): T.FiscoMode => company.settings.fisco_mode ?? 'ESTUDIANTES'
+
+const pointOfSaleLabel = (pos: T.PointOfSale) => `Punto de venta ${pos.number}`
+
+/** El punto de venta 00001 de la apertura, habilitado: la plantilla y cada empresa nueva. Idempotente. */
+export function openPointOfSale(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  if (db.pointsOfSale.some((p) => p.company_id === companyId)) return
+  const today = businessDate(getCompany(db, companyId))
+  db.pointsOfSale.push({
+    id: uid(),
+    company_id: companyId,
+    number: FISCO_DEFAULTS.opening_point_of_sale,
+    description: FISCO_DEFAULTS.opening_point_of_sale_description,
+    status: 'HABILITADO',
+    requested_by: null,
+    requested_on: today,
+    decided_by: null,
+    decided_on: today,
+    rejection_reason: null,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  })
+}
+
+/** El fisco decide un pedido: lo habilita (sin motivo) o lo rechaza con el motivo. Ventas recibe el aviso. */
+function decidePointOfSale(ctx: Ctx, pos: T.PointOfSale, reason: string | null, userId: string | null) {
+  const company = getCompany(ctx.db, pos.company_id)
+  Object.assign(pos, {
+    status: reason === null ? 'HABILITADO' : 'RECHAZADO',
+    decided_by: userId,
+    decided_on: businessDate(company),
+    rejection_reason: reason,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  })
+  notifyRoles(ctx, pos.company_id, ['VENTAS'], {
+    type: 'PUNTO_VENTA',
+    title:
+      reason === null
+        ? `El fisco habilitó el punto de venta ${pos.number}`
+        : `El fisco rechazó el punto de venta ${pos.number}`,
+    body: reason === null ? 'Ya se puede elegir al crear una factura de venta.' : `Motivo: ${reason}`,
+    link_path: `/e/${company.slug}/fisco/puntos-de-venta`,
+  })
+}
+
+/** Mientras haya un pedido sin decidir y lo opere Impuestos, Impuestos tiene la tarea de decidirlo. */
+function syncPointOfSaleTask(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const company = getCompany(db, companyId)
+  const pending =
+    fiscoMode(company) === 'ESTUDIANTES' &&
+    db.pointsOfSale.some((p) => p.company_id === companyId && p.status === 'SOLICITADO')
+  const open = db.tasks.find(
+    (t) =>
+      t.company_id === companyId &&
+      t.task_type === 'HABILITAR_PUNTO_VENTA' &&
+      (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+  )
+  if (!pending) {
+    if (open) {
+      open.status = 'RESUELTA'
+      open.completed_by = ctx.userId
+      open.completed_at = ctx.now
+    }
+    return
+  }
+  if (open) return
+  const task: T.Task = {
+    id: uid(),
+    company_id: companyId,
+    document_id: null,
+    task_type: 'HABILITAR_PUNTO_VENTA',
+    title: 'Habilitar el punto de venta que pidió Ventas',
+    description:
+      'Ventas pidió habilitar un punto de venta: lo habilita o lo rechaza, desde Fisco simulado → Puntos de venta, un integrante de Impuestos que no lo pidió.',
+    origin_status: null,
+    context: {},
+    assigned_role: 'IMPUESTOS',
+    assigned_user_id: null,
+    status: 'PENDIENTE',
+    priority: 'NORMAL',
+    source: 'SISTEMA',
+    claimed_by: null,
+    claimed_at: null,
+    completed_by: null,
+    completed_at: null,
+    created_by: null,
+    created_at: ctx.now,
+  }
+  db.tasks.push(task)
+  notifyRoles(ctx, companyId, ['IMPUESTOS'], {
+    type: 'NUEVA_TAREA',
+    title: 'Pedido de punto de venta',
+    body: 'Ventas pidió habilitar un punto de venta: habilitalo o rechazalo desde Fisco simulado → Puntos de venta.',
+    link_path: `/e/${company.slug}/fisco/puntos-de-venta`,
+    task_id: task.id,
+  })
+}
+
+/** Al cambiar quién opera el fisco: si pasa al sistema, habilita lo que esperaba; si vuelve a Impuestos, le abre su tarea. */
+function settleFisco(ctx: Ctx, company: T.Company) {
+  if (fiscoMode(company) === 'AUTOMATICO')
+    for (const pos of ctx.db.pointsOfSale.filter((p) => p.company_id === company.id && p.status === 'SOLICITADO'))
+      decidePointOfSale(ctx, pos, null, null)
+  syncPointOfSaleTask(ctx, company.id)
+}
+
+export interface PointOfSaleInput {
+  /** Para qué es: de 3 a 60 caracteres. */
+  description: string
+}
+
+/**
+ * Quien factura pide habilitar un punto de venta nuevo, con el número que sigue a los que ya hay
+ * (también a los rechazados). Uno por vez; si el fisco lo opera el sistema, queda habilitado.
+ */
+export function cmdRequestPointOfSale(ctx: Ctx, companyId: string, input: PointOfSaleInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'sales_invoice.create')
+  const description = (input.description ?? '').trim()
+  if (description.length < 3 || description.length > 60)
+    fail('DATO_INVALIDO', 'Indicá para qué es el punto de venta (de 3 a 60 caracteres).')
+  const own = db.pointsOfSale.filter((p) => p.company_id === companyId)
+  const waiting = own.find((p) => p.status === 'SOLICITADO')
+  if (waiting)
+    fail(
+      'TRANSICION_INVALIDA',
+      `El punto de venta ${waiting.number} todavía espera la respuesta del fisco: se pide de a uno.`,
+    )
+  const company = getCompany(db, companyId)
+  const pos: T.PointOfSale = {
+    id: uid(),
+    company_id: companyId,
+    number: String(own.reduce((max, p) => Math.max(max, Number(p.number)), 0) + 1).padStart(5, '0'),
+    description,
+    status: 'SOLICITADO',
+    requested_by: ctx.userId,
+    requested_on: businessDate(company),
+    decided_by: null,
+    decided_on: null,
+    rejection_reason: null,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.pointsOfSale.push(pos)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'REQUEST',
+    entity_type: 'point_of_sale',
+    entity_id: pos.id,
+    entity_label: pointOfSaleLabel(pos),
+    summary: `Pidió al fisco habilitar el punto de venta ${pos.number}: ${description}`,
+  })
+  if (fiscoMode(company) === 'AUTOMATICO') decidePointOfSale(ctx, pos, null, null)
+  syncPointOfSaleTask(ctx, companyId)
+  return { id: pos.id, number: pos.number, status: pos.status }
+}
+
+export type PointOfSaleDecision = { approve: true } | { approve: false; reason: string }
+
+/** Quien opera el fisco habilita un pedido o lo rechaza con el motivo. Quien lo pidió no lo decide (SoD-14). */
+export function cmdDecidePointOfSale(ctx: Ctx, posId: string, decision: PointOfSaleDecision) {
+  const { db } = ctx
+  const pos = db.pointsOfSale.find((p) => p.id === posId)
+  if (!pos) fail('DATO_INVALIDO', 'El punto de venta no existe.')
+  const actor = requirePermission(ctx, pos.company_id, 'fisco.operate')
+  if (pos.status !== 'SOLICITADO')
+    fail(
+      'TRANSICION_INVALIDA',
+      `El punto de venta ${pos.number} ya está ${POINT_OF_SALE_STATUSES[pos.status].label.toLowerCase()}.`,
+    )
+  const sod =
+    getCompany(db, pos.company_id).settings.sod_enabled &&
+    !effectivePermissions(db, ctx.userId!, pos.company_id).supervisor
+  if (sod && pos.requested_by === ctx.userId)
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés decidir el punto de venta ${pos.number}: lo pediste vos.`,
+      'Separación de funciones (SoD-14): quien pide un punto de venta no lo habilita. Lo decide otro integrante de Impuestos.',
+    )
+  let reason: string | null = null
+  if (!decision.approve) {
+    reason = (decision.reason ?? '').trim()
+    if (reason.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo del rechazo: lo recibe Ventas.')
+  }
+  decidePointOfSale(ctx, pos, reason, ctx.userId)
+  syncPointOfSaleTask(ctx, pos.company_id)
+  logAudit(ctx, {
+    company_id: pos.company_id,
+    actor,
+    action: reason === null ? 'APPROVE' : 'REJECT',
+    entity_type: 'point_of_sale',
+    entity_id: pos.id,
+    entity_label: pointOfSaleLabel(pos),
+    summary:
+      reason === null
+        ? `Habilitó el punto de venta ${pos.number}: ${pos.description}`
+        : `Rechazó el punto de venta ${pos.number}: ${reason}`,
+  })
+  return { status: pos.status }
+}
+
 // ============================================================ Pedidos de venta (docs/FASE_4_VENTAS_Y_CLIENTES.md §2)
 
 export interface SalesOrderInput {
@@ -5845,10 +6059,9 @@ export interface SalesInvoiceInput {
   notes: string
   /** Lo que se factura de cada ítem del pedido, a su precio. */
   lines: { so_line_id: string; quantity: number }[]
+  /** Un punto de venta habilitado por el fisco (Fase 8d.2); sin el dato, el 00001. */
+  point_of_sale?: string
 }
-
-/** Punto de venta de los comprobantes simulados. */
-export const SALES_POINT_OF_SALE = '00001'
 
 /** Pedidos con algo entregado que se puede facturar. */
 const INVOICEABLE_SALES_STATUSES = ['ENTREGADO_PARCIAL', 'ENTREGADO', 'CERRADO']
@@ -5911,15 +6124,24 @@ export function cmdCreateSalesInvoice(ctx: Ctx, companyId: string, input: SalesI
     byLine.set(sl.id, total)
     assertSalesInvoiceable(db, sl, total)
   }
+  const pointOfSale = (input.point_of_sale ?? FISCO_DEFAULTS.opening_point_of_sale).trim()
+  if (!db.pointsOfSale.some((p) => p.company_id === companyId && p.number === pointOfSale && p.status === 'HABILITADO'))
+    fail(
+      'DATO_INVALIDO',
+      `El punto de venta ${pointOfSale} no está habilitado por el fisco: elegí uno habilitado.`,
+      'Los puntos de venta nuevos los pide Ventas y los habilita Impuestos, en Fisco simulado → Puntos de venta.',
+    )
   const company = getCompany(db, companyId)
   const customer = db.customers.find((c) => c.id === order.customer_id)!
   const fv: T.SalesInvoiceHeader = {
     sales_order_id: order.id,
     letter: salesLetter(db, company, customer),
-    point_of_sale: SALES_POINT_OF_SALE,
+    point_of_sale: pointOfSale,
     invoice_number: '',
     due_date: addDays(businessDate(company), order.so!.payment_terms_days),
     registered_at: null,
+    authorization_code: null,
+    authorization_due: null,
   }
   const doc = newDocument(ctx, companyId, 'SALES_INVOICE', actor, {
     customer_id: customer.id,
@@ -5968,8 +6190,9 @@ export function cmdCreateSalesInvoice(ctx: Ctx, companyId: string, input: SalesI
 
 /**
  * Registrar: controla otra vez las cantidades, le asigna el número correlativo
- * de su letra y la fecha de hoy (vence según la condición del pedido), y
- * genera el asiento de venta y la deuda del cliente.
+ * de su letra y la fecha de hoy (vence según la condición del pedido), el fisco
+ * la autoriza en el momento (Fase 8d.2: SIM-, la fecha y el correlativo de la
+ * empresa, con 10 días de vigencia), y genera el asiento de venta y la deuda del cliente.
  */
 function registerSalesInvoice(ctx: Ctx, doc: T.Document) {
   const { db } = ctx
@@ -5999,15 +6222,24 @@ function registerSalesInvoice(ctx: Ctx, doc: T.Document) {
     )
     .reduce((max, d) => Math.max(max, Number(d.fv!.invoice_number)), 0)
   const today = businessDate(company)
+  const authorized = db.documents.reduce(
+    (max, d) =>
+      d.company_id === doc.company_id && d.doc_type === 'SALES_INVOICE' && d.fv!.authorization_code
+        ? Math.max(max, Number(d.fv!.authorization_code.slice(-6)))
+        : max,
+    0,
+  )
   doc.document_date = today
   doc.fv = {
     ...doc.fv!,
     invoice_number: String(last + 1).padStart(8, '0'),
     due_date: addDays(today, order.so!.payment_terms_days),
+    authorization_code: `SIM-${today.replaceAll('-', '')}${String(authorized + 1).padStart(6, '0')}`,
+    authorization_due: addDays(today, FISCO_DEFAULTS.authorization_days),
   }
   const label = salesInvoiceLabel(doc.fv)
   const actor = transition(ctx, doc, 'CONFIRM', {
-    summary: `Registró ${doc.display_number}: factura ${label} a ${customer.legal_name} por ${money(doc.total)}`,
+    summary: `Registró ${doc.display_number}: factura ${label} a ${customer.legal_name} por ${money(doc.total)}, autorizada por el fisco con el código ${doc.fv.authorization_code}`,
   })
   doc.fv = { ...doc.fv, registered_at: ctx.now }
   const byType = new Map<string, number>()
@@ -9777,13 +10009,15 @@ const comparable = (settings: T.CompanySettings) => ({
   payroll: settings.payroll ?? null,
   iibb_pct: settings.iibb_pct ?? null,
   bank_mode: settings.bank_mode ?? null,
+  fisco_mode: settings.fisco_mode ?? null,
 })
 
 /**
  * El docente cambia el control interno (separación de funciones, stock negativo),
  * los porcentajes de la liquidación de sueldos, la alícuota de ingresos brutos o quién opera el
  * Banco Aula: al pasar al sistema, el banco ejecuta lo pendiente con la fecha del día (un cheque,
- * desde que se presenta); al volver a Tesorería, lo que espera le abre su tarea.
+ * desde que se presenta); al volver a Tesorería, lo que espera le abre su tarea. Lo mismo con
+ * quién opera el fisco simulado (8d.2): el sistema habilita los puntos de venta pedidos.
  */
 export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: Partial<T.CompanySettings>) {
   const actor = requireSupervisor(ctx, companyId)
@@ -9813,8 +10047,13 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
     if (!Object.hasOwn(BANK_MODES, settings.bank_mode)) fail('DATO_INVALIDO', 'Elegí quién opera el Banco Aula.')
     after.bank_mode = settings.bank_mode
   }
+  if (settings.fisco_mode !== undefined) {
+    if (!Object.hasOwn(FISCO_MODES, settings.fisco_mode)) fail('DATO_INVALIDO', 'Elegí quién opera el fisco simulado.')
+    after.fisco_mode = settings.fisco_mode
+  }
   company.settings = after
   if (settings.bank_mode !== undefined) settleBankOrders(ctx, company)
+  if (settings.fisco_mode !== undefined) settleFisco(ctx, company)
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -9828,7 +10067,9 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
         ? 'Cambió la alícuota de ingresos brutos'
         : settings.bank_mode !== undefined
           ? `Cambió quién opera el Banco Aula: ${after.bank_mode === 'AUTOMATICO' ? 'lo opera el sistema' : 'lo opera Tesorería'}`
-          : 'Cambió la configuración de control interno de la empresa',
+          : settings.fisco_mode !== undefined
+            ? `Cambió quién opera el fisco simulado: ${after.fisco_mode === 'AUTOMATICO' ? 'lo opera el sistema' : 'lo opera Impuestos'}`
+            : 'Cambió la configuración de control interno de la empresa',
     // Sin porcentajes configurados, la base los compara como null.
     changes: diff(comparable(before), comparable(company.settings), [
       'sod_enabled',
@@ -9836,6 +10077,7 @@ export function cmdUpdateCompanySettings(ctx: Ctx, companyId: string, settings: 
       'payroll',
       'iibb_pct',
       'bank_mode',
+      'fisco_mode',
     ]),
   })
 }
@@ -10153,6 +10395,7 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   startAccounting(system, companyId)
   openBankAccount(system, companyId)
   insertPadron(system, companyId)
+  openPointOfSale(system, companyId)
   return { id: companyId, slug }
 }
 

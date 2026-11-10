@@ -111,6 +111,10 @@ const BankTrayPage = lazyPage(() => import('@/features/bank/bank-pages').then((m
 const LoansPage = lazyPage(() => import('@/features/bank/loans-page').then((m) => m.LoansPage))
 const PadronPage = lazyPage(() => import('@/features/fisco/padron-page').then((m) => m.PadronPage))
 const ConstanciaPrintPage = lazyPage(() => import('@/features/fisco/padron-page').then((m) => m.ConstanciaPrintPage))
+const PointsOfSalePage = lazyPage(() => import('@/features/fisco/points-of-sale-page').then((m) => m.PointsOfSalePage))
+const AuthorizedVouchersPage = lazyPage(() =>
+  import('@/features/fisco/vouchers-page').then((m) => m.AuthorizedVouchersPage),
+)
 const BankStatementPrintPage = lazyPage(() =>
   import('@/features/bank/bank-statement').then((m) => m.BankStatementPrintPage),
 )
@@ -201,6 +205,8 @@ export const router = createBrowserRouter(
                 { path: 'pagos/banco-aula/bandeja', element: <BankTrayPage /> },
                 { path: 'pagos/prestamos', element: <LoansPage /> },
                 { path: 'fisco/padron', element: <PadronPage /> },
+                { path: 'fisco/puntos-de-venta', element: <PointsOfSalePage /> },
+                { path: 'fisco/comprobantes', element: <AuthorizedVouchersPage /> },
                 { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },

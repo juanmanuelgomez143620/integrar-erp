@@ -7,9 +7,9 @@
 import type * as T from '../domain/types'
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS, MONTH_HOURS } from '../domain/employees'
-import { BANK_ACCOUNT_DEFAULTS } from '../domain/catalog'
+import { BANK_ACCOUNT_DEFAULTS, FISCO_DEFAULTS } from '../domain/catalog'
 import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
-import { todayAR } from '../format'
+import { addDays, todayAR } from '../format'
 import {
   insertBaseChart,
   insertBasePostingRules,
@@ -25,6 +25,7 @@ import {
   insertWorkCenters,
   openBankAccount,
   openBankLoan,
+  openPointOfSale,
   round2,
   startAccounting,
 } from './engine'
@@ -89,6 +90,7 @@ export interface DB {
   bankLoans: T.BankLoan[]
   bankLoanInstallments: T.BankLoanInstallment[]
   taxpayers: T.Taxpayer[]
+  pointsOfSale: T.PointOfSale[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -106,7 +108,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 28
+export const DB_VERSION = 29
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -172,6 +174,7 @@ const COLLECTIONS = [
   'bankLoans',
   'bankLoanInstallments',
   'taxpayers',
+  'pointsOfSale',
   'jobCategories',
   'employees',
   'pyLines',
@@ -228,6 +231,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   bankLoans: 26,
   bankLoanInstallments: 26,
   taxpayers: 28,
+  pointsOfSale: 29,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -543,6 +547,31 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     for (const p of [...db.suppliers, ...db.customers]) p.tax_id = fixed[p.tax_id] ?? p.tax_id
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertPadron(ctx, company.id)
+  },
+  // v28 → v29: los puntos de venta y la autorización de las facturas de venta (Fase 8d.2): cada empresa
+  // tiene el 00001 habilitado, y las facturas ya registradas reciben su código con su fecha, por orden
+  // de registro.
+  28: (db) => {
+    db.pointsOfSale ??= []
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) openPointOfSale(ctx, company.id)
+    const invoices = db.documents.filter((d) => d.doc_type === 'SALES_INVOICE' && d.fv)
+    for (const d of invoices) {
+      d.fv!.authorization_code ??= null
+      d.fv!.authorization_due ??= null
+    }
+    const registered = invoices
+      .filter((d) => d.fv!.invoice_number && !d.fv!.authorization_code)
+      .map((d) => ({ d, key: [d.fv!.registered_at ?? '', d.display_number] }))
+      .sort((x, y) => (x.key[0] !== y.key[0] ? (x.key[0] < y.key[0] ? -1 : 1) : x.key[1] < y.key[1] ? -1 : 1))
+      .map((x) => x.d)
+    const last = new Map<string, number>()
+    for (const d of registered) {
+      const n = (last.get(d.company_id) ?? 0) + 1
+      last.set(d.company_id, n)
+      d.fv!.authorization_code = `SIM-${d.document_date.replaceAll('-', '')}${String(n).padStart(6, '0')}`
+      d.fv!.authorization_due = addDays(d.document_date, FISCO_DEFAULTS.authorization_days)
+    }
   },
 }
 

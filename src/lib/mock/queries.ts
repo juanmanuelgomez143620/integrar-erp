@@ -3743,6 +3743,75 @@ export function padron(db: DB, userId: string, companyId: string): TaxpayerRow[]
     .map((t) => ({ ...t, is_company: t.cuit === company.tax_id }))
 }
 
+/** Un punto de venta de la empresa, con quién lo pidió y quién lo decidió. */
+export interface PointOfSaleRow extends T.PointOfSale {
+  requested_by_name: string | null
+  decided_by_name: string | null
+}
+
+/**
+ * Los puntos de venta de la empresa (8d.2), por número. Los ven quien lee el fisco y quien factura:
+ * así, con el módulo del fisco bloqueado, la factura sigue eligiendo su punto de venta.
+ */
+export function pointsOfSale(db: DB, userId: string, companyId: string): PointOfSaleRow[] {
+  const eff = effectivePermissions(db, userId, companyId)
+  assertPerm(db, userId, companyId, can(eff, 'sales_invoice.create') ? 'sales_invoice.create' : 'fisco.read')
+  return db.pointsOfSale
+    .filter((p) => p.company_id === companyId)
+    .sort((a, b) => (a.number < b.number ? -1 : a.number > b.number ? 1 : 0))
+    .map((p) => ({
+      ...p,
+      requested_by_name: p.requested_by ? nameOf(db, p.requested_by) : null,
+      decided_by_name: p.decided_by ? nameOf(db, p.decided_by) : null,
+    }))
+}
+
+/** Una factura de venta en el registro de comprobantes autorizados del fisco. */
+export interface AuthorizedVoucher {
+  document_id: string
+  display_number: string
+  date: string
+  authorization_code: string
+  authorization_due: string
+  /** A 00001-00000003 */
+  invoice_label: string
+  customer_name: string
+  customer_cuit: string
+  total: number
+  status: string
+}
+
+/** El registro de comprobantes autorizados (8d.2): las facturas de venta autorizadas en un mes (AAAA-MM), por código. */
+export function authorizedVouchers(db: DB, userId: string, companyId: string, month: string): AuthorizedVoucher[] {
+  assertPerm(db, userId, companyId, 'fisco.read')
+  if (typeof month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+    fail('DATO_INVALIDO', 'Elegí el mes: el año y el mes, como 2026-11.')
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'SALES_INVOICE' &&
+        d.fv!.authorization_code &&
+        d.document_date.slice(0, 7) === month,
+    )
+    .sort((a, b) => (a.fv!.authorization_code! < b.fv!.authorization_code! ? -1 : 1))
+    .map((d) => {
+      const customer = db.customers.find((c) => c.id === d.customer_id)!
+      return {
+        document_id: d.id,
+        display_number: d.display_number,
+        date: d.document_date,
+        authorization_code: d.fv!.authorization_code!,
+        authorization_due: d.fv!.authorization_due!,
+        invoice_label: salesInvoiceLabel(d.fv!),
+        customer_name: customer.legal_name,
+        customer_cuit: customer.tax_id,
+        total: d.total,
+        status: d.status,
+      }
+    })
+}
+
 /** Una línea del extracto: lo que el banco procesó un día, con el saldo después del movimiento. */
 export interface BankStatementLine {
   id: string
@@ -4261,7 +4330,9 @@ export function listTasks(
                   ? `/e/${company.slug}/pagos/conciliaciones/nueva`
                   : t.task_type === 'RESOLVER_RECHAZO_BANCO' || t.task_type === 'EVALUAR_PRESTAMO'
                     ? `/e/${company.slug}/pagos/banco-aula/bandeja`
-                    : null,
+                    : t.task_type === 'HABILITAR_PUNTO_VENTA'
+                      ? `/e/${company.slug}/fisco/puntos-de-venta`
+                      : null,
           assignee_label: t.assigned_user_id
             ? nameOf(db, t.assigned_user_id)
             : t.assigned_role
