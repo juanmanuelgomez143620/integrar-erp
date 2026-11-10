@@ -1,9 +1,9 @@
-// Pruebas de los préstamos del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3, 8c.1): el cronograma por
+// Pruebas de los préstamos del Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3, 8c): el cronograma por
 // sistema francés, el pedido de Gerencia con los indicadores del libro mayor, la evaluación de
-// Tesorería (SoD-13) o del sistema, la acreditación, el débito de las cuotas y su registro.
+// Tesorería (SoD-13) o del sistema, la acreditación, el débito de las cuotas y su registro (8c.1), y
+// el préstamo de la apertura (8c.2), que es el N.º 1 de la demo: los pedidos empiezan en el N.º 2.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type * as T from '../domain/types'
 import { money } from '../format'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
@@ -17,6 +17,7 @@ import {
   cmdUpdateCompanySettings,
   loanIndicators,
   loanSchedule,
+  openBankLoan,
   type Ctx,
 } from './engine'
 import { bankAccountView, bankLoans, listTasks, loanPreview, reconciliationCandidates } from './queries'
@@ -99,9 +100,9 @@ describe('Préstamos: el pedido de Gerencia', () => {
       sales_share: null,
     })
     const created = request()
-    expect(created).toMatchObject({ number: 1, status: 'SOLICITADO' })
+    expect(created).toMatchObject({ number: 2, status: 'SOLICITADO' })
     expect(loans()[0]).toMatchObject({
-      number: 1,
+      number: 2,
       amount: 1_000_000,
       months: 12,
       status: 'SOLICITADO',
@@ -116,7 +117,7 @@ describe('Préstamos: el pedido de Gerencia', () => {
       '/e/forestal-del-norte/pagos/banco-aula/bandeja',
     ])
     expect(db.audit.at(-1)!.summary).toBe(
-      `Pidió al Banco Aula el préstamo N.º 1: ${money(1_000_000)} en 12 cuotas, para Capital de trabajo para la temporada alta`,
+      `Pidió al Banco Aula el préstamo N.º 2: ${money(1_000_000)} en 12 cuotas, para Capital de trabajo para la temporada alta`,
     )
   })
 
@@ -135,7 +136,7 @@ describe('Préstamos: el pedido de Gerencia', () => {
     expect(loanPreview(db, userId('gerencia'), companyId(), 1_000_000, 10)).toBeNull()
     request()
     expect(expectBusinessError(() => request(), 'TRANSICION_INVALIDA')).toBe(
-      'El préstamo N.º 1 todavía espera la evaluación del banco: se pide de a uno.',
+      'El préstamo N.º 2 todavía espera la evaluación del banco: se pide de a uno.',
     )
   })
 })
@@ -159,19 +160,19 @@ describe('Préstamos: la evaluación y la acreditación', () => {
       charge: 'PRESTAMO',
       direction: 'CREDITO',
       amount: 1_000_000,
-      concept: 'Acreditación del préstamo N.º 1',
+      concept: 'Acreditación del préstamo N.º 2',
       processed_on: '2027-05-14',
     })
     expect(v.balance).toBe(12_500_000 + 1_000_000)
     const notice = db.notifications.find((n) => n.type === 'PRESTAMO' && n.recipient_user_id === userId('gerencia'))!
     expect(notice).toMatchObject({
-      title: 'El Banco Aula aprobó el préstamo N.º 1',
+      title: 'El Banco Aula aprobó el préstamo N.º 2',
       body: `Acreditó ${money(1_000_000)} en la cuenta: 12 cuotas de ${money(106_552.17)} al 48 % anual. Contabilidad lo registra desde la conciliación.`,
     })
     expect(tasks('tesoreria2', 'EVALUAR_PRESTAMO')).toEqual([])
     expect(tasks('contabilidad', 'REGISTRAR_CARGOS_BANCO')).toHaveLength(1)
     expect(db.audit.at(-1)!.summary).toBe(
-      `Aprobó el préstamo N.º 1: acreditó ${money(1_000_000)} en 12 cuotas al 48 % anual`,
+      `Aprobó el préstamo N.º 2: acreditó ${money(1_000_000)} en 12 cuotas al 48 % anual`,
     )
   })
 
@@ -185,11 +186,11 @@ describe('Préstamos: la evaluación y la acreditación', () => {
     ).toBe('Indicá el motivo del rechazo: lo recibe Gerencia.')
     cmdEvaluateLoan(ctx('tesoreria'), first.id, { approve: false, reason: 'Falta el plan de negocios' })
     expect(loans()[0]).toMatchObject({ status: 'RECHAZADO', rejection_reason: 'Falta el plan de negocios' })
-    expect(db.notifications.find((n) => n.title === 'El Banco Aula rechazó el préstamo N.º 1')!.body).toBe(
+    expect(db.notifications.find((n) => n.title === 'El Banco Aula rechazó el préstamo N.º 2')!.body).toBe(
       'Motivo: Falta el plan de negocios',
     )
     expect(expectBusinessError(() => approve(first.id), 'TRANSICION_INVALIDA')).toBe(
-      'El préstamo N.º 1 ya está rechazado.',
+      'El préstamo N.º 2 ya está rechazado.',
     )
     // Rechazado el anterior, Gerencia puede pedir otro; el banco lo aprueba a 6 meses y al 36,5 %.
     const second = request(600_000, 12)
@@ -197,7 +198,7 @@ describe('Préstamos: la evaluación y la acreditación', () => {
     expectBusinessError(() => approve(second.id, 48, 9), 'DATO_INVALIDO')
     expectBusinessError(() => approve(second.id, 48, 12, 'contabilidad'), 'SIN_PERMISO')
     approve(second.id, 36.5, 6)
-    expect(loans()[0]).toMatchObject({ number: 2, months: 6, rate: 36.5 })
+    expect(loans()[0]).toMatchObject({ number: 3, months: 6, rate: 36.5 })
     expect(loans()[0].installments).toHaveLength(6)
   })
 
@@ -206,7 +207,7 @@ describe('Préstamos: la evaluación y la acreditación', () => {
     cmdAssignRole(ctx('docente'), companyId(), userId('gerencia'), 'TESORERIA', tes)
     const { id } = request()
     expect(expectBusinessError(() => approve(id, 48, 12, 'gerencia'), 'SEPARACION_FUNCIONES')).toBe(
-      'No podés evaluar el préstamo N.º 1: lo pediste vos.',
+      'No podés evaluar el préstamo N.º 2: lo pediste vos.',
     )
     expect(approve(id, 48, 12, 'tesoreria')).toEqual({ status: 'VIGENTE' })
   })
@@ -240,35 +241,54 @@ describe('Préstamos: la evaluación y la acreditación', () => {
 })
 
 describe('Préstamos: las cuotas y su registro', () => {
-  it('al vencer, quien opera el banco debita la cuota en dos movimientos; con la última, queda cancelado', () => {
-    const { id } = request(600_000, 6)
+  const loan = (number: number) => loans().find((l) => l.number === number)!
+  const cents = (n: number) => Math.round(n * 100) / 100
+
+  it('al vencer, quien opera el banco debita las cuotas en dos movimientos; con la última, queda cancelado', () => {
+    const { id, number } = request(600_000, 6)
     approve(id, 48, 6)
     expect(expectBusinessError(() => cmdDebitLoanInstallments(ctx('tesoreria'), companyId()), 'DATO_INVALIDO')).toBe(
       'No hay cuotas vencidas para debitar.',
     )
     travel('2027-07-20')
+    // Vencieron dos cuotas del préstamo nuevo (14/6 y 14/7) y dos del de la apertura (1/6 y 1/7).
     expect(
-      loans()[0]
+      loan(number)
+        .installments.filter((i) => i.due)
+        .map((i) => i.n),
+    ).toEqual([1, 2])
+    expect(
+      loan(1)
         .installments.filter((i) => i.due)
         .map((i) => i.n),
     ).toEqual([1, 2])
     expectBusinessError(() => cmdDebitLoanInstallments(ctx('contabilidad'), companyId()), 'SIN_PERMISO')
-    expect(cmdDebitLoanInstallments(ctx('tesoreria'), companyId())).toEqual({ debited: 2 })
+    expect(cmdDebitLoanInstallments(ctx('tesoreria'), companyId())).toEqual({ debited: 4 })
+    const first = loan(number).installments[0]
     const v = bankAccountView(db, userId('tesoreria'), companyId())!
-    const first = loans()[0].installments[0]
     expect(
       v.movements
-        .slice(0, 4)
+        .filter((m) => m.concept.startsWith(`Préstamo N.º ${number} · cuota 1 `))
         .map((m) => [m.charge, m.amount, m.concept])
         .reverse(),
     ).toEqual([
-      ['CUOTA_CAPITAL', first.principal, 'Préstamo N.º 1 · cuota 1 de 6: capital'],
-      ['CUOTA_INTERES', first.interest, 'Préstamo N.º 1 · cuota 1 de 6: intereses'],
-      ['CUOTA_CAPITAL', loans()[0].installments[1].principal, 'Préstamo N.º 1 · cuota 2 de 6: capital'],
-      ['CUOTA_INTERES', loans()[0].installments[1].interest, 'Préstamo N.º 1 · cuota 2 de 6: intereses'],
+      ['CUOTA_CAPITAL', first.principal, `Préstamo N.º ${number} · cuota 1 de 6: capital`],
+      ['CUOTA_INTERES', first.interest, `Préstamo N.º ${number} · cuota 1 de 6: intereses`],
+    ])
+    // En el orden de vencimiento: la del 1/6 (la apertura) antes que la del 14/6.
+    expect(
+      v.movements
+        .filter((m) => m.charge === 'CUOTA_CAPITAL')
+        .map((m) => m.concept)
+        .reverse(),
+    ).toEqual([
+      'Préstamo N.º 1 · cuota 1 de 24: capital',
+      `Préstamo N.º ${number} · cuota 1 de 6: capital`,
+      'Préstamo N.º 1 · cuota 2 de 24: capital',
+      `Préstamo N.º ${number} · cuota 2 de 6: capital`,
     ])
     expect(
-      loans()[0]
+      loan(number)
         .installments.slice(0, 2)
         .map((i) => [i.status, i.debited_on]),
     ).toEqual([
@@ -277,32 +297,35 @@ describe('Préstamos: las cuotas y su registro', () => {
     ])
     travel('2027-11-14')
     cmdDebitLoanInstallments(ctx('tesoreria2'), companyId())
-    expect(loans()[0]).toMatchObject({ status: 'CANCELADO', outstanding: 0 })
+    expect(loan(number)).toMatchObject({ status: 'CANCELADO', outstanding: 0 })
+    expect(loan(1).status).toBe('VIGENTE')
   })
 
   it('si lo opera el sistema, debita las cuotas vencidas la próxima vez que mueve la cuenta', () => {
     systemOperates()
-    request(600_000, 6)
+    const { number } = request(600_000, 6)
     travel('2027-06-14')
-    expect(loans()[0].installments[0]).toMatchObject({ status: 'PENDIENTE', due: true })
-    // Un pedido nuevo de la empresa mueve el banco: primero debita la cuota.
+    expect(loan(number).installments[0]).toMatchObject({ status: 'PENDIENTE', due: true })
+    expect(loan(1).installments[0]).toMatchObject({ status: 'PENDIENTE', due: true })
+    // Un pedido nuevo de la empresa mueve el banco: primero debita las cuotas.
     request(100_000, 6)
-    expect(loans().find((l) => l.number === 1)!.installments[0]).toMatchObject({
-      status: 'DEBITADA',
-      debited_on: '2027-06-14',
-    })
+    expect(loan(number).installments[0]).toMatchObject({ status: 'DEBITADA', debited_on: '2027-06-14' })
+    expect(loan(1).installments[0]).toMatchObject({ status: 'DEBITADA', debited_on: '2027-06-14' })
   })
 
   it('Contabilidad registra la acreditación y las cuotas desde la conciliación, con una línea del banco por lado', () => {
-    const { id } = request(600_000, 6)
+    const { id, number } = request(600_000, 6)
     approve(id, 48, 6)
     travel('2027-06-14')
     cmdDebitLoanInstallments(ctx('tesoreria'), companyId())
     const candidates = () =>
       reconciliationCandidates(db, userId('contabilidad'), companyId(), account('1.1.01.03'), '2027-06-14')!.bank!
     const pending = candidates().charges
+    // La acreditación del préstamo nuevo; después, la cuota del de la apertura (1/6) y la del nuevo (14/6).
     expect(pending.map((c) => [c.charge, c.direction])).toEqual([
       ['PRESTAMO', 'CREDITO'],
+      ['CUOTA_CAPITAL', 'DEBITO'],
+      ['CUOTA_INTERES', 'DEBITO'],
       ['CUOTA_CAPITAL', 'DEBITO'],
       ['CUOTA_INTERES', 'DEBITO'],
     ])
@@ -312,28 +335,30 @@ describe('Préstamos: las cuotas y su registro', () => {
       pending.map((c) => c.id),
     )
     const code = (accountId: string) => db.accounts.find((a) => a.id === accountId)!.code
-    const installment = loans()[0].installments[0]
+    const opening = loan(1).installments[0]
+    const own = loan(number).installments[0]
+    const debited = cents(opening.total + own.total)
     expect(
       db.jeLines
         .filter((l) => l.document_id === entry.id)
         .sort((a, b) => a.line_no - b.line_no)
         .map((l) => [code(l.account_id), l.debit, l.credit]),
     ).toEqual([
-      ['2.1.02.01', installment.principal, 0],
-      ['5.3.01.01', installment.interest, 0],
+      ['2.1.02.01', cents(opening.principal + own.principal), 0],
+      ['5.3.01.01', cents(opening.interest + own.interest), 0],
       ['1.1.01.03', 600_000, 0],
-      ['1.1.01.03', 0, installment.total],
+      ['1.1.01.03', 0, debited],
       ['2.1.02.01', 0, 600_000],
     ])
     expect(db.documents.find((d) => d.id === entry.id)!.je!.description).toBe(
-      `Movimientos del Banco Aula registrados desde la conciliación: 3 movimientos (débitos por ${money(installment.total)} y créditos por ${money(600_000)}).`,
+      `Movimientos del Banco Aula registrados desde la conciliación: 5 movimientos (débitos por ${money(debited)} y créditos por ${money(600_000)}).`,
     )
     expect(candidates().charges).toEqual([])
     const view = bankAccountView(db, userId('contabilidad'), companyId())!
     expect(view.book_balance).toBe(view.balance + 300_000)
   })
 
-  it('una base de la versión 25 recibe los préstamos vacíos y las reglas de la acreditación y las cuotas', () => {
+  it('una base de la versión 25 recibe las tablas, las reglas de la acreditación y las cuotas, y el préstamo de la apertura', () => {
     const old = structuredClone(db) as Partial<DB> & { version: number }
     delete old.bankLoans
     delete old.bankLoanInstallments
@@ -343,13 +368,52 @@ describe('Préstamos: las cuotas y su registro', () => {
     old.version = 25
     db = upgradeDatabase(old as DB)!
     expect(db.version).toBe(DB_VERSION)
-    expect(db.bankLoans).toEqual([])
-    expect(db.bankLoanInstallments).toEqual([] as T.BankLoanInstallment[])
+    expect(db.bankLoans.map((l) => [l.number, l.opening])).toEqual([[1, true]])
+    expect(db.bankLoanInstallments).toHaveLength(24)
     expect(
       db.postingRules
         .filter((r) => r.company_id === companyId() && r.event === 'CARGOS_BANCARIOS')
         .map((r) => r.key)
         .sort(),
     ).toEqual(['COMISION', 'CUOTA_CAPITAL', 'CUOTA_INTERES', 'IMPUESTO_DC', 'INTERESES', 'PRESTAMO', 'RECHAZO'])
+  })
+})
+
+describe('Préstamos: el de la apertura (8c.2)', () => {
+  it('la demo lo trae vigente desde la apertura, sin acreditación, con las cuotas desde el mes siguiente a que la cuenta empezó a operar', () => {
+    const opening = loans().find((l) => l.opening)!
+    expect(opening).toMatchObject({
+      number: 1,
+      amount: 10_000_000,
+      months: 24,
+      rate: 48,
+      status: 'VIGENTE',
+      granted_on: '2027-01-01',
+      requested_by_name: null,
+      own: false,
+      liquidity: null,
+      outstanding: 10_000_000,
+    })
+    // La cuenta empezó a operar en mayo: la primera cuota vence el 1/6 y lo de antes no se cobra.
+    expect(opening.installments.map((i) => [i.n, i.due_on, i.principal, i.interest])).toEqual(
+      loanSchedule(10_000_000, 48, 24, '2027-05-01').map((r) => [r.n, r.due_on, r.principal, r.interest]),
+    )
+    expect(opening.installments[0].due_on).toBe('2027-06-01')
+    // El dinero ya está en el saldo inicial: el banco no lo acredita otra vez.
+    const v = bankAccountView(db, userId('tesoreria'), companyId())!
+    expect(v.movements.some((m) => m.charge === 'PRESTAMO')).toBe(false)
+  })
+
+  it('una base de la versión 26 lo recibe una sola vez', () => {
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    const opening = old.bankLoans!.find((l) => l.opening)!
+    old.bankLoans = old.bankLoans!.filter((l) => !l.opening)
+    old.bankLoanInstallments = old.bankLoanInstallments!.filter((i) => i.loan_id !== opening.id)
+    old.version = 26
+    db = upgradeDatabase(old as DB)!
+    expect(db.bankLoans.map((l) => [l.number, l.amount, l.opening])).toEqual([[1, 10_000_000, true]])
+    expect(db.bankLoanInstallments).toHaveLength(24)
+    openBankLoan({ db, userId: null, now: new Date().toISOString() }, companyId())
+    expect(db.bankLoans).toHaveLength(1)
   })
 })

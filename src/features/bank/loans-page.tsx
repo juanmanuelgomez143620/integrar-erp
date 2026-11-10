@@ -95,10 +95,14 @@ function LoanCard({ loan }: { loan: LoanRow }) {
           <InfoRow label="Importe">{money(loan.amount)}</InfoRow>
           <InfoRow label="Plazo">{loan.months} cuotas mensuales</InfoRow>
           {loan.rate !== null && <InfoRow label="Tasa nominal anual">{loan.rate.toLocaleString('es-AR')} %</InfoRow>}
-          <InfoRow label="Pedido">
-            {date(loan.requested_on)}
-            {loan.requested_by_name ? ` · ${loan.requested_by_name}` : ''}
-          </InfoRow>
+          {loan.opening ? (
+            <InfoRow label="Vigente desde">{date(loan.granted_on)}, el saldo inicial de la apertura</InfoRow>
+          ) : (
+            <InfoRow label="Pedido">
+              {date(loan.requested_on)}
+              {loan.requested_by_name ? ` · ${loan.requested_by_name}` : ''}
+            </InfoRow>
+          )}
           {loan.evaluated_on && (
             <InfoRow label={loan.status === 'RECHAZADO' ? 'Rechazado' : 'Aprobado'}>
               {date(loan.evaluated_on)} · {loan.evaluated_by_name ?? 'el sistema'}
@@ -107,7 +111,8 @@ function LoanCard({ loan }: { loan: LoanRow }) {
           {loan.rejection_reason && <InfoRow label="Motivo">{loan.rejection_reason}</InfoRow>}
           {loan.granted_on && <InfoRow label="Capital que falta">{money(loan.outstanding)}</InfoRow>}
         </dl>
-        <LoanIndicators loan={loan} />
+        {/* El de la apertura no tuvo pedido: no tiene indicadores. */}
+        {!loan.opening && <LoanIndicators loan={loan} />}
       </div>
       {loan.installments.length > 0 && (
         <DataTable<LoanInstallmentRow>

@@ -3625,6 +3625,8 @@ export interface LoanRow {
   evaluated_on: string | null
   rejection_reason: string | null
   granted_on: string | null
+  /** El que la empresa ya tenía al abrir la cuenta (8c.2): sin pedido ni acreditación. */
+  opening: boolean
   /** El capital que falta pagar: el de las cuotas sin debitar. */
   outstanding: number
   installments: LoanInstallmentRow[]
@@ -3678,6 +3680,7 @@ export function bankLoans(db: DB, userId: string, companyId: string): BankLoansV
         evaluated_on: l.evaluated_on,
         rejection_reason: l.rejection_reason,
         granted_on: l.granted_on,
+        opening: l.opening,
         outstanding: round2(
           installments.filter((i) => i.status === 'PENDIENTE').reduce((sum, i) => sum + i.principal, 0),
         ),

@@ -445,8 +445,10 @@ export interface BankLoan {
   evaluated_by: string | null
   evaluated_on: string | null
   rejection_reason: string | null
-  /** Cuándo el banco lo acreditó. */
+  /** Cuándo el banco lo acreditó (el de la apertura: desde cuándo está vigente). */
   granted_on: string | null
+  /** El préstamo que la empresa ya tenía al abrir la cuenta (8c.2): sin pedido ni acreditación. */
+  opening: boolean
   created_at: string
 }
 

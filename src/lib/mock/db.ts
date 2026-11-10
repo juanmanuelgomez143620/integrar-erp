@@ -23,6 +23,7 @@ import {
   insertVehicles,
   insertWorkCenters,
   openBankAccount,
+  openBankLoan,
   round2,
   startAccounting,
 } from './engine'
@@ -103,7 +104,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 26
+export const DB_VERSION = 27
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -521,6 +522,13 @@ const UPGRADES: Record<number, (db: DB) => void> = {
     db.bankLoanInstallments ??= []
     const ctx = { db, userId: null, now: new Date().toISOString() }
     for (const company of db.companies) insertBasePostingRules(ctx, company.id)
+  },
+  // v26 → v27: el préstamo de la apertura (Fase 8c.2): el saldo inicial de Préstamos bancarios pasa a
+  // ser un préstamo del Banco Aula, con las cuotas desde el mes siguiente a que la cuenta empezó a operar.
+  26: (db) => {
+    for (const loan of db.bankLoans) loan.opening ??= false
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) openBankLoan(ctx, company.id)
   },
 }
 

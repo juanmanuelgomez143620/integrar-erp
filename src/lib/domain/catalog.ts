@@ -894,6 +894,9 @@ export const BANK_ACCOUNT_DEFAULTS = {
   loan_rate: 48,
   loan_max: 50_000_000,
   loan_terms: [6, 12, 18, 24],
+  /** El préstamo de la apertura (Fase 8c.2): el saldo inicial de esta cuenta, en tantas cuotas. */
+  loan_ledger_code: '2.1.02.01',
+  opening_loan_months: 24,
   /** Si lo opera el sistema, aprueba con liquidez corriente de al menos 1 y una cuota de hasta el 30 % de las ventas. */
   loan_min_liquidity: 1,
   loan_max_sales_share: 30,

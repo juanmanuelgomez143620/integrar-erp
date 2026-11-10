@@ -4159,6 +4159,64 @@ export function openBankAccount(ctx: Ctx, companyId: string) {
     )
     processBankMovement(db, reverse, doc.document_date, null)
   }
+  openBankLoan(ctx, companyId)
+}
+
+/**
+ * El préstamo que la empresa ya tenía al abrir la cuenta (8c.2): el saldo de Préstamos bancarios del
+ * asiento de apertura pasa a ser un préstamo del Banco Aula, vigente desde la apertura y sin
+ * acreditación (el dinero ya está en el saldo inicial). Sus cuotas vencen desde el mes siguiente a
+ * que la cuenta empezó a operar en la app: lo de antes no se cobra. No hace nada si ya lo tiene o si
+ * la apertura no tiene ese saldo.
+ */
+export function openBankLoan(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const account = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (!account || db.bankLoans.some((l) => l.company_id === companyId && l.opening)) return
+  const ledger = db.accounts.find(
+    (a) => a.company_id === companyId && a.code === BANK_ACCOUNT_DEFAULTS.loan_ledger_code,
+  )
+  if (!ledger) return
+  const amount = round2(
+    accountLinesUpTo(db, ledger.id, '9999-12-31')
+      .filter(({ doc }) => doc.je!.origin === 'APERTURA')
+      .reduce((sum, { line }) => sum + line.credit - line.debit, 0),
+  )
+  if (amount <= 0) return
+  const months = BANK_ACCOUNT_DEFAULTS.opening_loan_months
+  const rate = BANK_ACCOUNT_DEFAULTS.loan_rate
+  const loan: T.BankLoan = {
+    id: uid(),
+    company_id: companyId,
+    bank_account_id: account.id,
+    number: db.bankLoans.reduce((max, l) => (l.bank_account_id === account.id ? Math.max(max, l.number) : max), 0) + 1,
+    amount,
+    months,
+    purpose: 'El préstamo que la empresa ya tenía al abrir la cuenta: el saldo inicial de Préstamos bancarios',
+    status: 'VIGENTE',
+    requested_by: null,
+    requested_on: account.opened_on,
+    liquidity: null,
+    debt_ratio: null,
+    sales_share: null,
+    rate,
+    evaluated_by: null,
+    evaluated_on: null,
+    rejection_reason: null,
+    granted_on: account.opened_on,
+    opening: true,
+    created_at: ctx.now,
+  }
+  db.bankLoans.push(loan)
+  for (const row of loanSchedule(amount, rate, months, account.charges_from))
+    db.bankLoanInstallments.push({
+      id: uid(),
+      company_id: companyId,
+      loan_id: loan.id,
+      ...row,
+      status: 'PENDIENTE',
+      debited_on: null,
+    })
 }
 
 /**
@@ -4645,6 +4703,7 @@ export function cmdRequestLoan(ctx: Ctx, companyId: string, input: LoanRequestIn
     evaluated_on: null,
     rejection_reason: null,
     granted_on: null,
+    opening: false,
     created_at: ctx.now,
   }
   db.bankLoans.push(loan)

@@ -297,6 +297,45 @@ const mockBank = (() => {
   }
 })()
 
+/** El préstamo de la apertura de la demo (Fase 8c.2) y su cronograma. */
+const mockOpeningLoan = (() => {
+  const loan = seed.bankLoans.find((l) => l.company_id === mockTemplate.id && l.opening)!
+  return {
+    loan: {
+      number: loan.number,
+      amount: loan.amount,
+      months: loan.months,
+      rate: loan.rate,
+      status: loan.status,
+      granted_on: loan.granted_on,
+    },
+    installments: seed.bankLoanInstallments
+      .filter((i) => i.loan_id === loan.id)
+      .sort((a, b) => a.n - b.n)
+      .map((i) => [i.n, i.due_on, i.principal, i.interest]),
+  }
+})()
+
+/** El préstamo de la apertura de una empresa en el Banco Aula y su cronograma. */
+async function openingLoan(company: string) {
+  const loans = await db.admin<Record<string, unknown> & { id: string }>(
+    `select l.id, l.number, l.amount::float as amount, l.months, l.rate::float as rate, l.status,
+            l.granted_on::text as granted_on
+       from public.bank_loans l where l.company_id = $1 and l.opening`,
+    [company],
+  )
+  if (loans.length !== 1) return { loan: loans, installments: [] }
+  const { id, ...loan } = loans[0]
+  const installments = (
+    await db.admin<{ n: number; due_on: string; principal: number; interest: number }>(
+      `select n, due_on::text as due_on, principal::float as principal, interest::float as interest
+         from public.bank_loan_installments where loan_id = $1 order by n`,
+      [id],
+    )
+  ).map((i) => [i.n, i.due_on, i.principal, i.interest])
+  return { loan, installments }
+}
+
 /** La cuenta en el Banco Aula de una empresa y sus movimientos, en el orden de llegada. */
 async function bank(company: string) {
   const [account] = await db.admin<Record<string, unknown>>(
@@ -515,6 +554,12 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     expect(await vehicles(template)).toEqual(mockVehicles)
   })
 
+  it('tiene el préstamo de la apertura con el mismo cronograma que la demo (8c.2)', async () => {
+    expect(mockOpeningLoan.loan).toMatchObject({ number: 1, amount: 10_000_000, months: 24, rate: 48 })
+    expect(mockOpeningLoan.installments).toHaveLength(24)
+    expect(await openingLoan(template)).toEqual(mockOpeningLoan)
+  })
+
   it('abre su cuenta en el Banco Aula con el saldo inicial de la apertura, como la demo', async () => {
     const { account, movements } = await bank(template)
     expect(account).toEqual(mockBank.account)
@@ -632,6 +677,7 @@ describe('empresa de un curso (company_create_from_template)', () => {
     const { account, movements } = await bank(created.id)
     expect(account).toMatchObject({ number: mockBank.account.number, alias: 'FORESTAL.NORTE.BA' })
     expect(movements).toEqual([mockBank.start])
+    expect(await openingLoan(created.id)).toEqual(mockOpeningLoan)
   })
 
   it('el docente queda como supervisor; la plantilla y la empresa nueva están aisladas', async () => {
