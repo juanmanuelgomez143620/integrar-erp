@@ -108,7 +108,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 30
+export const DB_VERSION = 31
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -585,6 +585,20 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       }
     const demo = db.companies.find((c) => c.is_template)
     if (demo) addDemoTaxOfficer(db, demo.id, new Date().toISOString())
+  },
+  // v30 → v31: la cuenta corriente tributaria (Fase 8e.2): las declaraciones ya pagadas quedan sin
+  // intereses e imputadas el día del pago; la cuenta de los intereses resarcitorios y sus reglas.
+  30: (db) => {
+    for (const d of db.documents)
+      if (d.doc_type === 'TAX_RETURN' && d.tr) {
+        d.tr.interest ??= 0
+        d.tr.imputed_on ??= d.status === 'PAGADA' ? d.tr.paid_on : null
+      }
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
+      insertBasePostingRules(ctx, company.id)
+    }
   },
 }
 

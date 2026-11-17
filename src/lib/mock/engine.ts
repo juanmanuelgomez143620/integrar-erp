@@ -3677,8 +3677,12 @@ export function cmdCancelBankReconciliation(ctx: Ctx, docId: string, reason: str
 
 // ============================================================ Banco Aula (docs/FASE_8_BANCO_Y_FISCO.md §3)
 
-/** El banco lo opera Tesorería, salvo que el docente pida que lo opere el sistema. */
-export const bankMode = (company: T.Company): T.BankMode => company.settings.bank_mode ?? 'ESTUDIANTES'
+/**
+ * El banco lo opera Tesorería, salvo que el docente pida que lo opere el sistema o bloquee su módulo:
+ * bloqueado, el banco sigue procesando solo (8a; se aplica desde la 8e.2).
+ */
+export const bankMode = (db: DB, company: T.Company): T.BankMode =>
+  company.settings.bank_mode === 'AUTOMATICO' || !isModuleEnabled(db, company.id, 'bank') ? 'AUTOMATICO' : 'ESTUDIANTES'
 
 /** La cuenta del Banco Aula que refleja una cuenta contable, si la hay. */
 export const bankAccountFor = (db: DB, ledgerAccountId: string) =>
@@ -3784,6 +3788,7 @@ function executeBankOrder(ctx: Ctx, order: T.BankMovement, on: string, userId: s
   const available = round2(bankBalanceAt(db, account.id, '9999-12-31') + account.overdraft_limit)
   if (order.direction === 'CREDITO' || order.amount <= available) {
     processBankMovement(db, order, on, userId)
+    imputeTaxPayment(ctx, order, on)
     return
   }
   order.status = 'RECHAZADO'
@@ -3817,6 +3822,21 @@ function executeBankOrder(ctx: Ctx, order: T.BankMovement, on: string, userId: s
     body: `La orden N.º ${order.seq} (${order.concept}, ${money(order.amount)}) supera el saldo más el acuerdo de descubierto: el banco no la debitó y cobró ${money(fee.amount)} de comisión. Anulá la operación y volvé a pagar, o reenviala cuando haya fondos.`,
     link_path: `/e/${getCompany(db, order.company_id).slug}/pagos/banco-aula/bandeja`,
     task_id: task.id,
+  })
+}
+
+/**
+ * Si la orden que el banco procesó es el pago de una declaración, el fisco lo imputa (8e.2): la
+ * declaración queda Pagada, con la fecha del proceso.
+ */
+function imputeTaxPayment(ctx: Ctx, order: T.BankMovement, on: string) {
+  if (order.origin !== 'ORDEN' || order.reverses_id !== null || !order.source_document_id) return
+  const doc = ctx.db.documents.find((d) => d.id === order.source_document_id)
+  if (doc?.doc_type !== 'TAX_RETURN' || doc.status !== 'PAGO_EN_BANCO') return
+  doc.tr = { ...doc.tr!, imputed_on: on }
+  transition(ctx, doc, 'SYSTEM', {
+    to: 'PAGADA',
+    summary: `El fisco imputó el pago de ${doc.display_number}: ${money(order.amount)} (transacción ${order.transaction_number} del Banco Aula)`,
   })
 }
 
@@ -3939,7 +3959,7 @@ function reverseBankOrders(ctx: Ctx, reversal: T.Document) {
  * desde que se presenta: 8b.2); si no, espera en la bandeja, con sus tareas para Tesorería.
  */
 function settleBankOrders(ctx: Ctx, company: T.Company) {
-  if (bankMode(company) === 'AUTOMATICO') {
+  if (bankMode(ctx.db, company) === 'AUTOMATICO') {
     const today = businessDate(company)
     for (const loan of ctx.db.bankLoans
       .filter((l) => l.company_id === company.id && l.status === 'SOLICITADO')
@@ -3962,7 +3982,7 @@ function settleBankOrders(ctx: Ctx, company: T.Company) {
 function syncBankTask(ctx: Ctx, companyId: string) {
   const { db } = ctx
   const pending =
-    bankMode(getCompany(db, companyId)) === 'ESTUDIANTES' &&
+    bankMode(db, getCompany(db, companyId)) === 'ESTUDIANTES' &&
     db.bankMovements.some((m) => m.company_id === companyId && m.status === 'PENDIENTE')
   const open = db.tasks.find(
     (t) =>
@@ -4945,7 +4965,7 @@ function syncLoanTask(ctx: Ctx, companyId: string) {
   const { db } = ctx
   const company = getCompany(db, companyId)
   const pending =
-    bankMode(company) === 'ESTUDIANTES' &&
+    bankMode(db, company) === 'ESTUDIANTES' &&
     db.bankLoans.some((l) => l.company_id === companyId && l.status === 'SOLICITADO')
   const open = db.tasks.find(
     (t) =>
@@ -9755,6 +9775,8 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
       transaction_code: null,
       received_on: null,
       received_by: null,
+      interest: 0,
+      imputed_on: null,
     },
   })
   doc.subtotal = debit
@@ -9823,8 +9845,23 @@ export function cmdReceiveTaxReturn(ctx: Ctx, docId: string, reception: TaxRetur
   receiveTaxReturn(ctx, doc, { accept: false, reason }, actor, ctx.userId, null)
 }
 
-/** Tesorería paga el saldo al fisco (simulado) desde una caja o un banco con saldo. SoD-10: no la paga quien la liquidó. */
-export function cmdPayTaxReturn(ctx: Ctx, docId: string, accountId: string) {
+/**
+ * Los intereses resarcitorios de un pago fuera de término (8e.2, a validar): la tasa mensual simple
+ * del fisco sobre el saldo, por los días de atraso desde el vencimiento (mes de 30 días), al centavo.
+ */
+export function taxInterest(amount: number, due: string, on: string) {
+  const days = Math.max(Math.round((Date.parse(on) - Date.parse(due)) / 86_400_000), 0)
+  const cents = Math.round(amount * 100)
+  return { days, interest: Math.round((cents * FISCO_DEFAULTS.interest_rate * days) / 3000) / 100 }
+}
+
+/**
+ * Tesorería paga la declaración (8e.2): por transferencia desde la cuenta del Banco Aula, con los
+ * intereses resarcitorios si ya venció. Se registra el asiento del pago y la orden llega al banco: la
+ * declaración queda "Pago en el banco" hasta que el banco la procesa y el fisco imputa el pago (en el
+ * momento, si el banco lo opera el sistema). SoD-10: no la paga quien la liquidó.
+ */
+export function cmdPayTaxReturn(ctx: Ctx, docId: string) {
   const { db } = ctx
   const doc = getDoc(db, docId, 'TAX_RETURN')
   requireTransition(doc, 'PAY')
@@ -9837,31 +9874,38 @@ export function cmdPayTaxReturn(ctx: Ctx, docId: string, accountId: string) {
       `No podés pagar ${doc.display_number}: la liquidaste vos.`,
       'Separación de funciones: quien liquida un impuesto no lo paga. Tiene que pagarlo otro integrante de Tesorería.',
     )
-  const account = treasuryAccount(db, doc.company_id, accountId)
+  const bank = db.bankAccounts.find((b) => b.company_id === doc.company_id && b.is_active)
+  if (!bank) fail('DATO_INVALIDO', 'La empresa no tiene su cuenta en el Banco Aula: los impuestos se pagan desde ahí.')
+  const account = getAccount(db, doc.company_id, bank.ledger_account_id)
+  const today = businessDate(company)
+  const tr = doc.tr!
+  const { days, interest } = taxInterest(doc.total, tr.due_date, today)
+  const total = round2(doc.total + interest)
   const balance = accountBalance(db, account.id)
-  const name = TAX_NAMES[doc.tr!.tax]
-  const month = periodLabel(doc.tr!.period)
-  if (doc.total > balance + EPS)
+  const name = TAX_NAMES[tr.tax]
+  const month = periodLabel(tr.period)
+  const iva = tr.tax === 'IVA'
+  if (total > balance + EPS)
     fail(
       'SALDO_INSUFICIENTE',
-      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y ${doc.tr!.tax === 'IVA' ? 'el IVA' : 'el impuesto sobre los ingresos brutos'} de ${month} es ${money(doc.total)}.`,
+      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y el pago ${iva ? 'del IVA' : 'de ingresos brutos'} de ${month} es ${money(total)}${interest > 0 ? ` (con ${money(interest)} de intereses resarcitorios)` : ''}.`,
       'Antes de pagar hay que controlar que haya fondos: el flujo de fondos proyectado lo anticipa.',
     )
   transition(ctx, doc, 'PAY', {
     actor,
-    summary: `Pagó ${doc.display_number}: ${name} de ${month}, ${money(doc.total)} desde ${accountLabel(account)}`,
+    summary: `Pagó ${doc.display_number} por transferencia desde el Banco Aula: ${name} de ${month}, ${money(doc.total)}${interest > 0 ? ` y ${money(interest)} de intereses resarcitorios por ${days} días de atraso` : ''}`,
   })
-  doc.tr = { ...doc.tr!, paid_on: businessDate(company), paid_account_id: account.id }
-  const iva = doc.tr!.tax === 'IVA'
+  doc.tr = { ...tr, paid_on: today, paid_account_id: account.id, interest }
   postEvent(
     ctx,
     actor,
     doc,
     iva ? 'PAGO_IVA' : 'PAGO_IIBB',
-    `Pago ${iva ? 'del IVA' : 'de ingresos brutos'} de ${month} (${doc.display_number}).`,
+    `Pago ${iva ? 'del IVA' : 'de ingresos brutos'} de ${month} (${doc.display_number})${interest > 0 ? `, con intereses resarcitorios por ${days} días de atraso` : ''}.`,
     [
       { key: iva ? 'IVA_A_PAGAR' : 'IIBB_A_PAGAR', debit: doc.total, credit: 0 },
-      { account_id: account.id, debit: 0, credit: doc.total },
+      { key: 'INTERESES', debit: interest, credit: 0 },
+      { account_id: account.id, debit: 0, credit: total },
     ],
   )
 }
@@ -10147,6 +10191,8 @@ export function cmdSetModule(ctx: Ctx, companyId: string, module: T.ModuleCode, 
   else ctx.db.companyModules.push({ company_id: companyId, module_code: module, is_enabled: enabled })
   // Bloqueado, el fisco responde solo (8e.1): recibe lo que esperaba; habilitado, vuelven sus tareas.
   if (module === 'fisco') settleFisco(ctx, getCompany(ctx.db, companyId))
+  // Lo mismo con el banco (8e.2, como decía la 8a): bloqueado, procesa solo lo pendiente.
+  if (module === 'bank') settleBankOrders(ctx, getCompany(ctx.db, companyId))
   logAudit(ctx, {
     company_id: companyId,
     actor,

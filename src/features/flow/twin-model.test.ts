@@ -184,9 +184,10 @@ describe('gemelo digital: el banco y el fisco', () => {
       fiscoInfo([
         tax('iva', 'PRESENTADA', 1000, '2027-06-20'),
         tax('iibb', 'PRESENTADA', 300, '2027-06-15'),
+        tax('en-el-banco', 'PAGO_EN_BANCO', 200, '2027-05-15'),
         tax('vieja', 'PAGADA', 50, '2027-05-20'),
       ]),
-    ).toEqual({ pending: 2, amount: 1300, nextDue: '2027-06-15' })
+    ).toEqual({ pending: 3, amount: 1500, nextDue: '2027-05-15' })
     expect(fiscoInfo([])).toEqual({ pending: 0, amount: 0, nextDue: null })
   })
 })

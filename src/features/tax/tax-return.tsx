@@ -2,18 +2,25 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Field, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { commands, type DocumentDetail } from '@/lib/api'
-import { IIBB_DEFAULT_PCT } from '@/lib/domain/catalog'
+import { FISCO_DEFAULTS, IIBB_DEFAULT_PCT } from '@/lib/domain/catalog'
 import type { TaxCode } from '@/lib/domain/types'
 import { date, lastMonthAR, money } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
-import { TreasuryPayDialog } from '@/features/payables/treasury-pay-dialog'
 import { periodLabel, rate } from '@/features/hr/payroll'
 
 /** Lo que se resta (sin mostrar "-$ 0,00" cuando es cero). */
@@ -153,11 +160,13 @@ export function TaxReturnSection({ detail }: { detail: DocumentDetail }) {
 
 /**
  * La declaración en el fisco simulado (Fase 8e.1): si espera que la reciba, el acuse con que la aceptó
- * o el motivo con que la observó, y el control cruzado que hizo con los comprobantes que autorizó.
+ * o el motivo con que la observó, y el control cruzado que hizo con los comprobantes que autorizó. Desde
+ * la 8e.2, el pago: los intereses a la fecha si venció, la orden en el Banco Aula y la imputación.
  */
 export function TaxReturnFiscoSection({ detail }: { detail: DocumentDetail }) {
   const { doc } = detail
   const tr = doc.tr
+  const view = detail.tax_return
   if (!tr?.presented_at) return null
   const iva = tr.tax === 'IVA'
   const declared = iva ? tr.tax_amount : (tr.base ?? 0)
@@ -180,6 +189,44 @@ export function TaxReturnFiscoSection({ detail }: { detail: DocumentDetail }) {
     ) : (
       'Presentada antes de que existiera el fisco simulado: no tiene acuse.'
     )
+  const order = view?.bank_order
+  const late = view?.interest_to_date
+  const payment =
+    !view || view.amount_due <= 0 ? null : doc.status === 'PRESENTADA' ? (
+      late ? (
+        <>
+          Venció el {date(view.due_date)}: a hoy suma {money(late.interest)} de intereses resarcitorios ({late.days}{' '}
+          {late.days === 1 ? 'día' : 'días'} de atraso, {FISCO_DEFAULTS.interest_rate} % mensual), que se pagan con el
+          impuesto.
+        </>
+      ) : (
+        <>Vence el {date(view.due_date)}: después, se paga con intereses resarcitorios.</>
+      )
+    ) : doc.status === 'PAGO_EN_BANCO' ? (
+      order?.status === 'RECHAZADO' ? (
+        <>
+          El Banco Aula rechazó la orden N.º {order.seq} por falta de fondos
+          {order.processed_on ? ` el ${date(order.processed_on)}` : ''}: el fisco no imputó nada. Tesorería la reenvía
+          desde la bandeja del banco cuando haya fondos.
+        </>
+      ) : (
+        <>
+          Enviado al Banco Aula el {date(view.paid_on)}
+          {order ? ` (orden N.º ${order.seq})` : ''}: el fisco lo imputa cuando el banco procesa la orden.
+        </>
+      )
+    ) : view.imputed_on ? (
+      <>
+        Imputado el {date(view.imputed_on)}: {money(view.amount_due + view.interest)}
+        {view.interest > 0 && <> (con {money(view.interest)} de intereses resarcitorios)</>}
+        {order?.transaction_number && (
+          <>
+            , transacción <span className="font-mono">{order.transaction_number}</span> del Banco Aula
+          </>
+        )}
+        .
+      </>
+    ) : null
   return (
     <Section
       title="En el fisco simulado"
@@ -196,6 +243,12 @@ export function TaxReturnFiscoSection({ detail }: { detail: DocumentDetail }) {
               los comprobantes autorizados del mes (menos los anulados en el mes): {money(tr.control_amount)}.{' '}
               {matches ? 'Coinciden.' : 'No coinciden.'}
             </dd>
+          </>
+        )}
+        {payment && (
+          <>
+            <dt className="text-muted-foreground">Pago</dt>
+            <dd>{payment}</dd>
           </>
         )}
       </dl>
@@ -265,7 +318,10 @@ export function TaxReturnFormPage() {
   )
 }
 
-/** Tesorería paga el saldo de la declaración al fisco (simulado). */
+/**
+ * Tesorería paga el saldo de la declaración (Fase 8e.2): por transferencia desde el Banco Aula, con los
+ * intereses resarcitorios si ya venció. El fisco lo imputa cuando el banco procesa la orden.
+ */
 export function TaxReturnPayDialog({
   detail,
   open,
@@ -276,16 +332,51 @@ export function TaxReturnPayDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const view = detail.tax_return!
+  const late = view.interest_to_date
+  const total = view.amount_due + (late?.interest ?? 0)
+  const run = useCommand(() => commands.payTaxReturn(detail.doc.id), {
+    success: 'Pago enviado al Banco Aula: el fisco lo imputa cuando el banco procesa la orden.',
+    onSuccess: () => onOpenChange(false),
+  })
+  const row = (label: string, amount: number, strong = false) => (
+    <div className={`flex justify-between gap-4 ${strong ? 'font-semibold text-navy' : ''}`}>
+      <span>{label}</span>
+      <span className="tabular">{money(amount)}</span>
+    </div>
+  )
   return (
-    <TreasuryPayDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={`Pagar ${detail.doc.display_number}`}
-      description={`${view.tax === 'IVA' ? 'El IVA' : 'Ingresos brutos'} de ${periodLabel(view.period)}: ${money(view.amount_due)}, que vence el ${date(view.due_date)}.`}
-      amount={view.amount_due}
-      pay={(accountId) => commands.payTaxReturn(detail.doc.id, accountId)}
-      success="Impuesto pagado: la declaración quedó pagada."
-    />
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Pagar {detail.doc.display_number}</DialogTitle>
+          <DialogDescription>
+            {view.tax === 'IVA' ? 'El IVA' : 'Ingresos brutos'} de {periodLabel(view.period)}, que vence el{' '}
+            {date(view.due_date)}. Sale por transferencia desde la cuenta de la empresa en el Banco Aula: se registra el
+            asiento del pago y la orden llega al banco; el fisco lo imputa cuando el banco la procesa.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-1 text-sm">
+          {row('Saldo de la declaración', view.amount_due)}
+          {late && (
+            <>
+              {row(
+                `Intereses resarcitorios (${late.days} ${late.days === 1 ? 'día' : 'días'} de atraso, ${FISCO_DEFAULTS.interest_rate} % mensual)`,
+                late.interest,
+              )}
+            </>
+          )}
+          {row('Total de la transferencia', total, true)}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={run.isPending}>
+            Volver
+          </Button>
+          <Button disabled={run.isPending} onClick={() => run.mutate([])}>
+            {run.isPending ? 'Procesando…' : `Pagar ${money(total)}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -1,7 +1,8 @@
 // Pruebas del fisco simulado (docs/FASE_8_BANCO_Y_FISCO.md §4, 8d): el padrón de la empresa, su
 // alta, modificación y baja por quien opera el fisco (Impuestos) y la letra de la factura de venta,
 // que sale del padrón (8d.1); los puntos de venta que pide Ventas y habilita Impuestos, y la
-// autorización de cada factura de venta (8d.2); la recepción de las declaraciones (8e.1).
+// autorización de cada factura de venta (8d.2); la recepción de las declaraciones (8e.1), y la cuenta
+// corriente tributaria y el pago de las declaraciones por el banco, con los intereses (8e.2).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cuitIsValid } from '../domain/cuit'
@@ -14,13 +15,16 @@ import {
   cmdCancelTaxReturn,
   cmdConfirmDeliveryNote,
   cmdConfirmSalesInvoice,
+  cmdCreateJournalEntry,
   cmdCreateSalesInvoice,
   cmdCreateTaxReturn,
   cmdDecidePointOfSale,
   cmdPayTaxReturn,
   cmdPresentTaxReturn,
+  cmdProcessBankOrders,
   cmdReceiveTaxReturn,
   cmdRequestPointOfSale,
+  cmdResendBankOrder,
   cmdSaveTaxpayer,
   cmdSetModule,
   cmdSetTaxpayerActive,
@@ -28,7 +32,15 @@ import {
   type Ctx,
   type TaxpayerInput,
 } from './engine'
-import { authorizedVouchers, documentDetail, invoiceableSalesOrders, padron, pointsOfSale } from './queries'
+import {
+  authorizedVouchers,
+  documentDetail,
+  invoiceableSalesOrders,
+  obligationsCalendar,
+  padron,
+  pointsOfSale,
+  taxAccount,
+} from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -383,7 +395,6 @@ describe('Fisco: la autorización de las facturas de venta (8d.2)', () => {
 
 describe('Fisco: la recepción de las declaraciones (8e.1)', () => {
   const at = (iso: string) => vi.setSystemTime(new Date(`${iso}T10:00:00-03:00`))
-  const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
   /** La declaración de IVA de un mes (aaaa-mm), preparada por Impuestos. */
   const taxReturn = (period: string) =>
     byNumber(cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period, notes: '' }).display_number)
@@ -424,7 +435,7 @@ describe('Fisco: la recepción de las declaraciones (8e.1)', () => {
       `Presentó ${dj.display_number} al fisco: IVA de 05/2027, ${money(dj.total)} a pagar`,
     )
     // Mientras está en el fisco no se paga, no se anula y no se prepara la del mes siguiente.
-    expectBusinessError(() => cmdPayTaxReturn(ctx('tesoreria'), dj.id, account('1.1.01.03')), 'TRANSICION_INVALIDA')
+    expectBusinessError(() => cmdPayTaxReturn(ctx('tesoreria'), dj.id), 'TRANSICION_INVALIDA')
     expectBusinessError(() => cmdCancelTaxReturn(ctx('contabilidad'), dj.id, 'Me equivoqué'), 'TRANSICION_INVALIDA')
     at('2027-07-05')
     expect(
@@ -462,8 +473,8 @@ describe('Fisco: la recepción de las declaraciones (8e.1)', () => {
     expect(db.audit.find((a) => a.document_id === dj.id && a.action === 'APPROVE')!.summary).toBe(
       `Aceptó en el fisco ${dj.display_number} con el acuse SIM-DJ-20270705000001`,
     )
-    cmdPayTaxReturn(ctx('tesoreria'), dj.id, account('1.1.01.03'))
-    expect(dj.status).toBe('PAGADA')
+    cmdPayTaxReturn(ctx('tesoreria'), dj.id)
+    expect(dj.status).toBe('PAGO_EN_BANCO')
   })
 
   it('observada: con el motivo y sin asiento; se anula y se presenta de nuevo', () => {
@@ -525,6 +536,226 @@ describe('Fisco: la recepción de las declaraciones (8e.1)', () => {
     expect(db.pointsOfSale.find((p) => p.id === pos.id)!.status).toBe('HABILITADO')
     expect(db.audit.at(-1)!.summary).toBe('Bloqueó el módulo Fisco simulado')
     expect(cmdRequestPointOfSale(ctx('ventas'), companyId(), { description: 'Feria' }).status).toBe('HABILITADO')
+  })
+})
+
+describe('Fisco: la cuenta corriente y el pago por el banco (8e.2)', () => {
+  const at = (iso: string) => vi.setSystemTime(new Date(`${iso}T10:00:00-03:00`))
+  const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  /** La venta del PV-00001, facturada en mayo, y la declaración de IVA de mayo, presentada y aceptada en junio. */
+  const acceptedMayReturn = () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const pv = byNumber('PV-00001')
+    const lines = db.soLines.filter((l) => l.document_id === pv.id)
+    cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      { sales_order_id: pv.id, notes: '', lines: lines.map((l) => ({ so_line_id: l.id, quantity: l.qty_delivered })) },
+      true,
+    )
+    at('2027-06-05')
+    const dj = byNumber(
+      cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period: '2027-05', notes: '' }).display_number,
+    )
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: true })
+    return dj
+  }
+  /** La orden de una operación en el Banco Aula. */
+  const orderOf = (id: string) => db.bankMovements.find((m) => m.source_document_id === id && m.origin === 'ORDEN')!
+  /** Las líneas del último asiento de la declaración. */
+  const lastEntry = (id: string) => {
+    const entry = db.docLinks
+      .filter((l) => l.from_document_id === id)
+      .map((l) => db.documents.find((d) => d.id === l.to_document_id)!)
+      .filter((d) => d.doc_type === 'JOURNAL_ENTRY')
+      .at(-1)!
+    return db.jeLines
+      .filter((l) => l.document_id === entry.id)
+      .map((l) => `${db.accounts.find((a) => a.id === l.account_id)!.code} ${l.debit} ${l.credit}`)
+  }
+  /** La declaración en la cuenta corriente tributaria. */
+  const row = () => taxAccount(db, userId('contabilidad'), companyId()).rows[0]
+  const obligation = () =>
+    obligationsCalendar(db, userId('contabilidad'), companyId(), '2027-05').rows.find((r) => r.kind === 'IVA')!
+  /** Un asiento manual de Contabilidad, registrado con la fecha de hoy. */
+  const manualEntry = (description: string, lines: [string, number, number][]) =>
+    cmdCreateJournalEntry(
+      ctx('contabilidad'),
+      companyId(),
+      {
+        document_date: new Date().toISOString().slice(0, 10),
+        description,
+        lines: lines.map(([code, debit, credit]) => ({ account_id: account(code), debit, credit })),
+      },
+      true,
+    )
+
+  it('a término: sale del Banco Aula, queda en el banco y el fisco la imputa cuando el banco la procesa', () => {
+    const dj = acceptedMayReturn()
+    const total = dj.total
+    expect(row()).toMatchObject({
+      state: 'A_VENCER',
+      declared: total,
+      interest: 0,
+      paid: 0,
+      balance: total,
+      transaction_code: 'SIM-DJ-20270605000001',
+    })
+    at('2027-06-10')
+    cmdPayTaxReturn(ctx('tesoreria'), dj.id)
+    expect(dj.status).toBe('PAGO_EN_BANCO')
+    expect(dj.tr).toMatchObject({
+      paid_on: '2027-06-10',
+      paid_account_id: account('1.1.01.03'),
+      interest: 0,
+      imputed_on: null,
+    })
+    expect(lastEntry(dj.id)).toEqual([`2.1.04.02 ${total} 0`, `1.1.01.03 0 ${total}`])
+    const order = orderOf(dj.id)
+    expect(order).toMatchObject({
+      status: 'PENDIENTE',
+      direction: 'DEBITO',
+      amount: total,
+      ordered_by: userId('tesoreria'),
+    })
+    expect(db.audit.find((a) => a.document_id === dj.id && a.action === 'PAY')!.summary).toBe(
+      `Pagó ${dj.display_number} por transferencia desde el Banco Aula: IVA de 05/2027, ${money(total)}`,
+    )
+    // Mientras tanto, para el fisco sigue sin pagar.
+    expect(row()).toMatchObject({ state: 'EN_EL_BANCO', paid: 0, balance: total })
+    expect(obligation()).toMatchObject({
+      status: 'A_PAGAR',
+      detail: 'Pago en el banco: el fisco lo imputa cuando el banco lo procesa',
+    })
+    const detail = documentDetail(db, userId('tesoreria'), companyId(), 'TAX_RETURN', dj.display_number)!
+    expect(detail.next_step.who).toBe('Banco Aula (Tesorería)')
+    expect(detail.tax_return!.bank_order).toMatchObject({ seq: order.seq, status: 'PENDIENTE' })
+    // La procesa otro integrante de Tesorería (SoD-12), y el fisco imputa el pago.
+    expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria'), companyId(), [order.id]), 'SEPARACION_FUNCIONES')
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order.id])
+    expect(dj.status).toBe('PAGADA')
+    expect(dj.tr!.imputed_on).toBe('2027-06-10')
+    expect(db.audit.filter((a) => a.document_id === dj.id).at(-1)).toMatchObject({
+      action: 'SYSTEM',
+      actor_user_id: null,
+      summary: `El fisco imputó el pago de ${dj.display_number}: ${money(total)} (transacción ${order.transaction_number} del Banco Aula)`,
+    })
+    expect(row()).toMatchObject({
+      state: 'PAGADA',
+      paid: total,
+      imputed_on: '2027-06-10',
+      bank_transaction: order.transaction_number,
+      balance: 0,
+    })
+    expect(taxAccount(db, userId('contabilidad'), companyId()).balance).toBe(0)
+    expect(obligation()).toMatchObject({ status: 'CUMPLIDA', detail: 'Pagada el 10/06/2027' })
+    // La cuenta corriente la lee quien lee el fisco; Tesorería no.
+    expect(() => taxAccount(db, userId('tesoreria'), companyId())).toThrow()
+  })
+
+  it('fuera de término: con los intereses resarcitorios a la fecha, en la misma orden y a su cuenta', () => {
+    const dj = acceptedMayReturn()
+    const total = dj.total
+    at('2027-07-05')
+    // 15 días después del vencimiento (20/06): 4 % mensual simple, con mes de 30 días.
+    const interest = Math.round((Math.round(total * 100) * 4 * 15) / 3000) / 100
+    expect(interest).toBeGreaterThan(0)
+    expect(row()).toMatchObject({ state: 'VENCIDA', interest, paid: 0, balance: round2(total + interest) })
+    const view = documentDetail(db, userId('tesoreria'), companyId(), 'TAX_RETURN', dj.display_number)!
+    expect(view.tax_return!.interest_to_date).toEqual({ days: 15, interest })
+    expect(view.next_step.text).toBe(
+      `Pagar ${money(total)} al fisco (simulado) por transferencia desde el Banco Aula: venció el 20/06/2027 y a hoy suma ${money(interest)} de intereses resarcitorios (15 días de atraso).`,
+    )
+    expect(obligation()).toMatchObject({ status: 'A_PAGAR', overdue: true })
+    // Con el banco operado por el sistema, el fisco imputa el pago en el momento.
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { bank_mode: 'AUTOMATICO' })
+    cmdPayTaxReturn(ctx('tesoreria'), dj.id)
+    expect(dj.status).toBe('PAGADA')
+    expect(dj.tr).toMatchObject({ paid_on: '2027-07-05', interest, imputed_on: '2027-07-05' })
+    expect(lastEntry(dj.id)).toEqual([
+      `2.1.04.02 ${total} 0`,
+      `5.3.01.04 ${interest} 0`,
+      `1.1.01.03 0 ${round2(total + interest)}`,
+    ])
+    expect(orderOf(dj.id)).toMatchObject({
+      status: 'PROCESADO',
+      amount: round2(total + interest),
+      processed_on: '2027-07-05',
+    })
+    expect(db.audit.find((a) => a.document_id === dj.id && a.action === 'PAY')!.summary).toBe(
+      `Pagó ${dj.display_number} por transferencia desde el Banco Aula: IVA de 05/2027, ${money(total)} y ${money(interest)} de intereses resarcitorios por 15 días de atraso`,
+    )
+    expect(row()).toMatchObject({ state: 'PAGADA', interest, paid: round2(total + interest), balance: 0 })
+    expect(obligation()).toMatchObject({
+      status: 'CUMPLIDA',
+      overdue: false,
+      detail: `Pagada el 05/07/2027, con ${money(interest)} de intereses resarcitorios`,
+    })
+  })
+
+  it('sin fondos en el banco: la orden se rechaza, el fisco no imputa y Tesorería la reenvía', () => {
+    const dj = acceptedMayReturn()
+    const total = dj.total
+    at('2027-06-10')
+    // El banco queda en el límite del descubierto y un depósito registrado espera en el banco: los
+    // libros tienen fondos y el banco no.
+    manualEntry('Pago de la ampliación del galpón con transferencia bancaria.', [
+      ['5.2.02.02', 13_800_000, 0],
+      ['1.1.01.03', 0, 13_800_000],
+    ])
+    cmdProcessBankOrders(
+      ctx('tesoreria2'),
+      companyId(),
+      db.bankMovements.filter((m) => m.company_id === companyId() && m.status === 'PENDIENTE').map((m) => m.id),
+    )
+    const deposit = manualEntry('Aporte de los socios depositado en el banco.', [
+      ['1.1.01.03', 2_000_000, 0],
+      ['3.1.01.01', 0, 2_000_000],
+    ])
+    cmdPayTaxReturn(ctx('tesoreria'), dj.id)
+    const order = orderOf(dj.id)
+    expect(cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order.id])).toEqual({ processed: 0, rejected: 1 })
+    expect(dj.status).toBe('PAGO_EN_BANCO')
+    expect(row()).toMatchObject({ state: 'RECHAZADA', paid: 0, balance: total })
+    expect(obligation().detail).toBe('El banco rechazó el pago por falta de fondos: hay que reenviarlo')
+    expect(
+      documentDetail(db, userId('tesoreria'), companyId(), 'TAX_RETURN', dj.display_number)!.next_step,
+    ).toMatchObject({
+      who: 'Tesorería',
+      text: `El Banco Aula rechazó la orden N.º ${order.seq} por falta de fondos: hay que reenviarla desde la bandeja del banco cuando haya fondos. Hasta que el banco la procese, el fisco no imputa el pago.`,
+    })
+    // Una declaración pagada no se anula: se reenvía la orden cuando hay fondos.
+    expectBusinessError(() => cmdCancelTaxReturn(ctx('contabilidad'), dj.id, 'Sin fondos'), 'TRANSICION_INVALIDA')
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [orderOf(deposit.id).id])
+    at('2027-06-12')
+    cmdResendBankOrder(ctx('tesoreria'), companyId(), order.id)
+    expect(dj.status).toBe('PAGO_EN_BANCO')
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order.id])
+    expect(dj.status).toBe('PAGADA')
+    // Los intereses se calcularon al pagar (a término): el fisco no los recalcula.
+    expect(dj.tr).toMatchObject({ paid_on: '2027-06-10', imputed_on: '2027-06-12', interest: 0 })
+  })
+
+  it('con el módulo del banco bloqueado, el banco procesa solo: lo pendiente al bloquearlo y lo que llega', () => {
+    const dj = acceptedMayReturn()
+    cmdPayTaxReturn(ctx('tesoreria'), dj.id)
+    expect(dj.status).toBe('PAGO_EN_BANCO')
+    cmdSetModule(ctx('docente'), companyId(), 'bank', false)
+    expect(dj.status).toBe('PAGADA')
+    expect(db.bankMovements.filter((m) => m.company_id === companyId() && m.status === 'PENDIENTE')).toEqual([])
+    expect(
+      db.tasks.filter(
+        (t) => t.company_id === companyId() && t.task_type === 'PROCESAR_BANCO' && t.status === 'PENDIENTE',
+      ),
+    ).toEqual([])
+    expect(db.audit.at(-1)!.summary).toBe('Bloqueó el módulo Banco Aula')
+    const deposit = manualEntry('Aporte de los socios depositado en el banco.', [
+      ['1.1.01.03', 1_000, 0],
+      ['3.1.01.01', 0, 1_000],
+    ])
+    expect(orderOf(deposit.id).status).toBe('PROCESADO')
   })
 })
 
@@ -606,5 +837,38 @@ describe('Fisco: las bases guardadas', () => {
     const again = db.profiles.find((p) => p.username === 'impuestos2')!
     const roles = db.memberRoles.filter((r) => db.members.find((m) => m.id === r.member_id)?.user_id === again.id)
     expect(roles.map((r) => r.role_code)).toEqual(['IMPUESTOS'])
+  })
+
+  it('una base de la versión 30 recibe la cuenta de los intereses resarcitorios, sus reglas y los datos del pago', () => {
+    const dj = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period: '2027-04', notes: '' })
+    const company = companyId()
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    old.accounts = old.accounts!.filter((a) => a.company_id !== company || a.code !== '5.3.01.04')
+    old.postingRules = old.postingRules!.filter((r) => r.key !== 'INTERESES' || !r.event.startsWith('PAGO_'))
+    for (const d of old.documents!)
+      if (d.tr) {
+        const tr: Partial<T.TaxReturnHeader> = d.tr
+        delete tr.interest
+        delete tr.imputed_on
+        // Una declaración pagada antes de la 8e.2.
+        if (d.id === dj.id) {
+          d.status = 'PAGADA'
+          tr.paid_on = '2027-05-10'
+        }
+      }
+    old.version = 30
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    expect(byNumber(dj.display_number).tr).toMatchObject({ interest: 0, imputed_on: '2027-05-10' })
+    const interest = db.accounts.find((a) => a.company_id === company && a.code === '5.3.01.04')!
+    expect(interest).toMatchObject({ name: 'Intereses resarcitorios', is_imputable: true, is_active: true })
+    expect(
+      db.postingRules
+        .filter((r) => r.company_id === company && r.key === 'INTERESES' && r.event.startsWith('PAGO_'))
+        .map((r) => [r.event, r.account_id]),
+    ).toEqual([
+      ['PAGO_IVA', interest.id],
+      ['PAGO_IIBB', interest.id],
+    ])
   })
 })

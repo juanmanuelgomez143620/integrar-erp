@@ -115,6 +115,7 @@ const PointsOfSalePage = lazyPage(() => import('@/features/fisco/points-of-sale-
 const AuthorizedVouchersPage = lazyPage(() =>
   import('@/features/fisco/vouchers-page').then((m) => m.AuthorizedVouchersPage),
 )
+const TaxAccountPage = lazyPage(() => import('@/features/fisco/tax-account-page').then((m) => m.TaxAccountPage))
 const BankStatementPrintPage = lazyPage(() =>
   import('@/features/bank/bank-statement').then((m) => m.BankStatementPrintPage),
 )
@@ -207,6 +208,7 @@ export const router = createBrowserRouter(
                 { path: 'fisco/padron', element: <PadronPage /> },
                 { path: 'fisco/puntos-de-venta', element: <PointsOfSalePage /> },
                 { path: 'fisco/comprobantes', element: <AuthorizedVouchersPage /> },
+                { path: 'fisco/cuenta-corriente', element: <TaxAccountPage /> },
                 { path: 'pagos/flujo-de-fondos', element: <CashFlowPage /> },
                 { path: 'pagos/transferencias', element: <DocumentListPage key="ft" docType="FUNDS_TRANSFER" /> },
                 { path: 'pagos/transferencias/nueva', element: <TransferFormPage /> },

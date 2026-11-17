@@ -1033,7 +1033,11 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
           <span className="font-semibold">{money(tr.amount_due > 0 ? tr.amount_due : tr.balance_in_favor)}</span>
           {tr.amount_due > 0 && (
             <span className="text-xs text-muted-foreground">
-              {tr.paid_on ? ` · pagado el ${date(tr.paid_on)} desde ${tr.paid_account?.name}` : ' · sin pagar'}
+              {!tr.paid_on
+                ? ' · sin pagar'
+                : tr.imputed_on
+                  ? ` · pagado el ${date(tr.paid_on)} desde ${tr.paid_account?.name}${tr.interest > 0 ? `, con ${money(tr.interest)} de intereses` : ''}`
+                  : ` · pago en el banco desde el ${date(tr.paid_on)}`}
             </span>
           )}
           {tr.amount_due === 0 && <span className="text-xs text-muted-foreground"> · para el mes siguiente</span>}

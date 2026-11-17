@@ -266,6 +266,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     bankLoans: (companyId) => rpc('bank_loans', company(companyId)),
     padron: (companyId) => rpc('padron', company(companyId)),
     pointsOfSale: (companyId) => rpc('points_of_sale', company(companyId)),
+    taxAccount: (companyId) => rpc('tax_account', company(companyId)),
     authorizedVouchers: (companyId, month) => rpc('authorized_vouchers', { ...company(companyId), p_month: month }),
     loanPreview: (companyId, amount, months) =>
       rpc('loan_preview', { ...company(companyId), p_amount: amount, p_months: months }),
@@ -462,7 +463,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     createTaxReturn: (companyId, input) => rpc('tax_return_create', { ...company(companyId), p_input: input }),
     presentTaxReturn: (docId) => rpc('tax_return_present', doc(docId)),
     receiveTaxReturn: (docId, reception) => rpc('tax_return_receive', { ...doc(docId), p_input: reception }),
-    payTaxReturn: (docId, accountId) => rpc('tax_return_pay', { ...doc(docId), p_account_id: accountId }),
+    payTaxReturn: (docId) => rpc('tax_return_pay', doc(docId)),
     cancelTaxReturn: (docId, reason) => rpc('tax_return_cancel', { ...doc(docId), p_reason: reason }),
     createRouteSheet: (companyId, input) => rpc('rs_create', { ...company(companyId), p_input: input }),
     departRouteSheet: (docId) => rpc('rs_depart', doc(docId)),

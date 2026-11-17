@@ -562,9 +562,16 @@ export interface TaxReturnHeader {
   base: number | null
   rate: number | null
   presented_at: string | null
-  /** El pago (si hubo saldo a pagar): el día y la caja o el banco. */
+  /**
+   * El pago (si hubo saldo a pagar): el día en que Tesorería lo registró y la cuenta (desde la 8e.2,
+   * la del Banco Aula).
+   */
   paid_on: string | null
   paid_account_id: string | null
+  /** Los intereses resarcitorios que se pagaron con el impuesto (Fase 8e.2): 0 si se pagó a término. */
+  interest: number
+  /** Cuándo el fisco imputó el pago: el día en que el banco procesó la orden (null mientras no la procesa). */
+  imputed_on: string | null
   /**
    * El control cruzado del fisco (Fase 8e.1), calculado al presentarla con los comprobantes que
    * autorizó en el mes: en el IVA, el débito fiscal; en ingresos brutos, la base. null antes de presentarla.

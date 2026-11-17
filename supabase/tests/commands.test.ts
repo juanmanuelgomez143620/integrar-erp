@@ -3759,6 +3759,18 @@ describe('paridad de comandos', () => {
         (b) => b.api.cashFlow(companyPg, from, todayAR()),
         (u) => Q.cashFlow(mock, u, company, from, todayAR()),
       )
+      await sameRead(
+        `cuenta corriente tributaria ${label}`,
+        'contabilidad',
+        (b) => b.api.taxAccount(companyPg),
+        (u) => Q.taxAccount(mock, u, company),
+      )
+      await sameRead(
+        `vencimientos del mes pasado ${label}`,
+        'contabilidad',
+        (b) => b.api.obligations(companyPg, month(-1)),
+        (u) => Q.obligationsCalendar(mock, u, company, month(-1)),
+      )
     }
     await reads('al empezar')
 
@@ -3851,27 +3863,18 @@ describe('paridad de comandos', () => {
     expect(await present('presentar la corregida', 'contabilidad', second)).not.toBeNull()
     expect(await receive('el fisco acepta la corregida', 'impuestos2', second, { accept: true })).not.toBeNull()
 
-    // Pagarla: quién, desde dónde y SoD-10.
-    const pay = (label: string, username: string, accountId: string) =>
+    // Pagarla (8e.2): por transferencia desde el Banco Aula; quién y SoD-10.
+    const pay = (label: string, username: string) =>
       step(
         label,
         username,
-        (c) => E.cmdPayTaxReturn(c, second, accountId),
-        (b) => b.commands.payTaxReturn(pg(second), pg(accountId)),
+        (c) => E.cmdPayTaxReturn(c, second),
+        (b) => b.commands.payTaxReturn(pg(second)),
       )
     const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
     const due = () => mock.documents.find((d) => d.id === second)!.total
-    const short = mock.accounts.find(
-      (a) =>
-        a.company_id === company &&
-        a.is_active &&
-        a.is_imputable &&
-        a.code.startsWith('1.1.01.') &&
-        E.accountBalance(mock, a.id) < due(),
-    )!.id
     expect(E.accountBalance(mock, account('1.1.01.03'))).toBeGreaterThan(due())
-    expect(await pay('Contabilidad no paga', 'contabilidad', account('1.1.01.03'))).toBeNull()
-    expect(await pay('desde una cuenta sin fondos', 'tesoreria', short)).toBeNull()
+    expect(await pay('Contabilidad no paga', 'contabilidad')).toBeNull()
     const tes = mock.sectors.find((s) => s.company_id === company && s.code === 'TES')!.id
     await ok(
       'el docente le suma Tesorería a Contabilidad',
@@ -3886,9 +3889,29 @@ describe('paridad de comandos', () => {
       (u) =>
         Q.documentDetail(mock, u, company, 'TAX_RETURN', mock.documents.find((d) => d.id === second)!.display_number),
     )
-    expect(await pay('pagar la que liquidó', 'contabilidad', account('1.1.01.03'))).toBeNull()
-    expect(await pay('pagarla', 'tesoreria', account('1.1.01.03'))).not.toBeNull()
-    expect(await pay('pagarla otra vez', 'tesoreria', account('1.1.01.03'))).toBeNull()
+    expect(await pay('pagar la que liquidó', 'contabilidad')).toBeNull()
+    expect(await pay('pagarla', 'tesoreria')).not.toBeNull()
+    expect(await pay('pagarla otra vez', 'tesoreria')).toBeNull()
+    expect(mock.documents.find((d) => d.id === second)!.status).toBe('PAGO_EN_BANCO')
+    expect(await cancel('anular la que está en el banco', 'contabilidad', second, 'Tarde')).toBeNull()
+    await reads('con el pago en el banco')
+    // El banco procesa la orden (otro integrante de Tesorería: SoD-12) y el fisco imputa el pago.
+    const order = (await linkPendingBankOrders()).find((m) => m.source_document_id === second)!
+    expect(
+      await step(
+        'quien pagó no procesa la orden',
+        'tesoreria',
+        (c) => E.cmdProcessBankOrders(c, company, [order.id]),
+        (b) => b.commands.processBankOrders(companyPg, [pg(order.id)]),
+      ),
+    ).toBeNull()
+    await ok(
+      'el banco procesa el pago',
+      'tesoreria2',
+      (c) => E.cmdProcessBankOrders(c, company, [order.id]),
+      (b) => b.commands.processBankOrders(companyPg, [pg(order.id)]),
+    )
+    expect(mock.documents.find((d) => d.id === second)!.status).toBe('PAGADA')
     expect(await cancel('anular la pagada', 'contabilidad', second, 'Tarde')).toBeNull()
     await reads('pagada')
   })
@@ -3985,16 +4008,24 @@ describe('paridad de comandos', () => {
       )
     expect(doc().status).not.toBe('ENVIADA')
     await reads('presentada')
-    const bank = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
     if (doc().status === 'PRESENTADA') {
       expect(
         await step(
           'pagarla',
           'tesoreria',
-          (c) => E.cmdPayTaxReturn(c, id, bank),
-          (b) => b.commands.payTaxReturn(pg(id), pg(bank)),
+          (c) => E.cmdPayTaxReturn(c, id),
+          (b) => b.commands.payTaxReturn(pg(id)),
         ),
       ).not.toBeNull()
+      await reads('con el pago en el banco')
+      const order = (await linkPendingBankOrders()).find((m) => m.source_document_id === id)!
+      await ok(
+        'el banco procesa el pago',
+        'tesoreria2',
+        (c) => E.cmdProcessBankOrders(c, company, [order.id]),
+        (b) => b.commands.processBankOrders(companyPg, [pg(order.id)]),
+      )
+      expect(doc().status).toBe('PAGADA')
       await reads('pagada')
     }
   })
@@ -5087,6 +5118,56 @@ describe('paridad de comandos', () => {
     await requested('con el módulo bloqueado, se habilita en el momento', 'Feria de invierno')
     await module('lo vuelve a habilitar', true)
     await read('los puntos de venta al final', 'ventas')
+  })
+
+  it('banco bloqueado (8e.2): el banco procesa solo lo pendiente al bloquearlo y lo que llega', async () => {
+    const companyPg = pg(company)
+    const account = (code: string) => mock.accounts.find((a) => a.company_id === company && a.code === code)!.id
+    const input: E.FundsTransferInput = {
+      from_account_id: account('1.1.01.01'),
+      to_account_id: account('1.1.01.03'),
+      amount: 1000,
+      reference: 'Boleta 0003-0009',
+      notes: '',
+    }
+    const pgInput = { ...input, from_account_id: pg(input.from_account_id), to_account_id: pg(input.to_account_id) }
+    const deposit = (label: string) =>
+      created(
+        label,
+        'tesoreria',
+        (c) => E.cmdCreateFundsTransfer(c, company, input, true),
+        (b) => b.commands.createFundsTransfer(companyPg, pgInput, true),
+      )
+    const module = (label: string, enabled: boolean) =>
+      ok(
+        label,
+        'docente',
+        (c) => E.cmdSetModule(c, company, 'bank', enabled),
+        (b) => b.commands.setModule(companyPg, 'bank', enabled),
+      )
+    const view = (label: string) =>
+      sameRead(
+        label,
+        'docente',
+        (b) => b.api.bankAccount(companyPg),
+        (u) => Q.bankAccountView(mock, u, company),
+      )
+    const pending = () => mock.bankMovements.filter((m) => m.company_id === company && m.status === 'PENDIENTE')
+    await ok(
+      'lo opera Tesorería',
+      'docente',
+      (c) => E.cmdUpdateCompanySettings(c, company, { bank_mode: 'ESTUDIANTES' }),
+      (b) => b.commands.updateCompanySettings(companyPg, { bank_mode: 'ESTUDIANTES' }),
+    )
+    await deposit('un depósito espera en el banco')
+    expect(pending().length).toBeGreaterThan(0)
+    await module('el docente bloquea el módulo del banco', false)
+    expect(pending().filter((m) => m.presented_on === null)).toEqual([])
+    await view('la cuenta con el módulo bloqueado: lo opera el sistema')
+    const later = await deposit('con el módulo bloqueado, se procesa en el momento')
+    expect(mock.bankMovements.find((m) => m.source_document_id === later)!.status).toBe('PROCESADO')
+    await module('lo vuelve a habilitar', true)
+    await view('la cuenta al final')
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {

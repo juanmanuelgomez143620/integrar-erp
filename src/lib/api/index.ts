@@ -88,6 +88,8 @@ export type {
   TaxpayerRow,
   PointOfSaleRow,
   AuthorizedVoucher,
+  TaxAccount,
+  TaxAccountRow,
   ProductionCostRow,
   ProductionNeedRow,
   ProductionOrderView,
@@ -257,6 +259,7 @@ const mockApi = {
   bankLoans: (companyId: string) => query((db, u) => Q.bankLoans(db, u, companyId)),
   padron: (companyId: string) => query((db, u) => Q.padron(db, u, companyId)),
   pointsOfSale: (companyId: string) => query((db, u) => Q.pointsOfSale(db, u, companyId)),
+  taxAccount: (companyId: string) => query((db, u) => Q.taxAccount(db, u, companyId)),
   authorizedVouchers: (companyId: string, month: string) =>
     query((db, u) => Q.authorizedVouchers(db, u, companyId, month)),
   loanPreview: (companyId: string, amount: number, months: number) =>
@@ -479,7 +482,7 @@ const mockCommands = {
   receiveTaxReturn: (docId: string, reception: E.TaxReturnReception) =>
     command((c) => E.cmdReceiveTaxReturn(c, docId, reception)),
   presentTaxReturn: (docId: string) => command((c) => E.cmdPresentTaxReturn(c, docId)),
-  payTaxReturn: (docId: string, accountId: string) => command((c) => E.cmdPayTaxReturn(c, docId, accountId)),
+  payTaxReturn: (docId: string) => command((c) => E.cmdPayTaxReturn(c, docId)),
   cancelTaxReturn: (docId: string, reason: string) => command((c) => E.cmdCancelTaxReturn(c, docId, reason)),
   createRouteSheet: (companyId: string, input: E.RouteSheetInput) =>
     command((c) => E.cmdCreateRouteSheet(c, companyId, input)),

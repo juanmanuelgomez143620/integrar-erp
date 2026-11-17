@@ -228,6 +228,7 @@ export const NAV: NavGroup[] = [
       { label: 'Padrón', path: 'fisco/padron', icon: ScrollText, permission: 'fisco.read' },
       { label: 'Puntos de venta', path: 'fisco/puntos-de-venta', icon: Store, permission: 'fisco.read' },
       { label: 'Comprobantes autorizados', path: 'fisco/comprobantes', icon: BadgeCheck, permission: 'fisco.read' },
+      { label: 'Cuenta corriente', path: 'fisco/cuenta-corriente', icon: Landmark, permission: 'fisco.read' },
     ],
   },
   {

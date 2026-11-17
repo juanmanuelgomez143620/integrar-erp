@@ -372,6 +372,11 @@ describe('tesorería', () => {
     }
   })
 
+  it('la cuenta corriente tributaria (8e.2)', async () => {
+    for (const u of [...USERS, 'tesoreria2', 'impuestos2'])
+      await same(u, () => Q.taxAccount(mock, userId(u), company), 'tax_account', [companyPg])
+  })
+
   it('el extracto del Banco Aula: un año, un mes sin movimientos y períodos mal armados', async () => {
     const year = new Date().getFullYear()
     const periods: [string, string][] = [

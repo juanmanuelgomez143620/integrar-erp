@@ -231,16 +231,21 @@ export function bankBalance(accounts: TreasuryAccountRow[]): number {
 }
 
 export interface FiscoInfo {
-  /** Declaraciones presentadas que falta pagar. */
+  /** Declaraciones presentadas que el fisco todavía no imputó como pagadas. */
   pending: number
   amount: number
   /** El vencimiento más próximo de esas declaraciones. */
   nextDue: string | null
 }
 
-/** Lo que la empresa le debe al fisco: las declaraciones presentadas sin pagar. */
+/**
+ * Lo que la empresa le debe al fisco: las declaraciones presentadas sin pagar y, desde la 8e.2, las que
+ * tienen el pago en el banco (el fisco lo imputa cuando el banco procesa la orden).
+ */
 export function fiscoInfo(docs: DocumentListItem[]): FiscoInfo {
-  const due = docs.filter((doc) => doc.doc_type === 'TAX_RETURN' && doc.status === 'PRESENTADA')
+  const due = docs.filter(
+    (doc) => doc.doc_type === 'TAX_RETURN' && (doc.status === 'PRESENTADA' || doc.status === 'PAGO_EN_BANCO'),
+  )
   return {
     pending: due.length,
     amount: due.reduce((sum, doc) => sum + doc.total, 0),

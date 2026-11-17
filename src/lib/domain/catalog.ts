@@ -529,8 +529,9 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     ENVIADA: { label: 'Enviada al fisco', badge: 'info', final: false, description: 'Espera que el fisco la reciba: la acepta con un acuse o la observa con el motivo.' },
     OBSERVADA: { label: 'Observada por el fisco', badge: 'danger', final: false, description: 'El fisco la observó: hay que anularla y presentarla de nuevo.' },
     PRESENTADA: { label: 'Presentada', badge: 'info', final: false, description: 'El fisco la aceptó y se registró el asiento del impuesto: Tesorería tiene que pagar el saldo.' },
+    PAGO_EN_BANCO: { label: 'Pago en el banco', badge: 'warning', final: false, description: 'Tesorería pagó por transferencia desde el Banco Aula: cuando el banco procesa la orden, el fisco imputa el pago. Si el banco la rechaza por falta de fondos, Tesorería la reenvía.' },
     SIN_SALDO: { label: 'Presentada sin saldo a pagar', badge: 'success', final: true, description: 'El fisco la aceptó y no hay nada que pagar: el saldo a favor, si lo hay, se descuenta en la del mes siguiente.' },
-    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'Se presentó y se pagó el saldo al fisco (simulado).' },
+    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'El fisco imputó el pago del saldo (con los intereses resarcitorios, si se pagó después del vencimiento).' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba presentada, un contraasiento revirtió el del impuesto.' },
   },
   ROUTE_SHEET: {
@@ -733,7 +734,8 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('TAX_RETURN', 'ENVIADA', 'APPROVE', 'SIN_SALDO', 'fisco.operate', 'Aceptar (fisco)', 'Como fisco: la acepta con un acuse y se registra el asiento del impuesto. No la recibe quien la preparó o la presentó.'),
   t('TAX_RETURN', 'ENVIADA', 'REJECT', 'OBSERVADA', 'fisco.operate', 'Observar (fisco)', 'Como fisco: la observa con el motivo; Impuestos tiene que anularla y presentarla de nuevo.', true, 'destructive'),
   t('TAX_RETURN', 'OBSERVADA', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'La declaración observada queda sin efecto: después se presenta de nuevo.', true, 'destructive'),
-  t('TAX_RETURN', 'PRESENTADA', 'PAY', 'PAGADA', 'tax_return.pay', 'Pagar', 'Paga el saldo al fisco (simulado) desde una caja o un banco: genera el asiento de pago.'),
+  t('TAX_RETURN', 'PRESENTADA', 'PAY', 'PAGO_EN_BANCO', 'tax_return.pay', 'Pagar', 'Paga el saldo por transferencia desde el Banco Aula, con los intereses resarcitorios si ya venció: genera el asiento del pago y la orden al banco. El fisco lo imputa cuando el banco la procesa.'),
+  t('TAX_RETURN', 'PAGO_EN_BANCO', 'SYSTEM', 'PAGADA', null, '', ''),
   t('TAX_RETURN', 'PRESENTADA', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
   t('TAX_RETURN', 'SIN_SALDO', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
   // Hoja de ruta (Fase 7c.2): rendirla tiene su propio diálogo, con el resultado de cada remito.
@@ -832,7 +834,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'TAX_RETURN', status: 'OBSERVADA', taskType: 'CORREGIR_DJ', assignee: 'CREATOR', title: 'Volver a presentar {number}', description: 'El fisco observó la declaración: leer el motivo, anularla y presentarla de nuevo.' },
   { docType: 'ROUTE_SHEET', status: 'BORRADOR', taskType: 'SALIR_HOJA', assignee: 'CREATOR', title: 'Salir con {number}', description: 'Cargar la mercadería de los remitos en el orden de visita, controlar el transporte y salir a repartir.' },
   { docType: 'ROUTE_SHEET', status: 'EN_CAMINO', taskType: 'RENDIR_HOJA', assignee: 'CREATOR', title: 'Rendir {number}', description: 'Al volver, registrar qué remitos se entregaron (y quién los recibió) y cuáles no (y por qué).' },
-  { docType: 'TAX_RETURN', status: 'PRESENTADA', taskType: 'PAGAR_DJ', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar el saldo de la declaración al fisco (simulado) antes del vencimiento y registrar el pago.' },
+  { docType: 'TAX_RETURN', status: 'PRESENTADA', taskType: 'PAGAR_DJ', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar el saldo de la declaración por transferencia desde el Banco Aula antes del vencimiento (después, con intereses resarcitorios).' },
   { docType: 'PAYROLL', status: 'SUELDOS_PAGADOS', taskType: 'PAGAR_CARGAS_SOCIALES', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar las cargas sociales de {number}', description: 'Pagar los aportes retenidos y las contribuciones del mes antes del vencimiento, y registrar el pago.' },
   { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },
 ]
@@ -971,6 +973,11 @@ export const FISCO_DEFAULTS = {
   opening_point_of_sale_description: 'Casa central',
   /** Días de vigencia del código de autorización de una factura. */
   authorization_days: 10,
+  /**
+   * Intereses resarcitorios por pagar un impuesto después del vencimiento (Fase 8e.2, a validar): tasa
+   * mensual simple, en por ciento, sobre el saldo y por los días de atraso, con mes de 30 días.
+   */
+  interest_rate: 4,
 }
 
 export const POINT_OF_SALE_STATUSES: Record<PointOfSaleStatus, { label: string; badge: Badge }> = {
@@ -1169,8 +1176,9 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
   PAGO_IVA: {
     label: 'Pago de IVA (declaración)',
     keys: {
-      // La contrapartida es la caja o el banco elegido, no una regla.
+      // La contrapartida es el banco (la cuenta del Banco Aula), no una regla.
       IVA_A_PAGAR: 'Saldo que se paga',
+      INTERESES: 'Intereses resarcitorios (pago fuera de término)',
     },
   },
   IIBB: {
@@ -1184,8 +1192,9 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
   PAGO_IIBB: {
     label: 'Pago de ingresos brutos (declaración)',
     keys: {
-      // La contrapartida es la caja o el banco elegido, no una regla.
+      // La contrapartida es el banco (la cuenta del Banco Aula), no una regla.
       IIBB_A_PAGAR: 'Saldo que se paga',
+      INTERESES: 'Intereses resarcitorios (pago fuera de término)',
     },
   },
   CARGOS_BANCARIOS: {

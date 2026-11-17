@@ -99,6 +99,7 @@ import {
   salesQuoteLines,
   shortageText,
   TAX_NAMES,
+  taxInterest,
   taxReturnPreparers,
   type AccountLine,
 } from './engine'
@@ -1180,11 +1181,28 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
         who: 'Impuestos',
         text: `El fisco la observó${doc.status_reason ? ` con este motivo: «${doc.status_reason}»` : ''}. Hay que anularla y presentarla de nuevo.`,
       }
-    case 'TAX_RETURN:PRESENTADA':
+    case 'TAX_RETURN:PRESENTADA': {
+      const late = taxInterest(doc.total, doc.tr!.due_date, todayAR())
       return {
         who: 'Tesorería',
-        text: `Pagar ${money(doc.total)} al fisco (simulado) antes del ${date(doc.tr?.due_date)}.`,
+        text:
+          late.days > 0
+            ? `Pagar ${money(doc.total)} al fisco (simulado) por transferencia desde el Banco Aula: venció el ${date(doc.tr?.due_date)} y a hoy suma ${money(late.interest)} de intereses resarcitorios (${late.days} días de atraso).`
+            : `Pagar ${money(doc.total)} al fisco (simulado) por transferencia desde el Banco Aula antes del ${date(doc.tr?.due_date)}.`,
       }
+    }
+    case 'TAX_RETURN:PAGO_EN_BANCO': {
+      const order = taxPaymentOrder(db, doc.id)
+      return order?.status === 'RECHAZADO'
+        ? {
+            who: 'Tesorería',
+            text: `El Banco Aula rechazó la orden N.º ${order.seq} por falta de fondos: hay que reenviarla desde la bandeja del banco cuando haya fondos. Hasta que el banco la procese, el fisco no imputa el pago.`,
+          }
+        : {
+            who: 'Banco Aula (Tesorería)',
+            text: `El pago está en el Banco Aula${order ? ` (orden N.º ${order.seq})` : ''}: lo procesa un integrante de Tesorería que no lo envió y, cuando el banco lo debita, el fisco lo imputa.`,
+          }
+    }
     case 'JOURNAL_ENTRY:BORRADOR':
       return {
         who: 'Contabilidad',
@@ -3611,7 +3629,7 @@ export function bankAccountView(db: DB, userId: string, companyId: string): Bank
       overdraft_rate: account.overdraft_rate,
       ledger: { id: ledger.id, code: ledger.code, name: ledger.name },
     },
-    mode: bankMode(company),
+    mode: bankMode(db, company),
     to_close: bankMonthToClose(db, account, today),
     balance,
     book_balance: accountBalance(db, ledger.id),
@@ -3829,6 +3847,89 @@ export function authorizedVouchers(db: DB, userId: string, companyId: string, mo
         status: d.status,
       }
     })
+}
+
+/** Una declaración en la cuenta corriente tributaria de la empresa (Fase 8e.2). */
+export interface TaxAccountRow {
+  document: { id: string; display_number: string; path: string }
+  tax: T.TaxCode
+  period: string
+  due_date: string
+  /** El acuse del fisco (null si es anterior a la 8e). */
+  transaction_code: string | null
+  /** El saldo a pagar declarado (0 si quedó a favor). */
+  declared: number
+  /** Lo que quedó a favor para el mes siguiente. */
+  balance_in_favor: number
+  /** Los intereses resarcitorios: los pagados o, vencida sin pagar, a hoy. */
+  interest: number
+  /** Lo que el fisco imputó: el saldo y los intereses, cuando el banco procesó el pago. */
+  paid: number
+  imputed_on: string | null
+  /** La transacción del Banco Aula del pago imputado. */
+  bank_transaction: string | null
+  /** Lo que se le debe al fisco: lo declarado y los intereses, menos lo imputado. */
+  balance: number
+  state: 'SIN_SALDO' | 'A_VENCER' | 'VENCIDA' | 'EN_EL_BANCO' | 'RECHAZADA' | 'PAGADA'
+}
+
+export interface TaxAccount {
+  /** El día de la consulta: los intereses de lo vencido sin pagar son a esta fecha. */
+  date: string
+  rows: TaxAccountRow[]
+  /** Lo que se le debe al fisco a hoy. */
+  balance: number
+}
+
+/** Las declaraciones que el fisco aceptó: las que están en su cuenta corriente. */
+const TAX_ACCOUNT_STATUSES = ['PRESENTADA', 'SIN_SALDO', 'PAGO_EN_BANCO', 'PAGADA']
+
+/**
+ * La cuenta corriente tributaria de la empresa (Fase 8e.2): las declaraciones que el fisco aceptó, de
+ * la más nueva a la más vieja (en un mes, ingresos brutos y después el IVA), con lo declarado, los
+ * intereses, lo imputado y el saldo.
+ */
+export function taxAccount(db: DB, userId: string, companyId: string): TaxAccount {
+  assertPerm(db, userId, companyId, 'fisco.read')
+  const today = todayAR()
+  const rows = db.documents
+    .filter((d) => d.company_id === companyId && d.doc_type === 'TAX_RETURN' && TAX_ACCOUNT_STATUSES.includes(d.status))
+    .sort((a, b) =>
+      a.tr!.period !== b.tr!.period ? (a.tr!.period < b.tr!.period ? 1 : -1) : a.tr!.tax < b.tr!.tax ? -1 : 1,
+    )
+    .map((d): TaxAccountRow => {
+      const tr = d.tr!
+      const order = taxPaymentOrder(db, d.id)
+      const interest = d.status === 'PRESENTADA' ? taxInterest(d.total, tr.due_date, today).interest : tr.interest
+      const paid = d.status === 'PAGADA' ? round2(d.total + tr.interest) : 0
+      return {
+        document: { id: d.id, display_number: d.display_number, path: docPath(db, d) },
+        tax: tr.tax,
+        period: tr.period,
+        due_date: tr.due_date,
+        transaction_code: tr.transaction_code,
+        declared: d.total,
+        balance_in_favor: tr.balance_in_favor,
+        interest,
+        paid,
+        imputed_on: d.status === 'PAGADA' ? tr.imputed_on : null,
+        bank_transaction: d.status === 'PAGADA' && order?.status === 'PROCESADO' ? order.transaction_number : null,
+        balance: round2(d.total + interest - paid),
+        state:
+          d.status === 'SIN_SALDO'
+            ? 'SIN_SALDO'
+            : d.status === 'PAGADA'
+              ? 'PAGADA'
+              : d.status === 'PAGO_EN_BANCO'
+                ? order?.status === 'RECHAZADO'
+                  ? 'RECHAZADA'
+                  : 'EN_EL_BANCO'
+                : today > tr.due_date
+                  ? 'VENCIDA'
+                  : 'A_VENCER',
+      }
+    })
+  return { date: today, rows, balance: round2(rows.reduce((s, r) => s + r.balance, 0)) }
 }
 
 /** Una línea del extracto: lo que el banco procesó un día, con el saldo después del movimiento. */
@@ -4891,6 +4992,16 @@ export function productionCosts(
 
 // ============================================================ Impuestos (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2)
 
+/** La orden del pago de una declaración en el Banco Aula, si la hay (Fase 8e.2). */
+function taxPaymentOrder(db: DB, docId: string) {
+  return db.bankMovements
+    .filter(
+      (m) =>
+        m.source_document_id === docId && m.origin === 'ORDEN' && m.reverses_id === null && m.direction === 'DEBITO',
+    )
+    .sort((a, b) => a.seq - b.seq)[0]
+}
+
 /** "IVA de 09/2026": el título de una declaración. */
 const taxReturnTitle = (tr: T.TaxReturnHeader) =>
   `${tr.tax === 'IVA' ? 'IVA' : 'Ingresos brutos'} de ${periodLabel(tr.period)}`
@@ -4909,6 +5020,20 @@ export interface TaxReturnView {
   presented_at: string | null
   paid_on: string | null
   paid_account: { id: string; code: string; name: string } | null
+  /** Los intereses resarcitorios que se pagaron con el impuesto (Fase 8e.2). */
+  interest: number
+  /** Cuándo el fisco imputó el pago: el día en que el banco procesó la orden. */
+  imputed_on: string | null
+  /** Presentada, sin pagar y vencida: los días de atraso y los intereses a hoy. */
+  interest_to_date: { days: number; interest: number } | null
+  /** La orden del pago en el Banco Aula, si la hay. */
+  bank_order: {
+    seq: number
+    status: T.BankMovementStatus
+    received_on: string
+    processed_on: string | null
+    transaction_number: string | null
+  } | null
   /** En ingresos brutos (Fase 7b): las ventas netas del mes y la alícuota (null en el IVA). */
   base: number | null
   rate: number | null
@@ -4927,6 +5052,8 @@ export interface TaxReturnView {
 function taxReturnView(db: DB, doc: T.Document): TaxReturnView {
   const tr = doc.tr!
   const paid = tr.paid_account_id ? db.accounts.find((a) => a.id === tr.paid_account_id) : undefined
+  const late = doc.status === 'PRESENTADA' ? taxInterest(doc.total, tr.due_date, todayAR()) : null
+  const order = taxPaymentOrder(db, doc.id)
   return {
     tax: tr.tax,
     period: tr.period,
@@ -4939,6 +5066,18 @@ function taxReturnView(db: DB, doc: T.Document): TaxReturnView {
     presented_at: tr.presented_at,
     paid_on: tr.paid_on,
     paid_account: paid ? { id: paid.id, code: paid.code, name: paid.name } : null,
+    interest: tr.interest,
+    imputed_on: tr.imputed_on,
+    interest_to_date: late && late.days > 0 ? late : null,
+    bank_order: order
+      ? {
+          seq: order.seq,
+          status: order.status,
+          received_on: order.received_on,
+          processed_on: order.processed_on,
+          transaction_number: order.transaction_number,
+        }
+      : null,
     base: tr.base,
     rate: tr.rate,
     withholdings:
@@ -5140,7 +5279,7 @@ export function obligationsCalendar(db: DB, userId: string, companyId: string, p
       status:
         !dj || ['BORRADOR', 'ENVIADA', 'OBSERVADA'].includes(dj.status)
           ? 'PENDIENTE'
-          : dj.status === 'PRESENTADA'
+          : dj.status === 'PRESENTADA' || dj.status === 'PAGO_EN_BANCO'
             ? 'A_PAGAR'
             : 'CUMPLIDA',
       detail: !dj
@@ -5153,9 +5292,13 @@ export function obligationsCalendar(db: DB, userId: string, companyId: string, p
               ? 'Observada por el fisco: hay que presentarla de nuevo'
               : dj.status === 'PRESENTADA'
                 ? 'Presentada: falta pagarla'
-                : dj.status === 'SIN_SALDO'
-                  ? 'Presentada sin saldo a pagar'
-                  : `Pagada el ${date(dj.tr!.paid_on)}`,
+                : dj.status === 'PAGO_EN_BANCO'
+                  ? taxPaymentOrder(db, dj.id)?.status === 'RECHAZADO'
+                    ? 'El banco rechazó el pago por falta de fondos: hay que reenviarlo'
+                    : 'Pago en el banco: el fisco lo imputa cuando el banco lo procesa'
+                  : dj.status === 'SIN_SALDO'
+                    ? 'Presentada sin saldo a pagar'
+                    : `Pagada el ${date(dj.tr!.imputed_on ?? dj.tr!.paid_on)}${dj.tr!.interest > 0 ? `, con ${money(dj.tr!.interest)} de intereses resarcitorios` : ''}`,
       amount: dj ? dj.total : null,
       document: dj ? ref(dj) : null,
     })

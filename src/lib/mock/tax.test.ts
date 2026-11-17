@@ -174,12 +174,12 @@ describe('declaración mensual de IVA', () => {
     // Presentada sin pagar: va al flujo proyectado en su vencimiento (a 15 días).
     const fortnight = cashProjection(db, userId('tesoreria'), companyId()).buckets.find((b) => b.key === 'QUINCENA')!
     expect(fortnight).toMatchObject({ taxes: doc.total, tax_items: 1 })
-    expectBusinessError(() => cmdPayTaxReturn(ctx('contabilidad'), doc.id, account('1.1.01.03')), 'SIN_PERMISO')
-    expectBusinessError(() => cmdPayTaxReturn(ctx('tesoreria'), doc.id, account('1.1.01.02')), 'SALDO_INSUFICIENTE')
-    cmdPayTaxReturn(ctx('tesoreria'), doc.id, account('1.1.01.03'))
+    expectBusinessError(() => cmdPayTaxReturn(ctx('contabilidad'), doc.id), 'SIN_PERMISO')
+    // Sale del Banco Aula (Fase 8e.2): queda en el banco hasta que el banco procesa la orden.
+    cmdPayTaxReturn(ctx('tesoreria'), doc.id)
     expect(doc).toMatchObject({
-      status: 'PAGADA',
-      tr: { paid_on: '2027-06-05', paid_account_id: account('1.1.01.03') },
+      status: 'PAGO_EN_BANCO',
+      tr: { paid_on: '2027-06-05', paid_account_id: account('1.1.01.03'), interest: 0, imputed_on: null },
     })
     expect(entriesOf(doc.id)[1]).toEqual([`2.1.04.02 ${doc.total} 0`, `1.1.01.03 0 ${doc.total}`])
     const flow = cashFlow(db, userId('tesoreria'), companyId(), '2027-06-01', '2027-06-30')
@@ -279,15 +279,12 @@ describe('declaración mensual de IVA', () => {
       enabled: false,
       reason: 'Separación de funciones: liquidaste este impuesto; tiene que pagarlo otro integrante de Tesorería.',
     })
-    expect(
-      expectBusinessError(
-        () => cmdPayTaxReturn(ctx('contabilidad'), again.id, account('1.1.01.03')),
-        'SEPARACION_FUNCIONES',
-      ),
-    ).toBe(`No podés pagar ${again.display_number}: la liquidaste vos.`)
+    expect(expectBusinessError(() => cmdPayTaxReturn(ctx('contabilidad'), again.id), 'SEPARACION_FUNCIONES')).toBe(
+      `No podés pagar ${again.display_number}: la liquidaste vos.`,
+    )
     cmdUpdateCompanySettings(ctx('docente'), companyId(), { sod_enabled: false })
-    cmdPayTaxReturn(ctx('contabilidad'), again.id, account('1.1.01.03'))
-    expect(byNumber(again.display_number).status).toBe('PAGADA')
+    cmdPayTaxReturn(ctx('contabilidad'), again.id)
+    expect(byNumber(again.display_number).status).toBe('PAGO_EN_BANCO')
     expectBusinessError(() => cmdCancelTaxReturn(ctx('contabilidad'), again.id, 'Tarde'), 'TRANSICION_INVALIDA')
   })
 
@@ -302,7 +299,7 @@ describe('declaración mensual de IVA', () => {
         .filter((r) => r.company_id === company && (r.event === 'IVA' || r.event === 'PAGO_IVA'))
         .map((r) => `${r.event}:${r.key}`)
         .sort(),
-    ).toEqual(['IVA:IVA_A_PAGAR', 'IVA:IVA_CREDITO', 'IVA:IVA_DEBITO', 'PAGO_IVA:IVA_A_PAGAR'])
+    ).toEqual(['IVA:IVA_A_PAGAR', 'IVA:IVA_CREDITO', 'IVA:IVA_DEBITO', 'PAGO_IVA:INTERESES', 'PAGO_IVA:IVA_A_PAGAR'])
   })
 })
 
@@ -453,11 +450,11 @@ describe('ingresos brutos (Fase 7b): percepciones, retenciones y declaración', 
     ).toBe('Ya hay una declaración de ingresos brutos de 05/2027: DJ-00001.')
     present(id)
     expect(entriesOf(id)).toEqual([[`5.2.03.01 ${tax} 0`, '1.1.04.03 0 3000', `2.1.04.03 0 ${due}`]])
-    cmdPayTaxReturn(ctx('tesoreria'), id, account('1.1.01.03'))
-    expect(byNumber('DJ-00001').status).toBe('PAGADA')
+    cmdPayTaxReturn(ctx('tesoreria'), id)
+    expect(byNumber('DJ-00001').status).toBe('PAGO_EN_BANCO')
     expect(entriesOf(id)[1]).toEqual([`2.1.04.03 ${due} 0`, `1.1.01.03 0 ${due}`])
     expect(db.audit.find((e) => e.document_id === id && e.action === 'PAY')!.summary).toMatch(
-      /^Pagó DJ-00001: ingresos brutos de 05\/2027, /,
+      /^Pagó DJ-00001 por transferencia desde el Banco Aula: ingresos brutos de 05\/2027, /,
     )
   })
 
@@ -474,7 +471,7 @@ describe('ingresos brutos (Fase 7b): percepciones, retenciones y declaración', 
     expect(upgraded.version).toBe(DB_VERSION)
     expect(
       upgraded.postingRules.filter((r) => r.company_id === company && (r.event === 'IIBB' || r.event === 'PAGO_IIBB')),
-    ).toHaveLength(4)
+    ).toHaveLength(5)
     expect(upgraded.documents.filter((d) => d.si).every((d) => d.si!.perception === 0)).toBe(true)
   })
 })
