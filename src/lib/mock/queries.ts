@@ -712,6 +712,15 @@ function availableActions(db: DB, userId: string, doc: T.Document): AvailableAct
     ) {
       reason = 'Separación de funciones: liquidaste este impuesto; tiene que pagarlo otro integrante de Tesorería.'
     }
+    if (
+      doc.doc_type === 'TAX_RETURN' &&
+      (tr.action === 'APPROVE' || tr.action === 'REJECT') &&
+      !eff.supervisor &&
+      company.settings.sod_enabled &&
+      taxReturnPreparers(db, doc).includes(userId)
+    ) {
+      reason = 'Separación de funciones: la preparaste o la presentaste vos; la recibe otro integrante de Impuestos.'
+    }
     if (doc.doc_type === 'TAX_RETURN' && tr.action === 'CANCEL' && doc.status !== 'BORRADOR') {
       const later = laterTaxReturn(db, doc)
       if (later)
@@ -1160,6 +1169,16 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
           doc.tr?.tax === 'IIBB'
             ? 'Revisar las ventas netas del mes y las percepciones y retenciones sufridas, y presentar la declaración: se registra el asiento del impuesto.'
             : 'Revisar los libros IVA del mes (el débito y el crédito fiscal) y presentar la declaración: se registra el asiento del impuesto.',
+      }
+    case 'TAX_RETURN:ENVIADA':
+      return {
+        who: 'Fisco (Impuestos)',
+        text: 'El fisco la recibe: controla lo declarado con los comprobantes que autorizó en el mes y la acepta con un acuse (se registra el asiento del impuesto) o la observa con el motivo. No la recibe quien la preparó o la presentó.',
+      }
+    case 'TAX_RETURN:OBSERVADA':
+      return {
+        who: 'Impuestos',
+        text: `El fisco la observó${doc.status_reason ? ` con este motivo: «${doc.status_reason}»` : ''}. Hay que anularla y presentarla de nuevo.`,
       }
     case 'TAX_RETURN:PRESENTADA':
       return {
@@ -5118,16 +5137,25 @@ export function obligationsCalendar(db: DB, userId: string, companyId: string, p
       kind: tax,
       label: `${tax === 'IVA' ? 'IVA' : 'Ingresos brutos'} de ${month}`,
       due_date: taxDueDate(tax, period),
-      status: !dj || dj.status === 'BORRADOR' ? 'PENDIENTE' : dj.status === 'PRESENTADA' ? 'A_PAGAR' : 'CUMPLIDA',
+      status:
+        !dj || ['BORRADOR', 'ENVIADA', 'OBSERVADA'].includes(dj.status)
+          ? 'PENDIENTE'
+          : dj.status === 'PRESENTADA'
+            ? 'A_PAGAR'
+            : 'CUMPLIDA',
       detail: !dj
         ? 'Sin declarar'
         : dj.status === 'BORRADOR'
           ? `${dj.display_number} en borrador`
-          : dj.status === 'PRESENTADA'
-            ? 'Presentada: falta pagarla'
-            : dj.status === 'SIN_SALDO'
-              ? 'Presentada sin saldo a pagar'
-              : `Pagada el ${date(dj.tr!.paid_on)}`,
+          : dj.status === 'ENVIADA'
+            ? 'Enviada al fisco: espera el acuse'
+            : dj.status === 'OBSERVADA'
+              ? 'Observada por el fisco: hay que presentarla de nuevo'
+              : dj.status === 'PRESENTADA'
+                ? 'Presentada: falta pagarla'
+                : dj.status === 'SIN_SALDO'
+                  ? 'Presentada sin saldo a pagar'
+                  : `Pagada el ${date(dj.tr!.paid_on)}`,
       amount: dj ? dj.total : null,
       document: dj ? ref(dj) : null,
     })

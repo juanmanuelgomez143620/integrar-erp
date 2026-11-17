@@ -3810,20 +3810,46 @@ describe('paridad de comandos', () => {
         (c) => E.cmdPresentTaxReturn(c, docId),
         (b) => b.commands.presentTaxReturn(pg(docId)),
       )
+    const receive = (label: string, username: string, docId: string, reception: E.TaxReturnReception) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdReceiveTaxReturn(c, docId, reception),
+        (b) => b.commands.receiveTaxReturn(pg(docId), reception),
+      )
     expect(await cancel('el borrador sin motivo', 'contabilidad', draft, '')).toBeNull()
     expect(await cancel('el borrador', 'contabilidad', draft, 'Faltaba revisar las compras')).not.toBeNull()
     const first = await createdReturn('otra vez la del mes pasado', input({ notes: 'Revisada con los libros' }))
     expect(await present('Tesorería no la presenta', 'tesoreria', first)).toBeNull()
     expect(await present('presentarla', 'contabilidad', first)).not.toBeNull()
     expect(await present('presentarla otra vez', 'contabilidad', first)).toBeNull()
+    expect(mock.documents.find((d) => d.id === first)!.status).toBe('ENVIADA')
+    await reads('enviada al fisco')
+    // El fisco la recibe (8e.1): no quien la presentó (SoD-15) ni quien no opera el fisco.
+    expect(await receive('quien la presentó no la recibe', 'contabilidad', first, { accept: true })).toBeNull()
+    expect(await receive('Ventas no opera el fisco', 'ventas', first, { accept: true })).toBeNull()
+    expect(await receive('observarla sin motivo', 'impuestos2', first, { accept: false, reason: ' ' })).toBeNull()
+    expect(await receive('el fisco la acepta', 'impuestos2', first, { accept: true })).not.toBeNull()
+    expect(await receive('aceptarla otra vez', 'impuestos2', first, { accept: true })).toBeNull()
     expect(mock.documents.find((d) => d.id === first)!.status).toBe('PRESENTADA')
     await reads('presentada')
     expect(await cancel('anular la presentada sin motivo', 'contabilidad', first, ' ')).toBeNull()
     expect(
       await cancel('anularla con su contraasiento', 'contabilidad', first, 'Se rehace con una nota de crédito'),
     ).not.toBeNull()
-    const second = await createdReturn('la del mes pasado, por tercera vez', input())
-    expect(await present('presentar la nueva', 'contabilidad', second)).not.toBeNull()
+    const observed = await createdReturn('la del mes pasado, por tercera vez', input())
+    expect(await present('presentar la nueva', 'contabilidad', observed)).not.toBeNull()
+    expect(
+      await receive('el fisco la observa', 'impuestos2', observed, {
+        accept: false,
+        reason: 'Revisen el crédito fiscal',
+      }),
+    ).not.toBeNull()
+    await reads('observada')
+    expect(await cancel('anular la observada', 'contabilidad', observed, 'La observó el fisco')).not.toBeNull()
+    const second = await createdReturn('la del mes pasado, por cuarta vez', input())
+    expect(await present('presentar la corregida', 'contabilidad', second)).not.toBeNull()
+    expect(await receive('el fisco acepta la corregida', 'impuestos2', second, { accept: true })).not.toBeNull()
 
     // Pagarla: quién, desde dónde y SoD-10.
     const pay = (label: string, username: string, accountId: string) =>
@@ -3945,6 +3971,19 @@ describe('paridad de comandos', () => {
       (c) => E.cmdPresentTaxReturn(c, id),
       (b) => b.commands.presentTaxReturn(pg(id)),
     )
+    expect(doc().status).toBe('ENVIADA')
+    // Al pasar el fisco al sistema, el sistema recibe la que estaba enviada (8e.1).
+    for (const [label, fisco_mode] of [
+      ['el docente pasa el fisco al sistema', 'AUTOMATICO'],
+      ['lo vuelve a Impuestos', 'ESTUDIANTES'],
+    ] as const)
+      await ok(
+        label,
+        'docente',
+        (c) => E.cmdUpdateCompanySettings(c, company, { fisco_mode }),
+        (b) => b.commands.updateCompanySettings(companyPg, { fisco_mode }),
+      )
+    expect(doc().status).not.toBe('ENVIADA')
     await reads('presentada')
     const bank = mock.accounts.find((a) => a.company_id === company && a.code === '1.1.01.03')!.id
     if (doc().status === 'PRESENTADA') {
@@ -5033,6 +5072,21 @@ describe('paridad de comandos', () => {
         (b) => b.api.authorizedVouchers(companyPg, doc.document_date.slice(0, 7)),
         (u) => Q.authorizedVouchers(mock, u, company, doc.document_date.slice(0, 7)),
       )
+
+    // Con el módulo del fisco bloqueado, el fisco responde solo (8e.1): habilita lo que esperaba.
+    await requested('un pedido antes de bloquear el módulo', 'Depósito del oeste')
+    const module = (label: string, enabled: boolean) =>
+      ok(
+        label,
+        'docente',
+        (c) => E.cmdSetModule(c, company, 'fisco', enabled),
+        (b) => b.commands.setModule(companyPg, 'fisco', enabled),
+      )
+    await module('el docente bloquea el módulo del fisco', false)
+    await read('lo que esperaba quedó habilitado', 'ventas')
+    await requested('con el módulo bloqueado, se habilita en el momento', 'Feria de invierno')
+    await module('lo vuelve a habilitar', true)
+    await read('los puntos de venta al final', 'ventas')
   })
 
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {

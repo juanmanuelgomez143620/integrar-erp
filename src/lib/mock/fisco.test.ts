@@ -1,28 +1,34 @@
 // Pruebas del fisco simulado (docs/FASE_8_BANCO_Y_FISCO.md §4, 8d): el padrón de la empresa, su
 // alta, modificación y baja por quien opera el fisco (Impuestos) y la letra de la factura de venta,
 // que sale del padrón (8d.1); los puntos de venta que pide Ventas y habilita Impuestos, y la
-// autorización de cada factura de venta (8d.2).
+// autorización de cada factura de venta (8d.2); la recepción de las declaraciones (8e.1).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cuitIsValid } from '../domain/cuit'
 import type * as T from '../domain/types'
-import { addDays } from '../format'
+import { addDays, money } from '../format'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
 import {
   BusinessError,
   cmdAssignRole,
+  cmdCancelTaxReturn,
   cmdConfirmDeliveryNote,
   cmdConfirmSalesInvoice,
   cmdCreateSalesInvoice,
+  cmdCreateTaxReturn,
   cmdDecidePointOfSale,
+  cmdPayTaxReturn,
+  cmdPresentTaxReturn,
+  cmdReceiveTaxReturn,
   cmdRequestPointOfSale,
   cmdSaveTaxpayer,
+  cmdSetModule,
   cmdSetTaxpayerActive,
   cmdUpdateCompanySettings,
   type Ctx,
   type TaxpayerInput,
 } from './engine'
-import { authorizedVouchers, invoiceableSalesOrders, padron, pointsOfSale } from './queries'
+import { authorizedVouchers, documentDetail, invoiceableSalesOrders, padron, pointsOfSale } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -375,6 +381,153 @@ describe('Fisco: la autorización de las facturas de venta (8d.2)', () => {
   })
 })
 
+describe('Fisco: la recepción de las declaraciones (8e.1)', () => {
+  const at = (iso: string) => vi.setSystemTime(new Date(`${iso}T10:00:00-03:00`))
+  const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
+  /** La declaración de IVA de un mes (aaaa-mm), preparada por Impuestos. */
+  const taxReturn = (period: string) =>
+    byNumber(cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period, notes: '' }).display_number)
+  /** La venta del PV-00001, facturada en mayo, y la declaración de IVA de mayo, preparada en junio. */
+  const mayReturn = () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const pv = byNumber('PV-00001')
+    const lines = db.soLines.filter((l) => l.document_id === pv.id)
+    cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      { sales_order_id: pv.id, notes: '', lines: lines.map((l) => ({ so_line_id: l.id, quantity: l.qty_delivered })) },
+      true,
+    )
+    at('2027-06-05')
+    return taxReturn('2027-05')
+  }
+  /** Los asientos que dejó la declaración. */
+  const entries = (id: string) =>
+    db.docLinks.filter(
+      (l) =>
+        l.from_document_id === id && db.documents.find((d) => d.id === l.to_document_id)?.doc_type === 'JOURNAL_ENTRY',
+    ).length
+  const tasks = (id: string) =>
+    db.tasks
+      .filter((t) => t.document_id === id && t.status === 'PENDIENTE')
+      .map((t) => [t.task_type, t.assigned_role ?? t.assigned_user_id])
+
+  it('presentada, espera en el fisco; la acepta otro integrante de Impuestos con el acuse y el asiento (SoD-15)', () => {
+    const dj = mayReturn()
+    expect(dj.total).toBeGreaterThan(0)
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    expect(dj.status).toBe('ENVIADA')
+    expect(dj.tr).toMatchObject({ control_amount: dj.tr!.tax_amount, transaction_code: null, received_on: null })
+    expect(entries(dj.id)).toBe(0)
+    expect(tasks(dj.id)).toEqual([['RECIBIR_DJ', 'IMPUESTOS']])
+    expect(db.audit.at(-1)!.summary).toBe(
+      `Presentó ${dj.display_number} al fisco: IVA de 05/2027, ${money(dj.total)} a pagar`,
+    )
+    // Mientras está en el fisco no se paga, no se anula y no se prepara la del mes siguiente.
+    expectBusinessError(() => cmdPayTaxReturn(ctx('tesoreria'), dj.id, account('1.1.01.03')), 'TRANSICION_INVALIDA')
+    expectBusinessError(() => cmdCancelTaxReturn(ctx('contabilidad'), dj.id, 'Me equivoqué'), 'TRANSICION_INVALIDA')
+    at('2027-07-05')
+    expect(
+      expectBusinessError(
+        () => cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period: '2027-06', notes: '' }),
+        'DATO_INVALIDO',
+      ),
+    ).toBe(`${dj.display_number} (IVA de 05/2027) está en el fisco: hay que esperar que la reciba.`)
+    // Quien la presentó no la recibe (y ve por qué); Ventas no opera el fisco.
+    expect(
+      documentDetail(db, userId('contabilidad'), companyId(), 'TAX_RETURN', dj.display_number)!.actions.map((a) => [
+        a.action,
+        a.enabled,
+      ]),
+    ).toEqual([
+      ['APPROVE', false],
+      ['REJECT', false],
+    ])
+    expect(
+      expectBusinessError(
+        () => cmdReceiveTaxReturn(ctx('contabilidad'), dj.id, { accept: true }),
+        'SEPARACION_FUNCIONES',
+      ),
+    ).toBe(`No podés recibir ${dj.display_number} en el fisco: la preparaste o la presentaste vos.`)
+    expectBusinessError(() => cmdReceiveTaxReturn(ctx('ventas'), dj.id, { accept: true }), 'SIN_PERMISO')
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: true })
+    expect(dj.status).toBe('PRESENTADA')
+    expect(dj.tr).toMatchObject({
+      transaction_code: 'SIM-DJ-20270705000001',
+      received_on: '2027-07-05',
+      received_by: userId('impuestos2'),
+    })
+    expect(entries(dj.id)).toBe(1)
+    expect(tasks(dj.id)).toEqual([['PAGAR_DJ', 'TESORERIA']])
+    expect(db.audit.find((a) => a.document_id === dj.id && a.action === 'APPROVE')!.summary).toBe(
+      `Aceptó en el fisco ${dj.display_number} con el acuse SIM-DJ-20270705000001`,
+    )
+    cmdPayTaxReturn(ctx('tesoreria'), dj.id, account('1.1.01.03'))
+    expect(dj.status).toBe('PAGADA')
+  })
+
+  it('observada: con el motivo y sin asiento; se anula y se presenta de nuevo', () => {
+    const dj = mayReturn()
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    expectBusinessError(
+      () => cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: false, reason: ' ' }),
+      'MOTIVO_REQUERIDO',
+    )
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: false, reason: 'Falta revisar el crédito fiscal' })
+    expect(dj).toMatchObject({ status: 'OBSERVADA', status_reason: 'Falta revisar el crédito fiscal' })
+    expect(dj.tr).toMatchObject({ transaction_code: null, received_on: '2027-06-05' })
+    expect(entries(dj.id)).toBe(0)
+    expect(tasks(dj.id)).toEqual([['CORREGIR_DJ', userId('contabilidad')]])
+    at('2027-07-05')
+    expect(
+      expectBusinessError(
+        () => cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period: '2027-06', notes: '' }),
+        'DATO_INVALIDO',
+      ),
+    ).toBe(`El fisco observó ${dj.display_number} (IVA de 05/2027): primero hay que anularla y presentarla de nuevo.`)
+    cmdCancelTaxReturn(ctx('contabilidad'), dj.id, 'La observó el fisco')
+    expect(dj.status).toBe('ANULADA')
+    const again = taxReturn('2027-05')
+    cmdPresentTaxReturn(ctx('contabilidad'), again.id)
+    cmdReceiveTaxReturn(ctx('impuestos2'), again.id, { accept: true })
+    expect(again.status).toBe('PRESENTADA')
+    expect(entries(again.id)).toBe(1)
+  })
+
+  it('con el fisco operado por el sistema, la recibe al presentarla; al pasarlo al sistema, recibe las enviadas', () => {
+    const dj = mayReturn()
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    expect(dj.status).toBe('ENVIADA')
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { fisco_mode: 'AUTOMATICO' })
+    expect(dj.status).toBe('PRESENTADA')
+    expect(dj.tr).toMatchObject({ transaction_code: 'SIM-DJ-20270605000001', received_by: null })
+    expect(db.audit.find((a) => a.document_id === dj.id && a.action === 'APPROVE')).toMatchObject({
+      actor_user_id: null,
+    })
+    expect(tasks(dj.id)).toEqual([['PAGAR_DJ', 'TESORERIA']])
+    // La de junio, sin ventas: sin saldo, aceptada en el momento.
+    at('2027-07-05')
+    const june = taxReturn('2027-06')
+    cmdPresentTaxReturn(ctx('contabilidad'), june.id)
+    expect(june.status).toBe('SIN_SALDO')
+    expect(db.audit.find((a) => a.document_id === june.id && a.action === 'CONFIRM')!.summary).toBe(
+      `Presentó ${june.display_number}: IVA de 06/2027, sin saldo a pagar; el fisco la aceptó con el acuse SIM-DJ-20270705000002`,
+    )
+  })
+
+  it('con el módulo del fisco bloqueado, el fisco responde solo', () => {
+    const dj = mayReturn()
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    const pos = cmdRequestPointOfSale(ctx('ventas'), companyId(), { description: 'Local de ventas' })
+    expect(pos.status).toBe('SOLICITADO')
+    cmdSetModule(ctx('docente'), companyId(), 'fisco', false)
+    expect(dj.status).toBe('PRESENTADA')
+    expect(db.pointsOfSale.find((p) => p.id === pos.id)!.status).toBe('HABILITADO')
+    expect(db.audit.at(-1)!.summary).toBe('Bloqueó el módulo Fisco simulado')
+    expect(cmdRequestPointOfSale(ctx('ventas'), companyId(), { description: 'Feria' }).status).toBe('HABILITADO')
+  })
+})
+
 describe('Fisco: las bases guardadas', () => {
   it('una base de la versión 27 recibe el padrón', () => {
     const old = structuredClone(db) as Partial<DB> & { version: number }
@@ -423,5 +576,35 @@ describe('Fisco: las bases guardadas', () => {
       authorization_due: addDays(fv.document_date, 10),
     })
     expect(byNumber(draft.display_number).fv).toMatchObject({ authorization_code: null, authorization_due: null })
+  })
+
+  it('una base de la versión 29 recibe los datos de la recepción y el segundo integrante de Impuestos', () => {
+    const dj = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period: '2027-04', notes: '' })
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    for (const d of old.documents!)
+      if (d.tr) {
+        const tr: Partial<T.TaxReturnHeader> = d.tr
+        delete tr.control_amount
+        delete tr.transaction_code
+        delete tr.received_on
+        delete tr.received_by
+      }
+    const officer = old.profiles!.find((p) => p.username === 'impuestos2')!
+    const member = old.members!.find((m) => m.user_id === officer.id)!
+    old.profiles = old.profiles!.filter((p) => p.id !== officer.id)
+    old.members = old.members!.filter((m) => m.id !== member.id)
+    old.memberRoles = old.memberRoles!.filter((r) => r.member_id !== member.id)
+    old.version = 29
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    expect(byNumber(dj.display_number).tr).toMatchObject({
+      control_amount: null,
+      transaction_code: null,
+      received_on: null,
+      received_by: null,
+    })
+    const again = db.profiles.find((p) => p.username === 'impuestos2')!
+    const roles = db.memberRoles.filter((r) => db.members.find((m) => m.id === r.member_id)?.user_id === again.id)
+    expect(roles.map((r) => r.role_code)).toEqual(['IMPUESTOS'])
   })
 })

@@ -151,6 +151,58 @@ export function TaxReturnSection({ detail }: { detail: DocumentDetail }) {
   )
 }
 
+/**
+ * La declaración en el fisco simulado (Fase 8e.1): si espera que la reciba, el acuse con que la aceptó
+ * o el motivo con que la observó, y el control cruzado que hizo con los comprobantes que autorizó.
+ */
+export function TaxReturnFiscoSection({ detail }: { detail: DocumentDetail }) {
+  const { doc } = detail
+  const tr = doc.tr
+  if (!tr?.presented_at) return null
+  const iva = tr.tax === 'IVA'
+  const declared = iva ? tr.tax_amount : (tr.base ?? 0)
+  const matches = tr.control_amount !== null && Math.abs(declared - tr.control_amount) < 0.005
+  const reception =
+    doc.status === 'ENVIADA' ? (
+      'Enviada: espera que el fisco la reciba (la recibe un integrante de Impuestos que no la preparó ni la presentó).'
+    ) : doc.status === 'OBSERVADA' ? (
+      <>
+        Observada el {date(tr.received_on)} con este motivo: «{doc.status_reason}». Hay que anularla y presentarla de
+        nuevo.
+      </>
+    ) : tr.transaction_code ? (
+      <>
+        Aceptada el {date(tr.received_on)} con el acuse <span className="font-mono">{tr.transaction_code}</span>
+        {tr.received_by ? '' : ' (la recibió el sistema)'}.
+      </>
+    ) : doc.status === 'ANULADA' ? (
+      'Anulada.'
+    ) : (
+      'Presentada antes de que existiera el fisco simulado: no tiene acuse.'
+    )
+  return (
+    <Section
+      title="En el fisco simulado"
+      description="Al presentarla, la declaración va al fisco, que la controla con los comprobantes de venta que autorizó en el mes y la acepta con un acuse o la observa con el motivo."
+    >
+      <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[180px_1fr]">
+        <dt className="text-muted-foreground">Recepción</dt>
+        <dd>{reception}</dd>
+        {tr.control_amount !== null && (
+          <>
+            <dt className="text-muted-foreground">Control cruzado</dt>
+            <dd>
+              {iva ? 'Débito fiscal declarado' : 'Base declarada'}: {money(declared)}. {iva ? 'IVA' : 'Ventas netas'} de
+              los comprobantes autorizados del mes (menos los anulados en el mes): {money(tr.control_amount)}.{' '}
+              {matches ? 'Coinciden.' : 'No coinciden.'}
+            </dd>
+          </>
+        )}
+      </dl>
+    </Section>
+  )
+}
+
 const TAX_OPTIONS: { value: TaxCode; label: string }[] = [
   { value: 'IVA', label: 'IVA' },
   { value: 'IIBB', label: 'Ingresos brutos' },

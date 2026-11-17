@@ -64,6 +64,43 @@ function cuit(prefix: number, body: number): string {
 
 let counter = 0
 /**
+ * El segundo integrante de Impuestos (Fase 8e.1): el fisco lo opera Impuestos y quien preparó o
+ * presentó una declaración no la recibe (SoD-15), así que en la demo recibe lo que presenta
+ * `contabilidad`. También lo recibe la empresa demo de una base guardada antes.
+ */
+export function addDemoTaxOfficer(db: DB, companyId: string, now: string) {
+  if (db.profiles.some((p) => p.username === 'impuestos2')) return
+  const sector = db.sectors.find((s) => s.company_id === companyId && s.code === 'IMP')
+  const profile: T.Profile = {
+    id: 'usr-impuestos2',
+    username: 'impuestos2',
+    password: DEMO_PASSWORD,
+    first_name: 'Paula',
+    last_name: 'Quiroga',
+    app_role: 'ESTUDIANTE',
+    is_active: true,
+    must_change_password: false,
+    created_at: now,
+  }
+  db.profiles.push(profile)
+  const member = {
+    id: id('mbr'),
+    company_id: companyId,
+    user_id: profile.id,
+    job_title: 'Analista de Impuestos',
+    is_active: true,
+  }
+  db.members.push(member)
+  db.memberRoles.push({
+    id: id('mro'),
+    company_id: companyId,
+    member_id: member.id,
+    role_code: 'IMPUESTOS',
+    sector_id: sector?.id ?? null,
+  })
+}
+
+/**
  * El segundo integrante de Tesorería (Fase 8a): el Banco Aula lo opera Tesorería y quien envía una
  * orden no la procesa (SoD-12), así que en la demo procesa lo que envía `tesoreria`. También lo
  * recibe la empresa demo de una base guardada antes.
@@ -324,6 +361,7 @@ export function buildSeed(): DB {
     'Encargado de Depósito',
   )
   addDemoTreasurer(db, companyId, now)
+  addDemoTaxOfficer(db, companyId, now)
 
   // ------------------------------------------------------------ Proveedores
   const audited = { created_at: now, created_by: null, updated_at: now, updated_by: null }

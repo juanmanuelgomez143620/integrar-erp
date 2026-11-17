@@ -29,7 +29,7 @@ import {
   round2,
   startAccounting,
 } from './engine'
-import { addDemoTreasurer, buildSeed } from './seed'
+import { addDemoTaxOfficer, addDemoTreasurer, buildSeed } from './seed'
 
 export interface DocumentSequence {
   company_id: string
@@ -108,7 +108,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 29
+export const DB_VERSION = 30
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -572,6 +572,19 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       d.fv!.authorization_code = `SIM-${d.document_date.replaceAll('-', '')}${String(n).padStart(6, '0')}`
       d.fv!.authorization_due = addDays(d.document_date, FISCO_DEFAULTS.authorization_days)
     }
+  },
+  // v29 → v30: la recepción de las declaraciones en el fisco (Fase 8e.1): sus datos (las ya
+  // presentadas quedan como aceptadas, sin acuse) y el segundo integrante de Impuestos de la demo.
+  29: (db) => {
+    for (const d of db.documents)
+      if (d.doc_type === 'TAX_RETURN' && d.tr) {
+        d.tr.control_amount ??= null
+        d.tr.transaction_code ??= null
+        d.tr.received_on ??= null
+        d.tr.received_by ??= null
+      }
+    const demo = db.companies.find((c) => c.is_template)
+    if (demo) addDemoTaxOfficer(db, demo.id, new Date().toISOString())
   },
 }
 

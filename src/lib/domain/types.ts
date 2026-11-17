@@ -565,6 +565,16 @@ export interface TaxReturnHeader {
   /** El pago (si hubo saldo a pagar): el día y la caja o el banco. */
   paid_on: string | null
   paid_account_id: string | null
+  /**
+   * El control cruzado del fisco (Fase 8e.1), calculado al presentarla con los comprobantes que
+   * autorizó en el mes: en el IVA, el débito fiscal; en ingresos brutos, la base. null antes de presentarla.
+   */
+  control_amount: number | null
+  /** El acuse del fisco al aceptarla: SIM-DJ- y 14 dígitos (null si no la aceptó o si es anterior a la 8e). */
+  transaction_code: string | null
+  /** Cuándo la recibió el fisco (la aceptó o la observó) y quién (null: el sistema). */
+  received_on: string | null
+  received_by: string | null
 }
 
 /**

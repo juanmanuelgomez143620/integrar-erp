@@ -5160,6 +5160,13 @@ export function cmdSetTaxpayerActive(ctx: Ctx, companyId: string, taxpayerId: st
 
 export const fiscoMode = (company: T.Company): T.FiscoMode => company.settings.fisco_mode ?? 'ESTUDIANTES'
 
+/**
+ * El fisco responde solo si lo opera el sistema o si el docente bloqueó su módulo (8e.1): así, una
+ * clase que no usa el fisco simulado sigue presentando sus declaraciones y habilitando sus puntos de venta.
+ */
+export const fiscoAutomatic = (db: DB, company: T.Company) =>
+  fiscoMode(company) === 'AUTOMATICO' || !isModuleEnabled(db, company.id, 'fisco')
+
 const pointOfSaleLabel = (pos: T.PointOfSale) => `Punto de venta ${pos.number}`
 
 /** El punto de venta 00001 de la apertura, habilitado: la plantilla y cada empresa nueva. Idempotente. */
@@ -5212,8 +5219,7 @@ function syncPointOfSaleTask(ctx: Ctx, companyId: string) {
   const { db } = ctx
   const company = getCompany(db, companyId)
   const pending =
-    fiscoMode(company) === 'ESTUDIANTES' &&
-    db.pointsOfSale.some((p) => p.company_id === companyId && p.status === 'SOLICITADO')
+    !fiscoAutomatic(db, company) && db.pointsOfSale.some((p) => p.company_id === companyId && p.status === 'SOLICITADO')
   const open = db.tasks.find(
     (t) =>
       t.company_id === companyId &&
@@ -5261,11 +5267,21 @@ function syncPointOfSaleTask(ctx: Ctx, companyId: string) {
   })
 }
 
-/** Al cambiar quién opera el fisco: si pasa al sistema, habilita lo que esperaba; si vuelve a Impuestos, le abre su tarea. */
+/**
+ * Al cambiar quién opera el fisco (o al bloquear o habilitar su módulo): si pasa al sistema, habilita
+ * los puntos de venta pedidos y recibe las declaraciones enviadas (8e.1); si vuelve a Impuestos, lo que
+ * espera le abre su tarea.
+ */
 function settleFisco(ctx: Ctx, company: T.Company) {
-  if (fiscoMode(company) === 'AUTOMATICO')
-    for (const pos of ctx.db.pointsOfSale.filter((p) => p.company_id === company.id && p.status === 'SOLICITADO'))
+  const { db } = ctx
+  if (fiscoAutomatic(db, company)) {
+    for (const pos of db.pointsOfSale.filter((p) => p.company_id === company.id && p.status === 'SOLICITADO'))
       decidePointOfSale(ctx, pos, null, null)
+    for (const doc of db.documents
+      .filter((d) => d.company_id === company.id && d.doc_type === 'TAX_RETURN' && d.status === 'ENVIADA')
+      .sort((a, b) => a.number - b.number))
+      receiveTaxReturn(ctx, doc, systemReception(doc), SYSTEM_ACTOR, null, null)
+  }
   syncPointOfSaleTask(ctx, company.id)
 }
 
@@ -5318,7 +5334,7 @@ export function cmdRequestPointOfSale(ctx: Ctx, companyId: string, input: PointO
     entity_label: pointOfSaleLabel(pos),
     summary: `Pidió al fisco habilitar el punto de venta ${pos.number}: ${description}`,
   })
-  if (fiscoMode(company) === 'AUTOMATICO') decidePointOfSale(ctx, pos, null, null)
+  if (fiscoAutomatic(db, company)) decidePointOfSale(ctx, pos, null, null)
   syncPointOfSaleTask(ctx, companyId)
   return { id: pos.id, number: pos.number, status: pos.status }
 }
@@ -9516,6 +9532,129 @@ const taxReturnsOf = (db: DB, companyId: string, tax: T.TaxCode) =>
     )
     .sort((a, b) => (a.tr!.period < b.tr!.period ? -1 : 1))
 
+/**
+ * El control cruzado del fisco (8e.1): con los comprobantes de venta que autorizó en el mes, menos
+ * los anulados en el mes, el IVA (para el débito fiscal) o las ventas netas (para la base de
+ * ingresos brutos).
+ */
+export function fiscoControl(db: DB, companyId: string, tax: T.TaxCode, period: string) {
+  const vouchers = ivaBookEntries(db, companyId, period, true).filter((r) => r.invoice.fv!.authorization_code)
+  return tax === 'IVA'
+    ? round2(vouchers.reduce((s, r) => s + r.vat, 0))
+    : Math.max(round2(vouchers.reduce((s, r) => s + r.net + r.exempt, 0)), 0)
+}
+
+/** Lo que el fisco controla de lo declarado: el débito fiscal o la base de ingresos brutos. */
+export const declaredForControl = (tr: T.TaxReturnHeader) => (tr.tax === 'IVA' ? tr.tax_amount : (tr.base ?? 0))
+
+/** El acuse del fisco: SIM-DJ-, la fecha y el correlativo de la empresa. */
+function taxReturnAcuse(db: DB, companyId: string, today: string) {
+  const last = db.documents.reduce(
+    (max, d) =>
+      d.company_id === companyId && d.doc_type === 'TAX_RETURN' && d.tr!.transaction_code
+        ? Math.max(max, Number(d.tr!.transaction_code.slice(-6)))
+        : max,
+    0,
+  )
+  return `SIM-DJ-${today.replaceAll('-', '')}${String(last + 1).padStart(6, '0')}`
+}
+
+export type TaxReturnReception = { accept: true } | { accept: false; reason: string }
+
+/** Cómo la recibe el sistema: la acepta si el control cruzado coincide y si no, la observa con la diferencia. */
+function systemReception(doc: T.Document): TaxReturnReception {
+  const tr = doc.tr!
+  const declared = declaredForControl(tr)
+  const control = tr.control_amount ?? 0
+  if (Math.abs(round2(declared - control)) < EPS) return { accept: true }
+  return {
+    accept: false,
+    reason:
+      tr.tax === 'IVA'
+        ? `El control cruzado no coincide: el débito fiscal declarado es ${money(declared)} y el de los comprobantes autorizados del mes, ${money(control)}.`
+        : `El control cruzado no coincide: la base declarada es ${money(declared)} y la de los comprobantes autorizados del mes, ${money(control)}.`,
+  }
+}
+
+/**
+ * El asiento del impuesto, al aceptarla el fisco: del crédito fiscal (o de las percepciones y
+ * retenciones) se usa hasta el impuesto; lo que sobra queda en la cuenta como saldo a favor.
+ */
+function postTaxReturnEntry(ctx: Ctx, doc: T.Document, actor: Actor) {
+  const tr = doc.tr!
+  if (!(tr.tax_amount > 0)) return
+  const month = periodLabel(tr.period)
+  const used = Math.min(tr.tax_amount, round2(tr.credits + tr.previous_balance))
+  const previous = tr.previous_balance ? ` y saldo a favor anterior ${money(tr.previous_balance)}` : ''
+  if (tr.tax === 'IVA')
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'IVA',
+      `IVA de ${month} (${doc.display_number}): débito fiscal ${money(tr.tax_amount)}, crédito fiscal ${money(tr.credits)}${previous}.`,
+      [
+        { key: 'IVA_DEBITO', debit: tr.tax_amount, credit: 0 },
+        { key: 'IVA_CREDITO', debit: 0, credit: used },
+        { key: 'IVA_A_PAGAR', debit: 0, credit: doc.total },
+      ],
+    )
+  else
+    postEvent(
+      ctx,
+      actor,
+      doc,
+      'IIBB',
+      `Ingresos brutos de ${month} (${doc.display_number}): impuesto ${money(tr.tax_amount)}, percepciones y retenciones ${money(tr.credits)}${previous}.`,
+      [
+        { key: 'IMPUESTO', debit: tr.tax_amount, credit: 0 },
+        { key: 'RETENCIONES', debit: 0, credit: used },
+        { key: 'IIBB_A_PAGAR', debit: 0, credit: doc.total },
+      ],
+    )
+}
+
+/**
+ * El fisco recibe la declaración (8e.1). Aceptada: el acuse y el asiento del impuesto; queda
+ * Presentada o, sin saldo a pagar, Presentada sin saldo. Observada: el motivo; hay que anularla y
+ * presentarla de nuevo. Con `presenting` (el resumen de la presentación) la recibe el sistema al
+ * presentarla, en la misma transición; si no, estaba enviada (APPROVE o REJECT).
+ */
+function receiveTaxReturn(
+  ctx: Ctx,
+  doc: T.Document,
+  reception: TaxReturnReception,
+  actor: Actor,
+  receivedBy: string | null,
+  presenting: string | null,
+) {
+  const { db } = ctx
+  const today = businessDate(getCompany(db, doc.company_id))
+  if (!reception.accept) {
+    transition(ctx, doc, presenting ? 'CONFIRM' : 'REJECT', {
+      to: 'OBSERVADA',
+      actor,
+      comment: reception.reason,
+      summary: presenting
+        ? `${presenting}; el fisco la observó: ${reception.reason}`
+        : `Observó en el fisco ${doc.display_number}: ${reception.reason}`,
+    })
+    doc.status_reason = reception.reason
+    doc.tr = { ...doc.tr!, received_on: today, received_by: receivedBy }
+    return
+  }
+  const code = taxReturnAcuse(db, doc.company_id, today)
+  transition(ctx, doc, presenting ? 'CONFIRM' : 'APPROVE', {
+    to: doc.total > 0 ? 'PRESENTADA' : 'SIN_SALDO',
+    actor,
+    summary: presenting
+      ? `${presenting}; el fisco la aceptó con el acuse ${code}`
+      : `Aceptó en el fisco ${doc.display_number} con el acuse ${code}`,
+  })
+  doc.tr = { ...doc.tr!, transaction_code: code, received_on: today, received_by: receivedBy }
+  postTaxReturnEntry(ctx, doc, actor)
+}
+
 /** La declaración posterior de su impuesto, si la hay: sólo se anula la última. */
 export const laterTaxReturn = (db: DB, doc: T.Document) =>
   taxReturnsOf(db, doc.company_id, doc.tr!.tax).find((d) => d.tr!.period > doc.tr!.period)
@@ -9574,6 +9713,16 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
       'DATO_INVALIDO',
       `Primero hay que presentar ${last.display_number} (${name} de ${periodLabel(last.tr!.period)}).`,
     )
+  if (last?.status === 'ENVIADA')
+    fail(
+      'DATO_INVALIDO',
+      `${last.display_number} (${name} de ${periodLabel(last.tr!.period)}) está en el fisco: hay que esperar que la reciba.`,
+    )
+  if (last?.status === 'OBSERVADA')
+    fail(
+      'DATO_INVALIDO',
+      `El fisco observó ${last.display_number} (${name} de ${periodLabel(last.tr!.period)}): primero hay que anularla y presentarla de nuevo.`,
+    )
   const notes = input.notes.trim()
   if (notes.length > 500) fail('DATO_INVALIDO', 'Las observaciones tienen hasta 500 caracteres.')
   const iva = input.tax === 'IVA'
@@ -9602,6 +9751,10 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
       presented_at: null,
       paid_on: null,
       paid_account_id: null,
+      control_amount: null,
+      transaction_code: null,
+      received_on: null,
+      received_by: null,
     },
   })
   doc.subtotal = debit
@@ -9622,52 +9775,52 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
 }
 
 /**
- * Presentar: queda fijo lo declarado y se registra el asiento del impuesto. Del crédito
- * fiscal se usa hasta el débito; lo que sobra queda en la cuenta como saldo a favor.
+ * Presentar (8e.1): queda fijo lo declarado y la declaración va al fisco, que calcula su control
+ * cruzado. Si el fisco lo opera Impuestos, espera que la reciba; si lo opera el sistema (o su módulo
+ * está bloqueado), la recibe en el momento.
  */
 export function cmdPresentTaxReturn(ctx: Ctx, docId: string) {
   const { db } = ctx
   const doc = getDoc(db, docId, 'TAX_RETURN')
   requireTransition(doc, 'CONFIRM')
-  requirePermission(ctx, doc.company_id, 'tax_return.create')
+  const actor = requirePermission(ctx, doc.company_id, 'tax_return.create')
   const tr = doc.tr!
-  const name = TAX_NAMES[tr.tax]
-  const month = periodLabel(tr.period)
-  const actor = transition(ctx, doc, 'CONFIRM', {
-    to: doc.total > 0 ? 'PRESENTADA' : 'SIN_SALDO',
-    summary: `Presentó ${doc.display_number}: ${name} de ${month}, ${doc.total > 0 ? `${money(doc.total)} a pagar` : 'sin saldo a pagar'}`,
-  })
-  doc.tr = { ...tr, presented_at: ctx.now }
-  if (!(tr.tax_amount > 0)) return
-  // Del crédito (o de las percepciones y retenciones) se usa hasta el impuesto; lo que sobra queda en la cuenta.
-  const used = Math.min(tr.tax_amount, round2(tr.credits + tr.previous_balance))
-  const previous = tr.previous_balance ? ` y saldo a favor anterior ${money(tr.previous_balance)}` : ''
-  if (tr.tax === 'IVA')
-    postEvent(
-      ctx,
-      actor,
-      doc,
-      'IVA',
-      `IVA de ${month} (${doc.display_number}): débito fiscal ${money(tr.tax_amount)}, crédito fiscal ${money(tr.credits)}${previous}.`,
-      [
-        { key: 'IVA_DEBITO', debit: tr.tax_amount, credit: 0 },
-        { key: 'IVA_CREDITO', debit: 0, credit: used },
-        { key: 'IVA_A_PAGAR', debit: 0, credit: doc.total },
-      ],
-    )
+  doc.tr = { ...tr, presented_at: ctx.now, control_amount: fiscoControl(db, doc.company_id, tr.tax, tr.period) }
+  const what = `${TAX_NAMES[tr.tax]} de ${periodLabel(tr.period)}, ${doc.total > 0 ? `${money(doc.total)} a pagar` : 'sin saldo a pagar'}`
+  if (fiscoAutomatic(db, getCompany(db, doc.company_id)))
+    receiveTaxReturn(ctx, doc, systemReception(doc), actor, null, `Presentó ${doc.display_number}: ${what}`)
   else
-    postEvent(
-      ctx,
+    transition(ctx, doc, 'CONFIRM', {
+      to: 'ENVIADA',
       actor,
-      doc,
-      'IIBB',
-      `Ingresos brutos de ${month} (${doc.display_number}): impuesto ${money(tr.tax_amount)}, percepciones y retenciones ${money(tr.credits)}${previous}.`,
-      [
-        { key: 'IMPUESTO', debit: tr.tax_amount, credit: 0 },
-        { key: 'RETENCIONES', debit: 0, credit: used },
-        { key: 'IIBB_A_PAGAR', debit: 0, credit: doc.total },
-      ],
+      summary: `Presentó ${doc.display_number} al fisco: ${what}`,
+    })
+}
+
+/**
+ * Quien opera el fisco recibe una declaración enviada: la acepta con el acuse o la observa con el
+ * motivo. No la recibe quien la preparó o la presentó (SoD-15).
+ */
+export function cmdReceiveTaxReturn(ctx: Ctx, docId: string, reception: TaxReturnReception) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'TAX_RETURN')
+  requireTransition(doc, reception.accept ? 'APPROVE' : 'REJECT')
+  const actor = requirePermission(ctx, doc.company_id, 'fisco.operate')
+  const company = getCompany(db, doc.company_id)
+  const eff = effectivePermissions(db, ctx.userId!, doc.company_id)
+  if (company.settings.sod_enabled && !eff.supervisor && taxReturnPreparers(db, doc).includes(ctx.userId!))
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés recibir ${doc.display_number} en el fisco: la preparaste o la presentaste vos.`,
+      'Separación de funciones (SoD-15): quien liquida un impuesto no recibe su declaración en el fisco. La recibe otro integrante de Impuestos.',
     )
+  if (reception.accept) {
+    receiveTaxReturn(ctx, doc, { accept: true }, actor, ctx.userId, null)
+    return
+  }
+  const reason = (reception.reason ?? '').trim()
+  if (reason.length < 3) fail('MOTIVO_REQUERIDO', 'Indicá el motivo de la observación: lo recibe Impuestos.')
+  receiveTaxReturn(ctx, doc, { accept: false, reason }, actor, ctx.userId, null)
 }
 
 /** Tesorería paga el saldo al fisco (simulado) desde una caja o un banco con saldo. SoD-10: no la paga quien la liquidó. */
@@ -9992,6 +10145,8 @@ export function cmdSetModule(ctx: Ctx, companyId: string, module: T.ModuleCode, 
   const row = ctx.db.companyModules.find((m) => m.company_id === companyId && m.module_code === module)
   if (row) row.is_enabled = enabled
   else ctx.db.companyModules.push({ company_id: companyId, module_code: module, is_enabled: enabled })
+  // Bloqueado, el fisco responde solo (8e.1): recibe lo que esperaba; habilitado, vuelven sus tareas.
+  if (module === 'fisco') settleFisco(ctx, getCompany(ctx.db, companyId))
   logAudit(ctx, {
     company_id: companyId,
     actor,

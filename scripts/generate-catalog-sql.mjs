@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261111120100_catalog_data_fisco.sql'
+const target = process.argv[2] ?? '20261113120100_catalog_data_recepcion.sql'
 
 const server = await createServer({
   root,

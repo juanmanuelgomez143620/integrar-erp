@@ -476,6 +476,8 @@ const mockCommands = {
   payPayrollCharges: (docId: string, accountId: string) => command((c) => E.cmdPayPayrollCharges(c, docId, accountId)),
   createTaxReturn: (companyId: string, input: E.TaxReturnInput) =>
     command((c) => E.cmdCreateTaxReturn(c, companyId, input)),
+  receiveTaxReturn: (docId: string, reception: E.TaxReturnReception) =>
+    command((c) => E.cmdReceiveTaxReturn(c, docId, reception)),
   presentTaxReturn: (docId: string) => command((c) => E.cmdPresentTaxReturn(c, docId)),
   payTaxReturn: (docId: string, accountId: string) => command((c) => E.cmdPayTaxReturn(c, docId, accountId)),
   cancelTaxReturn: (docId: string, reason: string) => command((c) => E.cmdCancelTaxReturn(c, docId, reason)),

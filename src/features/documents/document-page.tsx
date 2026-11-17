@@ -47,7 +47,7 @@ import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
 import { PayrollSection, periodLabel } from '@/features/hr/payroll'
 import { PayrollPayDialog } from '@/features/hr/payroll-pay-dialog'
-import { TaxReturnPayDialog, TaxReturnSection, taxTitle } from '@/features/tax/tax-return'
+import { TaxReturnFiscoSection, TaxReturnPayDialog, TaxReturnSection, taxTitle } from '@/features/tax/tax-return'
 import { CloseRouteSheetDialog, DeliveryStatusInfo, RouteSheetSection } from '@/features/logistics/route-sheet'
 import {
   FinishDialog,
@@ -152,9 +152,11 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     REJECT: (id, t) => commands.rejectPayroll(id, t),
     CANCEL: (id, t) => commands.cancelPayroll(id, t),
   },
-  // Pagar tiene su propio diálogo: hay que elegir la caja o el banco.
+  // Pagar tiene su propio diálogo: hay que elegir la caja o el banco. Aceptarla u observarla lo hace el fisco (8e.1).
   TAX_RETURN: {
     CONFIRM: (id) => commands.presentTaxReturn(id),
+    APPROVE: (id) => commands.receiveTaxReturn(id, { accept: true }),
+    REJECT: (id, t) => commands.receiveTaxReturn(id, { accept: false, reason: t }),
     CANCEL: (id, t) => commands.cancelTaxReturn(id, t),
   },
   // Rendirla tiene su propio diálogo: hay que indicar el resultado de cada remito.
@@ -464,7 +466,10 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
               {detail.payroll ? (
                 <PayrollSection detail={detail} />
               ) : detail.tax_return ? (
-                <TaxReturnSection detail={detail} />
+                <>
+                  <TaxReturnSection detail={detail} />
+                  <TaxReturnFiscoSection detail={detail} />
+                </>
               ) : detail.route_sheet ? (
                 <RouteSheetSection detail={detail} />
               ) : (

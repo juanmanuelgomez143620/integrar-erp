@@ -461,6 +461,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     payPayrollCharges: (docId, accountId) => rpc('payroll_pay_charges', { ...doc(docId), p_account_id: accountId }),
     createTaxReturn: (companyId, input) => rpc('tax_return_create', { ...company(companyId), p_input: input }),
     presentTaxReturn: (docId) => rpc('tax_return_present', doc(docId)),
+    receiveTaxReturn: (docId, reception) => rpc('tax_return_receive', { ...doc(docId), p_input: reception }),
     payTaxReturn: (docId, accountId) => rpc('tax_return_pay', { ...doc(docId), p_account_id: accountId }),
     cancelTaxReturn: (docId, reason) => rpc('tax_return_cancel', { ...doc(docId), p_reason: reason }),
     createRouteSheet: (companyId, input) => rpc('rs_create', { ...company(companyId), p_input: input }),

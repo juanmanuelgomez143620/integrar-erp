@@ -19,6 +19,7 @@ import {
   cmdCreateTaxReturn,
   cmdPayTaxReturn,
   cmdPresentTaxReturn,
+  cmdReceiveTaxReturn,
   cmdUpdateCompanySettings,
   cmdApprovePayroll,
   cmdCreatePayroll,
@@ -49,6 +50,11 @@ const byNumber = (number: string) => db.documents.find((d) => d.display_number =
 const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
 const round2 = (n: number) => Math.round(n * 100) / 100
 const at = (iso: string) => vi.setSystemTime(new Date(`${iso}T10:00:00-03:00`))
+/** Presentar (Impuestos) y que el fisco la acepte (otro integrante de Impuestos, Fase 8e.1). */
+const present = (id: string) => {
+  cmdPresentTaxReturn(ctx('contabilidad'), id)
+  cmdReceiveTaxReturn(ctx('impuestos2'), id, { accept: true })
+}
 
 function expectBusinessError(fn: () => void, code: string) {
   try {
@@ -157,7 +163,7 @@ describe('declaración mensual de IVA', () => {
       },
     })
     expect(db.audit.at(-1)!.summary).toBe(`Creó DJ-00001: IVA de 05/2027, ${money(round2(debit - credit))} a pagar`)
-    cmdPresentTaxReturn(ctx('contabilidad'), doc.id)
+    present(doc.id)
     expect(doc.status).toBe('PRESENTADA')
     expect(entriesOf(doc.id)).toEqual([
       [`2.1.04.01 ${debit} 0`, `1.1.04.01 0 ${credit}`, `2.1.04.02 0 ${round2(debit - credit)}`],
@@ -191,7 +197,7 @@ describe('declaración mensual de IVA', () => {
     at('2027-06-05')
     const may = byNumber(cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input()).display_number)
     expect(may).toMatchObject({ total: 0, tr: { tax_amount: 0, credits: 46200, balance_in_favor: 46200 } })
-    cmdPresentTaxReturn(ctx('contabilidad'), may.id)
+    present(may.id)
     // Sin débito no hay asiento: el crédito queda en IVA crédito fiscal como saldo a favor.
     expect(may.status).toBe('SIN_SALDO')
     expect(entriesOf(may.id)).toEqual([])
@@ -204,7 +210,7 @@ describe('declaración mensual de IVA', () => {
     )
     const due = round2(fv.tax_total - 46200)
     expect(june).toMatchObject({ total: due, tr: { tax_amount: fv.tax_total, credits: 0, previous_balance: 46200 } })
-    cmdPresentTaxReturn(ctx('contabilidad'), june.id)
+    present(june.id)
     expect(entriesOf(june.id)).toEqual([[`2.1.04.01 ${fv.tax_total} 0`, `1.1.04.01 0 46200`, `2.1.04.02 0 ${due}`]])
   })
 
@@ -226,7 +232,7 @@ describe('declaración mensual de IVA', () => {
       'La última declaración de IVA es la de 05/2027 (DJ-00001): no se vuelve a un mes anterior.',
     )
     expect(create({ period: '2027-06' })).toBe('Primero hay que presentar DJ-00001 (IVA de 05/2027).')
-    cmdPresentTaxReturn(ctx('contabilidad'), may.id)
+    present(may.id)
     at('2027-08-05')
     expect(create({ period: '2027-07' })).toBe('Falta la declaración de IVA de 06/2027: los meses van en orden.')
   })
@@ -239,7 +245,7 @@ describe('declaración mensual de IVA', () => {
     cmdCancelTaxReturn(ctx('contabilidad'), draft.id, 'Faltaba una factura')
     expect(byNumber('DJ-00001').status).toBe('ANULADA')
     const may = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input())
-    cmdPresentTaxReturn(ctx('contabilidad'), may.id)
+    present(may.id)
     at('2027-07-05')
     const june = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input({ period: '2027-06' }))
     // La de mayo no se anula mientras haya una posterior.
@@ -264,7 +270,7 @@ describe('declaración mensual de IVA', () => {
     )
     at('2027-07-06')
     const again = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input())
-    cmdPresentTaxReturn(ctx('contabilidad'), again.id)
+    present(again.id)
     expect(
       documentDetail(db, userId('contabilidad'), companyId(), 'TAX_RETURN', again.display_number)!.actions.find(
         (a) => a.action === 'PAY',
@@ -445,7 +451,7 @@ describe('ingresos brutos (Fase 7b): percepciones, retenciones y declaración', 
         'DATO_INVALIDO',
       ),
     ).toBe('Ya hay una declaración de ingresos brutos de 05/2027: DJ-00001.')
-    cmdPresentTaxReturn(ctx('contabilidad'), id)
+    present(id)
     expect(entriesOf(id)).toEqual([[`5.2.03.01 ${tax} 0`, '1.1.04.03 0 3000', `2.1.04.03 0 ${due}`]])
     cmdPayTaxReturn(ctx('tesoreria'), id, account('1.1.01.03'))
     expect(byNumber('DJ-00001').status).toBe('PAGADA')
@@ -526,6 +532,8 @@ describe('calendario de vencimientos (Fase 7b.2)', () => {
     const dj = cmdCreateTaxReturn(ctx('contabilidad'), companyId(), input({ period: '2027-04' }))
     expect(calendar()[3]).toEqual(['IVA', '2027-05-20', 'PENDIENTE', false, 'DJ-00001 en borrador'])
     cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    expect(calendar()[3]).toEqual(['IVA', '2027-05-20', 'PENDIENTE', false, 'Enviada al fisco: espera el acuse'])
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: true })
     expect(calendar()[3]).toEqual(['IVA', '2027-05-20', 'CUMPLIDA', false, 'Presentada sin saldo a pagar'])
   })
 
