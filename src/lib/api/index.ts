@@ -90,6 +90,8 @@ export type {
   AuthorizedVoucher,
   TaxAccount,
   TaxAccountRow,
+  FiscalNoticeRow,
+  FiscalNoticeCandidateRow,
   ProductionCostRow,
   ProductionNeedRow,
   ProductionOrderView,
@@ -260,6 +262,8 @@ const mockApi = {
   padron: (companyId: string) => query((db, u) => Q.padron(db, u, companyId)),
   pointsOfSale: (companyId: string) => query((db, u) => Q.pointsOfSale(db, u, companyId)),
   taxAccount: (companyId: string) => query((db, u) => Q.taxAccount(db, u, companyId)),
+  fiscalNotices: (companyId: string) => query((db, u) => Q.fiscalNotices(db, u, companyId)),
+  fiscalNoticesToIssue: (companyId: string) => query((db, u) => Q.fiscalNoticesToIssue(db, u, companyId)),
   authorizedVouchers: (companyId: string, month: string) =>
     query((db, u) => Q.authorizedVouchers(db, u, companyId, month)),
   loanPreview: (companyId: string, amount: number, months: number) =>
@@ -483,6 +487,12 @@ const mockCommands = {
     command((c) => E.cmdReceiveTaxReturn(c, docId, reception)),
   presentTaxReturn: (docId: string) => command((c) => E.cmdPresentTaxReturn(c, docId)),
   payTaxReturn: (docId: string) => command((c) => E.cmdPayTaxReturn(c, docId)),
+  issueFiscalNotice: (companyId: string, input: E.FiscalNoticeInput) =>
+    command((c) => E.cmdIssueFiscalNotice(c, companyId, input)),
+  respondFiscalNotice: (companyId: string, id: string, response: string) =>
+    command((c) => E.cmdRespondFiscalNotice(c, companyId, id, response)),
+  closeFiscalNotice: (companyId: string, id: string, comment: string) =>
+    command((c) => E.cmdCloseFiscalNotice(c, companyId, id, comment)),
   cancelTaxReturn: (docId: string, reason: string) => command((c) => E.cmdCancelTaxReturn(c, docId, reason)),
   createRouteSheet: (companyId: string, input: E.RouteSheetInput) =>
     command((c) => E.cmdCreateRouteSheet(c, companyId, input)),

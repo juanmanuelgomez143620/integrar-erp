@@ -2,7 +2,8 @@
 // alta, modificación y baja por quien opera el fisco (Impuestos) y la letra de la factura de venta,
 // que sale del padrón (8d.1); los puntos de venta que pide Ventas y habilita Impuestos, y la
 // autorización de cada factura de venta (8d.2); la recepción de las declaraciones (8e.1), y la cuenta
-// corriente tributaria y el pago de las declaraciones por el banco, con los intereses (8e.2).
+// corriente tributaria y el pago de las declaraciones por el banco, con los intereses (8e.2); el
+// domicilio fiscal electrónico y las intimaciones (8f.1).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cuitIsValid } from '../domain/cuit'
@@ -13,18 +14,21 @@ import {
   BusinessError,
   cmdAssignRole,
   cmdCancelTaxReturn,
+  cmdCloseFiscalNotice,
   cmdConfirmDeliveryNote,
   cmdConfirmSalesInvoice,
   cmdCreateJournalEntry,
   cmdCreateSalesInvoice,
   cmdCreateTaxReturn,
   cmdDecidePointOfSale,
+  cmdIssueFiscalNotice,
   cmdPayTaxReturn,
   cmdPresentTaxReturn,
   cmdProcessBankOrders,
   cmdReceiveTaxReturn,
   cmdRequestPointOfSale,
   cmdResendBankOrder,
+  cmdRespondFiscalNotice,
   cmdSaveTaxpayer,
   cmdSetModule,
   cmdSetTaxpayerActive,
@@ -35,6 +39,8 @@ import {
 import {
   authorizedVouchers,
   documentDetail,
+  fiscalNotices,
+  fiscalNoticesToIssue,
   invoiceableSalesOrders,
   obligationsCalendar,
   padron,
@@ -759,6 +765,221 @@ describe('Fisco: la cuenta corriente y el pago por el banco (8e.2)', () => {
   })
 })
 
+describe('Fisco: el domicilio fiscal electrónico y las intimaciones (8f.1)', () => {
+  const at = (iso: string) => vi.setSystemTime(new Date(`${iso}T10:00:00-03:00`))
+  /** La venta del PV-00001, facturada en mayo (la empresa se dio de alta el 14/05/2027). */
+  const sellInMay = () => {
+    cmdConfirmDeliveryNote(ctx('deposito'), byNumber('REM-00001').id)
+    const pv = byNumber('PV-00001')
+    const lines = db.soLines.filter((l) => l.document_id === pv.id)
+    cmdCreateSalesInvoice(
+      ctx('ventas'),
+      companyId(),
+      { sales_order_id: pv.id, notes: '', lines: lines.map((l) => ({ so_line_id: l.id, quantity: l.qty_delivered })) },
+      true,
+    )
+  }
+  /** Una declaración presentada por Contabilidad y aceptada por el fisco (impuestos2). */
+  const accepted = (tax: T.TaxCode, period: string) => {
+    const dj = byNumber(cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax, period, notes: '' }).display_number)
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: true })
+    return dj
+  }
+  const toIssue = () =>
+    fiscalNoticesToIssue(db, userId('impuestos2'), companyId()).map((c) => [c.kind, c.tax, c.period, c.due_date])
+  const issue = (kind: T.FiscalNoticeKind, tax: T.TaxCode, period: string, note = '', username = 'impuestos2') =>
+    cmdIssueFiscalNotice(ctx(username), companyId(), { kind, tax, period, note })
+  const notice = (number: number) => db.fiscalNotices.find((n) => n.company_id === companyId() && n.number === number)!
+  const openTasks = () =>
+    db.tasks
+      .filter(
+        (t) =>
+          t.company_id === companyId() &&
+          ['RESPONDER_INTIMACION', 'EVALUAR_DESCARGO'].includes(t.task_type) &&
+          t.status === 'PENDIENTE',
+      )
+      .map((t) => [t.task_type, t.assigned_role])
+  const view = (username = 'contabilidad') => fiscalNotices(db, userId(username), companyId())
+
+  it('el fisco intima lo vencido desde el alta; se cumple solo al presentar y al pagar', () => {
+    sellInMay()
+    at('2027-06-05')
+    const may = accepted('IVA', '2027-05')
+    expect(may.total).toBeGreaterThan(0)
+    at('2027-07-05')
+    // Lo que venció desde el alta (14/05): las de abril y las de mayo; la de IVA de mayo, sin pagar.
+    expect(toIssue()).toEqual([
+      ['PRESENTACION', 'IIBB', '2027-04', '2027-05-15'],
+      ['PRESENTACION', 'IVA', '2027-04', '2027-05-20'],
+      ['PRESENTACION', 'IIBB', '2027-05', '2027-06-15'],
+      ['PAGO', 'IVA', '2027-05', '2027-06-20'],
+    ])
+    expect(fiscalNoticesToIssue(db, userId('impuestos2'), companyId()).at(-1)).toMatchObject({
+      amount: may.total,
+      document: { display_number: may.display_number, status: 'PRESENTADA' },
+    })
+    // Lo intima quien opera el fisco: Ventas lee el domicilio, pero no intima.
+    expect(() => fiscalNoticesToIssue(db, userId('ventas'), companyId())).toThrow()
+    expectBusinessError(() => issue('PAGO', 'IVA', '2027-05', '', 'ventas'), 'SIN_PERMISO')
+    expectBusinessError(() => issue('PAGO', 'IVA', '2027-06'), 'DATO_INVALIDO')
+    expectBusinessError(() => issue('PAGO', 'IVA', '2027-05', 'x'.repeat(301)), 'DATO_INVALIDO')
+    expect(issue('PAGO', 'IVA', '2027-05', 'Revisen el saldo del banco.')).toMatchObject({ number: 1 })
+    const interest = Math.round((Math.round(may.total * 100) * 4 * 15) / 3000) / 100
+    expect(notice(1)).toMatchObject({
+      kind: 'PAGO',
+      tax_return_id: may.id,
+      subject: 'Intimación de pago',
+      body: `Al 05/07/2027, el fisco no registra el pago de ${may.display_number} (IVA de 05/2027), que vencía el 20/06/2027: el saldo es ${money(may.total)} y los intereses resarcitorios a hoy, ${money(interest)}, que siguen corriendo hasta el pago. Se intima a Forestal del Norte SRL a pagarla dentro de los 15 días. Observaciones del fisco: Revisen el saldo del banco.`,
+      issued_on: '2027-07-05',
+      issued_by: userId('impuestos2'),
+      response_due: '2027-07-20',
+      status: 'PENDIENTE',
+    })
+    expectBusinessError(() => issue('PAGO', 'IVA', '2027-05'), 'DATO_INVALIDO')
+    expect(issue('PRESENTACION', 'IIBB', '2027-05')).toMatchObject({ number: 2 })
+    expect(notice(2).body).toBe(
+      'Al 05/07/2027, el fisco no registra la presentación de la declaración de ingresos brutos de 05/2027, que vencía el 15/06/2027. Se intima a Forestal del Norte SRL a presentarla dentro de los 15 días.',
+    )
+    expect(db.audit.at(-1)!.summary).toBe(
+      'Intimó a la empresa: falta de presentación de ingresos brutos de 05/2027 (intimación N.º 2)',
+    )
+    // El aviso, para Impuestos y Gerencia; la tarea de responder, para Impuestos.
+    const notified = db.notifications.filter((n) => n.type === 'INTIMACION').map((n) => n.recipient_user_id)
+    for (const u of ['contabilidad', 'gerencia']) expect(notified).toContain(userId(u))
+    expect(openTasks()).toEqual([['RESPONDER_INTIMACION', 'IMPUESTOS']])
+    // Quien la emitió no la responde (SoD-16): lo ve en el domicilio.
+    expect(view('impuestos2').find((n) => n.number === 2)).toMatchObject({
+      can_respond: false,
+      sod_reason: 'Separación de funciones: la emitiste vos desde el fisco; la responde otro integrante de Impuestos.',
+    })
+    expect(view().find((n) => n.number === 2)).toMatchObject({ can_respond: true, sod_reason: null })
+    expect(
+      expectBusinessError(
+        () => cmdRespondFiscalNotice(ctx('impuestos2'), companyId(), notice(2).id, 'La presentamos esta semana.'),
+        'SEPARACION_FUNCIONES',
+      ),
+    ).toBe('No podés responder la intimación N.º 2: la emitiste vos.')
+    // El pago en el banco todavía no la cumple; imputado, sí.
+    cmdPayTaxReturn(ctx('tesoreria'), may.id)
+    expect(notice(1).status).toBe('PENDIENTE')
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [
+      db.bankMovements.find((m) => m.source_document_id === may.id && m.origin === 'ORDEN')!.id,
+    ])
+    expect(notice(1)).toMatchObject({ status: 'CUMPLIDA', closed_on: '2027-07-05', closed_by: null })
+    expect(db.audit.filter((a) => a.entity_id === notice(1).id).at(-1)).toMatchObject({
+      action: 'SYSTEM',
+      actor_user_id: null,
+      summary: `Dio por cumplida la intimación N.º 1: el fisco imputó el pago de ${may.display_number}`,
+    })
+    // La de ingresos brutos: se cumple al aceptar el fisco la declaración del mes.
+    expect(view().find((n) => n.number === 2)!.overdue).toBe(false)
+    at('2027-07-21')
+    expect(view().find((n) => n.number === 2)!.overdue).toBe(true)
+    const iibb = accepted('IIBB', '2027-05')
+    expect(notice(2)).toMatchObject({ status: 'CUMPLIDA', closed_by: null })
+    expect(db.audit.filter((a) => a.entity_id === notice(2).id).at(-1)!.summary).toBe(
+      `Dio por cumplida la intimación N.º 2: el fisco aceptó ${iibb.display_number}`,
+    )
+    expect(openTasks()).toEqual([])
+  })
+
+  it('el descargo lo escribe Impuestos y lo evalúa otro integrante desde el fisco; con el fisco del sistema, en el momento', () => {
+    at('2027-07-05')
+    issue('PRESENTACION', 'IVA', '2027-05')
+    issue('PRESENTACION', 'IVA', '2027-04')
+    expectBusinessError(
+      () => cmdRespondFiscalNotice(ctx('contabilidad'), companyId(), notice(1).id, 'Corto'),
+      'DATO_INVALIDO',
+    )
+    expectBusinessError(
+      () => cmdRespondFiscalNotice(ctx('ventas'), companyId(), notice(1).id, 'La presentamos esta semana.'),
+      'SIN_PERMISO',
+    )
+    cmdRespondFiscalNotice(
+      ctx('contabilidad'),
+      companyId(),
+      notice(1).id,
+      'El contador estuvo de licencia: la presentamos esta semana.',
+    )
+    expect(notice(1)).toMatchObject({
+      status: 'RESPONDIDA',
+      responded_on: '2027-07-05',
+      responded_by: userId('contabilidad'),
+    })
+    expect(openTasks()).toEqual([
+      ['RESPONDER_INTIMACION', 'IMPUESTOS'],
+      ['EVALUAR_DESCARGO', 'IMPUESTOS'],
+    ])
+    expectBusinessError(
+      () => cmdRespondFiscalNotice(ctx('contabilidad'), companyId(), notice(1).id, 'Otra vez el descargo.'),
+      'TRANSICION_INVALIDA',
+    )
+    // Quien escribió el descargo no lo evalúa (SoD-16); una pendiente no se da por cumplida.
+    expect(view('contabilidad').find((n) => n.number === 1)).toMatchObject({
+      can_close: false,
+      sod_reason: 'Separación de funciones: escribiste el descargo; lo evalúa otro integrante de Impuestos.',
+    })
+    expectBusinessError(
+      () => cmdCloseFiscalNotice(ctx('contabilidad'), companyId(), notice(1).id, ''),
+      'SEPARACION_FUNCIONES',
+    )
+    expect(
+      expectBusinessError(
+        () => cmdCloseFiscalNotice(ctx('impuestos2'), companyId(), notice(2).id, ''),
+        'TRANSICION_INVALIDA',
+      ),
+    ).toBe(
+      'La intimación N.º 2 todavía no tiene descargo: se cumple presentando o pagando, o con la respuesta de la empresa.',
+    )
+    cmdCloseFiscalNotice(ctx('impuestos2'), companyId(), notice(1).id, 'Se acepta: presentar antes del 20/07.')
+    expect(notice(1)).toMatchObject({
+      status: 'CUMPLIDA',
+      closed_by: userId('impuestos2'),
+      close_note: 'Se acepta: presentar antes del 20/07.',
+    })
+    expect(openTasks()).toEqual([['RESPONDER_INTIMACION', 'IMPUESTOS']])
+    // Con el fisco operado por el sistema, el descargo se acepta en el momento.
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { fisco_mode: 'AUTOMATICO' })
+    cmdRespondFiscalNotice(ctx('contabilidad'), companyId(), notice(2).id, 'La de abril sale con la de mayo.')
+    expect(notice(2)).toMatchObject({ status: 'CUMPLIDA', closed_by: null })
+    expect(openTasks()).toEqual([])
+  })
+
+  it('la diferencia del control cruzado (fisco operado por Impuestos); al pasar el fisco al sistema, acepta los descargos', () => {
+    sellInMay()
+    at('2027-06-05')
+    const dj = byNumber(
+      cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period: '2027-05', notes: '' }).display_number,
+    )
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    // Una diferencia entre lo declarado y lo que controló el fisco (por ejemplo, una factura sin autorizar).
+    dj.tr!.control_amount = dj.tr!.tax_amount - 1000
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: true })
+    expect(fiscalNoticesToIssue(db, userId('impuestos2'), companyId()).filter((c) => c.kind === 'DIFERENCIA')).toEqual([
+      expect.objectContaining({ kind: 'DIFERENCIA', tax: 'IVA', period: '2027-05', amount: 1000 }),
+    ])
+    issue('DIFERENCIA', 'IVA', '2027-05')
+    expect(notice(1)).toMatchObject({
+      subject: 'Requerimiento por diferencia en el control cruzado',
+      body: `En ${dj.display_number} (IVA de 05/2027) se declaró un débito fiscal de ${money(dj.tr!.tax_amount)} y los comprobantes autorizados del mes dan ${money(dj.tr!.tax_amount - 1000)}. Se intima a Forestal del Norte SRL a explicar la diferencia o a rectificar la declaración dentro de los 15 días.`,
+    })
+    cmdRespondFiscalNotice(
+      ctx('contabilidad'),
+      companyId(),
+      notice(1).id,
+      'Es la nota de crédito del día 31, que se autorizó en junio.',
+    )
+    expect(notice(1).status).toBe('RESPONDIDA')
+    cmdUpdateCompanySettings(ctx('docente'), companyId(), { fisco_mode: 'AUTOMATICO' })
+    expect(notice(1)).toMatchObject({ status: 'CUMPLIDA', closed_by: null })
+    expect(db.audit.filter((a) => a.entity_id === notice(1).id).at(-1)!.summary).toBe(
+      'El fisco aceptó el descargo y dio por cumplida la intimación N.º 1',
+    )
+    expect(openTasks()).toEqual([])
+  })
+})
+
 describe('Fisco: las bases guardadas', () => {
   it('una base de la versión 27 recibe el padrón', () => {
     const old = structuredClone(db) as Partial<DB> & { version: number }
@@ -870,5 +1091,14 @@ describe('Fisco: las bases guardadas', () => {
       ['PAGO_IVA', interest.id],
       ['PAGO_IIBB', interest.id],
     ])
+  })
+
+  it('una base de la versión 31 recibe el domicilio fiscal electrónico, vacío', () => {
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    delete old.fiscalNotices
+    old.version = 31
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    expect(db.fiscalNotices).toEqual([])
   })
 })

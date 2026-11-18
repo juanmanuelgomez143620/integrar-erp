@@ -204,6 +204,7 @@ export function buildSeed(): DB {
     bankLoanInstallments: [],
     taxpayers: [],
     pointsOfSale: [],
+    fiscalNotices: [],
     jobCategories: [],
     employees: [],
     pyLines: [],

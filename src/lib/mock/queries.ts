@@ -101,6 +101,8 @@ import {
   TAX_NAMES,
   taxInterest,
   taxReturnPreparers,
+  controlDifference,
+  fiscalNoticeCandidates,
   type AccountLine,
 } from './engine'
 
@@ -3932,6 +3934,80 @@ export function taxAccount(db: DB, userId: string, companyId: string): TaxAccoun
   return { date: today, rows, balance: round2(rows.reduce((s, r) => s + r.balance, 0)) }
 }
 
+/** Una intimación del domicilio fiscal electrónico (Fase 8f.1), con su declaración y los nombres. */
+export interface FiscalNoticeRow extends T.FiscalNotice {
+  document: { id: string; display_number: string; path: string } | null
+  issued_by_name: string | null
+  responded_by_name: string | null
+  closed_by_name: string | null
+  /** Pendiente después del plazo para responder. */
+  overdue: boolean
+  /** Si quien mira puede responderla (Impuestos de la empresa) o aceptar su descargo (quien opera el fisco). */
+  can_respond: boolean
+  can_close: boolean
+  /** Por qué no puede, si es por la separación de funciones (SoD-16). */
+  sod_reason: string | null
+}
+
+/** El domicilio fiscal electrónico de la empresa (8f.1): las intimaciones, de la más nueva a la más vieja. */
+export function fiscalNotices(db: DB, userId: string, companyId: string): FiscalNoticeRow[] {
+  assertPerm(db, userId, companyId, 'fisco.read')
+  const today = todayAR()
+  const eff = effectivePermissions(db, userId, companyId)
+  const sod = db.companies.find((c) => c.id === companyId)!.settings.sod_enabled && !eff.supervisor
+  return db.fiscalNotices
+    .filter((n) => n.company_id === companyId)
+    .sort((a, b) => b.number - a.number)
+    .map((n) => {
+      const doc = n.tax_return_id ? db.documents.find((d) => d.id === n.tax_return_id) : undefined
+      const respondable = n.status === 'PENDIENTE' && can(eff, 'tax_return.create')
+      const closable = n.status === 'RESPONDIDA' && can(eff, 'fisco.operate')
+      const ownNotice = respondable && sod && n.issued_by === userId
+      const ownResponse = closable && sod && n.responded_by === userId
+      return {
+        ...n,
+        document: doc ? { id: doc.id, display_number: doc.display_number, path: docPath(db, doc) } : null,
+        issued_by_name: n.issued_by ? nameOf(db, n.issued_by) : null,
+        responded_by_name: n.responded_by ? nameOf(db, n.responded_by) : null,
+        closed_by_name: n.closed_by ? nameOf(db, n.closed_by) : null,
+        overdue: n.status === 'PENDIENTE' && today > n.response_due,
+        can_respond: respondable && !ownNotice,
+        can_close: closable && !ownResponse,
+        sod_reason: ownNotice
+          ? 'Separación de funciones: la emitiste vos desde el fisco; la responde otro integrante de Impuestos.'
+          : ownResponse
+            ? 'Separación de funciones: escribiste el descargo; lo evalúa otro integrante de Impuestos.'
+            : null,
+      }
+    })
+}
+
+/** Un vencimiento que el fisco puede intimar, con su declaración y lo que se intima (8f.1). */
+export interface FiscalNoticeCandidateRow {
+  kind: T.FiscalNoticeKind
+  tax: T.TaxCode
+  period: string
+  due_date: string
+  document: { id: string; display_number: string; path: string; status: string } | null
+  /** El saldo sin imputar (falta de pago) o la diferencia (control cruzado); null en la falta de presentación. */
+  amount: number | null
+}
+
+/** Lo que el fisco puede intimar hoy (8f.1): lo ve quien opera el fisco. */
+export function fiscalNoticesToIssue(db: DB, userId: string, companyId: string): FiscalNoticeCandidateRow[] {
+  assertPerm(db, userId, companyId, 'fisco.operate')
+  return fiscalNoticeCandidates(db, companyId).map((c) => ({
+    kind: c.kind,
+    tax: c.tax,
+    period: c.period,
+    due_date: c.due_date,
+    document: c.doc
+      ? { id: c.doc.id, display_number: c.doc.display_number, path: docPath(db, c.doc), status: c.doc.status }
+      : null,
+    amount: c.kind === 'PAGO' ? c.doc!.total : c.kind === 'DIFERENCIA' ? controlDifference(c.doc!.tr!) : null,
+  }))
+}
+
 /** Una línea del extracto: lo que el banco procesó un día, con el saldo después del movimiento. */
 export interface BankStatementLine {
   id: string
@@ -4452,7 +4528,9 @@ export function listTasks(
                     ? `/e/${company.slug}/pagos/banco-aula/bandeja`
                     : t.task_type === 'HABILITAR_PUNTO_VENTA'
                       ? `/e/${company.slug}/fisco/puntos-de-venta`
-                      : null,
+                      : t.task_type === 'RESPONDER_INTIMACION' || t.task_type === 'EVALUAR_DESCARGO'
+                        ? `/e/${company.slug}/fisco/domicilio-fiscal`
+                        : null,
           assignee_label: t.assigned_user_id
             ? nameOf(db, t.assigned_user_id)
             : t.assigned_role

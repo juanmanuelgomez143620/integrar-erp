@@ -5170,6 +5170,119 @@ describe('paridad de comandos', () => {
     await view('la cuenta al final')
   })
 
+  it('fisco: el domicilio fiscal electrónico, las intimaciones y los descargos (8f.1)', async () => {
+    const companyPg = pg(company)
+    // El alta de la empresa, 75 días atrás en los dos lados: quedan obligaciones vencidas para intimar.
+    const since = new Date(Date.now() - 75 * 86_400_000).toISOString()
+    mock.companies.find((c) => c.id === company)!.created_at = since
+    await db.admin('update public.companies set created_at = $2 where id = $1', [companyPg, since])
+    const reads = async (label: string) => {
+      for (const username of ['impuestos2', 'contabilidad', 'gerencia', 'ventas', 'tesoreria'])
+        await sameRead(
+          `el domicilio fiscal ${label} (${username})`,
+          username,
+          (b) => b.api.fiscalNotices(companyPg),
+          (u) => Q.fiscalNotices(mock, u, company),
+        )
+      for (const username of ['impuestos2', 'ventas'])
+        await sameRead(
+          `los vencimientos para intimar ${label} (${username})`,
+          username,
+          (b) => b.api.fiscalNoticesToIssue(companyPg),
+          (u) => Q.fiscalNoticesToIssue(mock, u, company),
+        )
+      // Las tareas creadas en el mismo instante no tienen un orden definido entre sí.
+      await sameRead(
+        `las tareas de Impuestos ${label}`,
+        'impuestos2',
+        (b) => b.api.tasks(companyPg, 'mine', true),
+        (u) => Q.listTasks(mock, u, company, 'mine', true),
+        (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
+      )
+    }
+    await reads('al empezar')
+    const candidates = Q.fiscalNoticesToIssue(mock, mockId('impuestos2'), company)
+    expect(candidates.length, 'vencimientos para intimar').toBeGreaterThan(1)
+    const [first, second] = candidates
+    type Target = Pick<E.FiscalNoticeInput, 'kind' | 'tax' | 'period'>
+    const issue = (label: string, username: string, c: Target, note = '') =>
+      step(
+        label,
+        username,
+        (ctx) => E.cmdIssueFiscalNotice(ctx, company, { kind: c.kind, tax: c.tax, period: c.period, note }),
+        (b) => b.commands.issueFiscalNotice(companyPg, { kind: c.kind, tax: c.tax, period: c.period, note }),
+      )
+    const issued = async (label: string, c: Target, note = '') => {
+      const result = await issue(label, 'impuestos2', c, note)
+      expect(result, `${label}: tenía que salir bien (${lastFailure})`).not.toBeNull()
+      expect(result!.pg.number, label).toBe(result!.mock.number)
+      loaded.link(result!.mock.id, result!.pg.id)
+      return result!.mock.id
+    }
+    expect(await issue('Compras no intima', 'compras1', first)).toBeNull()
+    expect(await issue('observaciones demasiado largas', 'impuestos2', first, 'x'.repeat(301))).toBeNull()
+    expect(
+      await issue('una obligación que no venció', 'impuestos2', { kind: 'PAGO', tax: 'IVA', period: '2099-01' }),
+    ).toBeNull()
+    const one = await issued('el fisco intima', first, 'Revisen los vencimientos del mes.')
+    expect(await issue('la misma otra vez', 'impuestos2', first)).toBeNull()
+    const two = await issued('otra intimación', second)
+    await reads('con dos intimaciones')
+
+    // El descargo: lo escribe Impuestos de la empresa, no quien la emitió (SoD-16).
+    const respond = (label: string, username: string, id: string, text: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdRespondFiscalNotice(c, company, id, text),
+        (b) => b.commands.respondFiscalNotice(companyPg, pg(id), text),
+      )
+    const close = (label: string, username: string, id: string, comment: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdCloseFiscalNotice(c, company, id, comment),
+        (b) => b.commands.closeFiscalNotice(companyPg, pg(id), comment),
+      )
+    expect(await respond('quien la emitió no la responde', 'impuestos2', one, 'La presentamos esta semana.')).toBeNull()
+    expect(await respond('un descargo corto', 'contabilidad', one, 'Corto')).toBeNull()
+    expect(await respond('Compras no responde', 'compras1', one, 'La presentamos esta semana.')).toBeNull()
+    expect(await close('una pendiente no se da por cumplida', 'impuestos2', one, '')).toBeNull()
+    expect(
+      await respond(
+        'Contabilidad responde',
+        'contabilidad',
+        one,
+        'La presentamos esta semana, con la del mes siguiente.',
+      ),
+    ).not.toBeNull()
+    expect(await respond('responder otra vez', 'contabilidad', one, 'Otro descargo para la misma.')).toBeNull()
+    await reads('con un descargo')
+    expect(await close('quien escribió el descargo no lo evalúa', 'contabilidad', one, '')).toBeNull()
+    expect(await close('un comentario demasiado largo', 'impuestos2', one, 'x'.repeat(301))).toBeNull()
+    expect(await close('el fisco acepta el descargo', 'impuestos2', one, 'Se acepta.')).not.toBeNull()
+    expect(await close('aceptarlo otra vez', 'impuestos2', one, '')).toBeNull()
+
+    // Con el fisco operado por el sistema, el descargo se acepta en el momento.
+    for (const [label, fisco_mode] of [
+      ['el docente pasa el fisco al sistema', 'AUTOMATICO'],
+      ['lo vuelve a Impuestos', 'ESTUDIANTES'],
+    ] as const) {
+      await ok(
+        label,
+        'docente',
+        (c) => E.cmdUpdateCompanySettings(c, company, { fisco_mode }),
+        (b) => b.commands.updateCompanySettings(companyPg, { fisco_mode }),
+      )
+      if (fisco_mode === 'AUTOMATICO')
+        expect(
+          await respond('con el fisco del sistema', 'contabilidad', two, 'Ya la presentamos con la del mes.'),
+        ).not.toBeNull()
+    }
+    expect(mock.fiscalNotices.find((n) => n.id === two)!.status).toBe('CUMPLIDA')
+    await reads('al final')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

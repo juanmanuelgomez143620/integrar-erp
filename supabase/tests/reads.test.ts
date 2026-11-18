@@ -377,6 +377,13 @@ describe('tesorería', () => {
       await same(u, () => Q.taxAccount(mock, userId(u), company), 'tax_account', [companyPg])
   })
 
+  it('el domicilio fiscal electrónico y los vencimientos para intimar (8f.1)', async () => {
+    for (const u of [...USERS, 'tesoreria2', 'impuestos2']) {
+      await same(u, () => Q.fiscalNotices(mock, userId(u), company), 'fiscal_notices', [companyPg])
+      await same(u, () => Q.fiscalNoticesToIssue(mock, userId(u), company), 'fiscal_notice_candidates', [companyPg])
+    }
+  })
+
   it('el extracto del Banco Aula: un año, un mes sin movimientos y períodos mal armados', async () => {
     const year = new Date().getFullYear()
     const periods: [string, string][] = [

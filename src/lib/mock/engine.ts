@@ -14,6 +14,8 @@ import {
   BOM_COMPONENT_TYPES,
   DOC_STATUSES,
   DOC_TYPES,
+  FISCAL_NOTICE_KINDS,
+  FISCAL_NOTICE_STATUSES,
   FISCO_DEFAULTS,
   FISCO_MODES,
   MODULES,
@@ -52,7 +54,7 @@ import { cuitIsValid } from '../domain/cuit'
 import { MONTH_HOURS } from '../domain/employees'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
-import { addDays, addMonths, date as fmtDate, money, qty as fmtQty, todayAR } from '../format'
+import { addDays, addMonths, date as fmtDate, dateAR, money, qty as fmtQty, todayAR } from '../format'
 import type { DB } from './db'
 
 // ============================================================ Infraestructura
@@ -3838,6 +3840,7 @@ function imputeTaxPayment(ctx: Ctx, order: T.BankMovement, on: string) {
     to: 'PAGADA',
     summary: `El fisco imputó el pago de ${doc.display_number}: ${money(order.amount)} (transacción ${order.transaction_number} del Banco Aula)`,
   })
+  fulfillFiscalNotices(ctx, doc, ['PAGO'], `el fisco imputó el pago de ${doc.display_number}`)
 }
 
 /** La orden de una línea del mayor: al debe entra dinero (crédito en el extracto); al haber, sale (débito). */
@@ -5301,8 +5304,19 @@ function settleFisco(ctx: Ctx, company: T.Company) {
       .filter((d) => d.company_id === company.id && d.doc_type === 'TAX_RETURN' && d.status === 'ENVIADA')
       .sort((a, b) => a.number - b.number))
       receiveTaxReturn(ctx, doc, systemReception(doc), SYSTEM_ACTOR, null, null)
+    for (const notice of db.fiscalNotices
+      .filter((n) => n.company_id === company.id && n.status === 'RESPONDIDA')
+      .sort((a, b) => a.number - b.number))
+      closeFiscalNotice(
+        ctx,
+        notice,
+        null,
+        '',
+        `El fisco aceptó el descargo y dio por cumplida la intimación N.º ${notice.number}`,
+      )
   }
   syncPointOfSaleTask(ctx, company.id)
+  syncFiscalNoticeTasks(ctx, company.id)
 }
 
 export interface PointOfSaleInput {
@@ -9673,6 +9687,16 @@ function receiveTaxReturn(
   })
   doc.tr = { ...doc.tr!, transaction_code: code, received_on: today, received_by: receivedBy }
   postTaxReturnEntry(ctx, doc, actor)
+  fulfillFiscalNotices(
+    ctx,
+    doc,
+    [
+      'PRESENTACION',
+      ...(doc.total > 0 ? [] : (['PAGO'] as const)),
+      ...(controlDifference(doc.tr!) === 0 ? (['DIFERENCIA'] as const) : []),
+    ],
+    `el fisco aceptó ${doc.display_number}`,
+  )
 }
 
 /** La declaración posterior de su impuesto, si la hay: sólo se anula la última. */
@@ -9934,6 +9958,407 @@ export function cmdCancelTaxReturn(ctx: Ctx, docId: string, reason: string) {
     actor,
     summary: `Anuló ${doc.display_number}${reversal ? `: el contraasiento ${reversal.display_number} revirtió el del impuesto` : ''} — ${comment}`,
   })
+}
+
+// ============================================================ Domicilio fiscal electrónico (docs/FASE_8_BANCO_Y_FISCO.md §4, 8f.1)
+
+/** Una obligación vencida (o una diferencia del control cruzado) que el fisco puede intimar. */
+export interface FiscalNoticeCandidate {
+  kind: T.FiscalNoticeKind
+  tax: T.TaxCode
+  period: string
+  due_date: string
+  /** La declaración del mes, si la hay. */
+  doc: T.Document | null
+}
+
+/** Las declaraciones que el fisco aceptó. */
+const ACCEPTED_TAX_RETURN_STATUSES = ['PRESENTADA', 'SIN_SALDO', 'PAGO_EN_BANCO', 'PAGADA']
+
+/** La diferencia del control cruzado: lo declarado menos lo que controló el fisco (0 sin control). */
+export const controlDifference = (tr: T.TaxReturnHeader) =>
+  tr.control_amount === null ? 0 : round2(declaredForControl(tr) - tr.control_amount)
+
+const NOTICE_KIND_ORDER: T.FiscalNoticeKind[] = ['PRESENTACION', 'PAGO', 'DIFERENCIA']
+
+/**
+ * Lo que el fisco puede intimar hoy (8f.1): de las obligaciones de IVA y de ingresos brutos que vencieron
+ * desde el alta de la empresa en la app, las que no tienen una declaración aceptada (falta de
+ * presentación: no hay, está en borrador o fue observada; la enviada está en el fisco) o tienen el
+ * saldo sin imputar (falta de pago, también con el pago en el banco); y las declaraciones aceptadas con
+ * una diferencia en el control cruzado. Sin las que ya tienen una intimación abierta. Por mes, impuesto
+ * y tipo.
+ */
+export function fiscalNoticeCandidates(db: DB, companyId: string): FiscalNoticeCandidate[] {
+  const company = getCompany(db, companyId)
+  const today = businessDate(company)
+  const since = dateAR(company.created_at)
+  const found: FiscalNoticeCandidate[] = []
+  for (let period = previousPeriod(since.slice(0, 7)); period < today.slice(0, 7); period = nextPeriod(period))
+    for (const tax of ['IIBB', 'IVA'] as const) {
+      const due = taxDueDate(tax, period)
+      if (due < since || due >= today) continue
+      const doc = taxReturnsOf(db, companyId, tax).find((d) => d.tr!.period === period) ?? null
+      if (!doc || doc.status === 'BORRADOR' || doc.status === 'OBSERVADA')
+        found.push({ kind: 'PRESENTACION', tax, period, due_date: due, doc })
+      else if (doc.status === 'PRESENTADA' || doc.status === 'PAGO_EN_BANCO')
+        found.push({ kind: 'PAGO', tax, period, due_date: due, doc })
+    }
+  for (const doc of db.documents)
+    if (
+      doc.company_id === companyId &&
+      doc.doc_type === 'TAX_RETURN' &&
+      ACCEPTED_TAX_RETURN_STATUSES.includes(doc.status) &&
+      controlDifference(doc.tr!) !== 0
+    )
+      found.push({ kind: 'DIFERENCIA', tax: doc.tr!.tax, period: doc.tr!.period, due_date: doc.tr!.due_date, doc })
+  return found
+    .filter(
+      (c) =>
+        !db.fiscalNotices.some(
+          (n) =>
+            n.company_id === companyId &&
+            n.kind === c.kind &&
+            n.tax === c.tax &&
+            n.period === c.period &&
+            n.status !== 'CUMPLIDA',
+        ),
+    )
+    .sort(
+      (a, b) =>
+        (a.period < b.period ? -1 : a.period > b.period ? 1 : 0) ||
+        (a.tax < b.tax ? -1 : a.tax > b.tax ? 1 : 0) ||
+        NOTICE_KIND_ORDER.indexOf(a.kind) - NOTICE_KIND_ORDER.indexOf(b.kind),
+    )
+}
+
+/** El texto del fisco: qué no registra, desde cuándo y el plazo para cumplir; con sus observaciones. */
+function fiscalNoticeBody(company: T.Company, c: FiscalNoticeCandidate, today: string, note: string) {
+  const days = FISCO_DEFAULTS.notice_days
+  const what = `${TAX_NAMES[c.tax]} de ${periodLabel(c.period)}`
+  const doc = c.doc
+  const text =
+    c.kind === 'PRESENTACION'
+      ? `Al ${fmtDate(today)}, el fisco no registra la presentación de la declaración de ${what}, que vencía el ${fmtDate(c.due_date)}. Se intima a ${company.legal_name} a presentarla dentro de los ${days} días.`
+      : c.kind === 'PAGO'
+        ? `Al ${fmtDate(today)}, el fisco no registra el pago de ${doc!.display_number} (${what}), que vencía el ${fmtDate(c.due_date)}: el saldo es ${money(doc!.total)} y los intereses resarcitorios a hoy, ${money(taxInterest(doc!.total, c.due_date, today).interest)}, que siguen corriendo hasta el pago. Se intima a ${company.legal_name} a pagarla dentro de los ${days} días.`
+        : `En ${doc!.display_number} (${what}) se declaró ${c.tax === 'IVA' ? 'un débito fiscal' : 'una base'} de ${money(declaredForControl(doc!.tr!))} y los comprobantes autorizados del mes dan ${money(doc!.tr!.control_amount ?? 0)}. Se intima a ${company.legal_name} a explicar la diferencia o a rectificar la declaración dentro de los ${days} días.`
+  return note ? `${text} Observaciones del fisco: ${note}` : text
+}
+
+const noticeLabel = (n: T.FiscalNotice) => `Intimación N.º ${n.number}`
+
+export interface FiscalNoticeInput {
+  kind: T.FiscalNoticeKind
+  tax: T.TaxCode
+  /** El mes de la obligación: aaaa-mm. */
+  period: string
+  /** Observaciones del fisco, opcionales: hasta 300 caracteres. */
+  note: string
+}
+
+/**
+ * Quien opera el fisco (Impuestos o el docente) intima una obligación vencida o una diferencia del
+ * control cruzado (8f.1), con observaciones opcionales. Impuestos y Gerencia reciben el aviso, e
+ * Impuestos, la tarea de responder.
+ */
+export function cmdIssueFiscalNotice(ctx: Ctx, companyId: string, input: FiscalNoticeInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'fisco.operate')
+  const company = getCompany(db, companyId)
+  const note = (input.note ?? '').trim()
+  if (note.length > 300) fail('DATO_INVALIDO', 'Las observaciones del fisco tienen hasta 300 caracteres.')
+  const candidate = fiscalNoticeCandidates(db, companyId).find(
+    (c) => c.kind === input.kind && c.tax === input.tax && c.period === input.period,
+  )
+  if (!candidate)
+    fail(
+      'DATO_INVALIDO',
+      'Esa obligación no se puede intimar: no venció, ya se cumplió o ya tiene una intimación abierta.',
+    )
+  const today = businessDate(company)
+  const number =
+    db.fiscalNotices.reduce((max, n) => (n.company_id === companyId ? Math.max(max, n.number) : max), 0) + 1
+  const subject = FISCAL_NOTICE_KINDS[candidate.kind].subject
+  const notice: T.FiscalNotice = {
+    id: uid(),
+    company_id: companyId,
+    number,
+    kind: candidate.kind,
+    tax: candidate.tax,
+    period: candidate.period,
+    tax_return_id: candidate.doc?.id ?? null,
+    subject,
+    body: fiscalNoticeBody(company, candidate, today, note),
+    issued_on: today,
+    issued_by: ctx.userId,
+    response_due: addDays(today, FISCO_DEFAULTS.notice_days),
+    status: 'PENDIENTE',
+    response: null,
+    responded_on: null,
+    responded_by: null,
+    closed_on: null,
+    closed_by: null,
+    close_note: null,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.fiscalNotices.push(notice)
+  const what = `${TAX_NAMES[notice.tax]} de ${periodLabel(notice.period)}`
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'fiscal_notice',
+    entity_id: notice.id,
+    entity_label: noticeLabel(notice),
+    summary: `Intimó a la empresa: ${FISCAL_NOTICE_KINDS[notice.kind].label.toLowerCase()} de ${what} (intimación N.º ${number})`,
+  })
+  notifyRoles(ctx, companyId, ['IMPUESTOS', 'GERENCIA'], {
+    type: 'INTIMACION',
+    title: `El fisco intimó a la empresa (N.º ${number})`,
+    body: `${subject}: ${what}. Hay que cumplir o responder hasta el ${fmtDate(notice.response_due)}.`,
+    link_path: `/e/${company.slug}/fisco/domicilio-fiscal`,
+  })
+  syncFiscalNoticeTasks(ctx, companyId)
+  return { id: notice.id, number }
+}
+
+/** La intimación de la empresa, o el error. */
+function getFiscalNotice(db: DB, companyId: string, noticeId: string) {
+  const notice = db.fiscalNotices.find((n) => n.id === noticeId && n.company_id === companyId)
+  if (!notice) fail('DATO_INVALIDO', 'La intimación no es de esta empresa.')
+  return notice
+}
+
+/**
+ * Impuestos responde una intimación pendiente con su descargo (8f.1). SoD-16: no la responde quien la
+ * emitió desde el fisco. Si el fisco lo opera el sistema, acepta el descargo en el momento.
+ */
+export function cmdRespondFiscalNotice(ctx: Ctx, companyId: string, noticeId: string, response: string) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'tax_return.create')
+  const notice = getFiscalNotice(db, companyId, noticeId)
+  if (notice.status !== 'PENDIENTE')
+    fail(
+      'TRANSICION_INVALIDA',
+      `La intimación N.º ${notice.number} ya está ${FISCAL_NOTICE_STATUSES[notice.status].label.toLowerCase()}.`,
+    )
+  const company = getCompany(db, companyId)
+  if (
+    company.settings.sod_enabled &&
+    !effectivePermissions(db, ctx.userId!, companyId).supervisor &&
+    notice.issued_by === ctx.userId
+  )
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés responder la intimación N.º ${notice.number}: la emitiste vos.`,
+      'Separación de funciones (SoD-16): quien intima desde el fisco no responde por la empresa. La responde otro integrante de Impuestos.',
+    )
+  const text = (response ?? '').trim()
+  if (text.length < 10 || text.length > 1000) fail('DATO_INVALIDO', 'El descargo tiene de 10 a 1.000 caracteres.')
+  Object.assign(notice, {
+    status: 'RESPONDIDA',
+    response: text,
+    responded_on: businessDate(company),
+    responded_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'RESPOND',
+    entity_type: 'fiscal_notice',
+    entity_id: notice.id,
+    entity_label: noticeLabel(notice),
+    summary: `Respondió la intimación N.º ${notice.number} con su descargo`,
+  })
+  if (fiscoAutomatic(db, company))
+    closeFiscalNotice(
+      ctx,
+      notice,
+      null,
+      '',
+      `El fisco aceptó el descargo y dio por cumplida la intimación N.º ${notice.number}`,
+    )
+  syncFiscalNoticeTasks(ctx, companyId)
+}
+
+/**
+ * Quien opera el fisco acepta el descargo de una intimación respondida y la da por cumplida (8f.1), con
+ * un comentario opcional. SoD-16: no evalúa el descargo quien lo escribió.
+ */
+export function cmdCloseFiscalNotice(ctx: Ctx, companyId: string, noticeId: string, comment: string) {
+  const { db } = ctx
+  requirePermission(ctx, companyId, 'fisco.operate')
+  const notice = getFiscalNotice(db, companyId, noticeId)
+  if (notice.status !== 'RESPONDIDA')
+    fail(
+      'TRANSICION_INVALIDA',
+      notice.status === 'PENDIENTE'
+        ? `La intimación N.º ${notice.number} todavía no tiene descargo: se cumple presentando o pagando, o con la respuesta de la empresa.`
+        : `La intimación N.º ${notice.number} ya está cumplida.`,
+    )
+  const company = getCompany(db, companyId)
+  if (
+    company.settings.sod_enabled &&
+    !effectivePermissions(db, ctx.userId!, companyId).supervisor &&
+    notice.responded_by === ctx.userId
+  )
+    fail(
+      'SEPARACION_FUNCIONES',
+      `No podés evaluar el descargo de la intimación N.º ${notice.number}: lo escribiste vos.`,
+      'Separación de funciones (SoD-16): quien responde por la empresa no evalúa su descargo en el fisco. Lo evalúa otro integrante de Impuestos.',
+    )
+  const note = (comment ?? '').trim()
+  if (note.length > 300) fail('DATO_INVALIDO', 'El comentario del fisco tiene hasta 300 caracteres.')
+  closeFiscalNotice(
+    ctx,
+    notice,
+    ctx.userId,
+    note,
+    `Aceptó el descargo y dio por cumplida la intimación N.º ${notice.number}${note ? ` — ${note}` : ''}`,
+  )
+  syncFiscalNoticeTasks(ctx, companyId)
+}
+
+/** La intimación queda cumplida: la cierra quien opera el fisco o, con closedBy null, el sistema. */
+function closeFiscalNotice(ctx: Ctx, notice: T.FiscalNotice, closedBy: string | null, note: string, summary: string) {
+  Object.assign(notice, {
+    status: 'CUMPLIDA',
+    closed_on: businessDate(getCompany(ctx.db, notice.company_id)),
+    closed_by: closedBy,
+    close_note: note || null,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  })
+  logAudit(ctx, {
+    company_id: notice.company_id,
+    actor: closedBy ? actorFor(ctx, notice.company_id, 'fisco.operate') : SYSTEM_ACTOR,
+    action: closedBy ? 'APPROVE' : 'SYSTEM',
+    entity_type: 'fiscal_notice',
+    entity_id: notice.id,
+    entity_label: noticeLabel(notice),
+    summary,
+  })
+}
+
+/**
+ * Al cumplirse una obligación, el sistema da por cumplidas sus intimaciones abiertas (8f.1): al aceptar
+ * el fisco la declaración del mes (la falta de presentación; también la falta de pago si no tiene
+ * saldo y la diferencia si coincide) o al imputar su pago (la falta de pago).
+ */
+function fulfillFiscalNotices(ctx: Ctx, doc: T.Document, kinds: T.FiscalNoticeKind[], reason: string) {
+  const tr = doc.tr!
+  const open = ctx.db.fiscalNotices
+    .filter(
+      (n) =>
+        n.company_id === doc.company_id &&
+        n.tax === tr.tax &&
+        n.period === tr.period &&
+        n.status !== 'CUMPLIDA' &&
+        kinds.includes(n.kind),
+    )
+    .sort((a, b) => a.number - b.number)
+  for (const n of open) closeFiscalNotice(ctx, n, null, '', `Dio por cumplida la intimación N.º ${n.number}: ${reason}`)
+  if (open.length) syncFiscalNoticeTasks(ctx, doc.company_id)
+}
+
+/**
+ * Las tareas del domicilio fiscal electrónico (8f.1): mientras haya intimaciones pendientes, Impuestos
+ * tiene la de responderlas; mientras haya descargos sin evaluar y el fisco lo opere Impuestos, la de
+ * evaluarlos.
+ */
+function syncFiscalNoticeTasks(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const company = getCompany(db, companyId)
+  const notices = db.fiscalNotices.filter((n) => n.company_id === companyId)
+  syncFiscoTask(
+    ctx,
+    company,
+    'RESPONDER_INTIMACION',
+    notices.some((n) => n.status === 'PENDIENTE'),
+    {
+      title: 'Responder las intimaciones del fisco',
+      description:
+        'El fisco intimó a la empresa: hay que cumplir lo que pide (presentar o pagar la declaración) o responder con un descargo, desde Fisco simulado → Domicilio fiscal electrónico, dentro del plazo.',
+      priority: 'ALTA',
+      notice: null,
+    },
+  )
+  syncFiscoTask(
+    ctx,
+    company,
+    'EVALUAR_DESCARGO',
+    !fiscoAutomatic(db, company) && notices.some((n) => n.status === 'RESPONDIDA'),
+    {
+      title: 'Evaluar los descargos de las intimaciones',
+      description:
+        'La empresa respondió intimaciones con su descargo: las evalúa como fisco, desde Fisco simulado → Domicilio fiscal electrónico, un integrante de Impuestos que no escribió el descargo.',
+      priority: 'NORMAL',
+      notice: {
+        title: 'Descargos para evaluar',
+        body: 'La empresa respondió una intimación: evaluá el descargo desde Fisco simulado → Domicilio fiscal electrónico (no los que escribiste vos).',
+      },
+    },
+  )
+}
+
+/** Abre la tarea de Impuestos de un tipo mientras haga falta y la resuelve cuando ya no. */
+function syncFiscoTask(
+  ctx: Ctx,
+  company: T.Company,
+  taskType: string,
+  pending: boolean,
+  spec: { title: string; description: string; priority: T.Priority; notice: { title: string; body: string } | null },
+) {
+  const { db } = ctx
+  const open = db.tasks.find(
+    (t) =>
+      t.company_id === company.id && t.task_type === taskType && (t.status === 'PENDIENTE' || t.status === 'EN_CURSO'),
+  )
+  if (!pending) {
+    if (open) {
+      open.status = 'RESUELTA'
+      open.completed_by = ctx.userId
+      open.completed_at = ctx.now
+    }
+    return
+  }
+  if (open) return
+  const task: T.Task = {
+    id: uid(),
+    company_id: company.id,
+    document_id: null,
+    task_type: taskType,
+    title: spec.title,
+    description: spec.description,
+    origin_status: null,
+    context: {},
+    assigned_role: 'IMPUESTOS',
+    assigned_user_id: null,
+    status: 'PENDIENTE',
+    priority: spec.priority,
+    source: 'SISTEMA',
+    claimed_by: null,
+    claimed_at: null,
+    completed_by: null,
+    completed_at: null,
+    created_by: null,
+    created_at: ctx.now,
+  }
+  db.tasks.push(task)
+  if (spec.notice)
+    notifyRoles(ctx, company.id, ['IMPUESTOS'], {
+      type: 'NUEVA_TAREA',
+      title: spec.notice.title,
+      body: spec.notice.body,
+      link_path: `/e/${company.slug}/fisco/domicilio-fiscal`,
+      task_id: task.id,
+    })
 }
 
 // ============================================================ Tareas y notificaciones

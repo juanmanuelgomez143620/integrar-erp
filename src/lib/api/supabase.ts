@@ -267,6 +267,8 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     padron: (companyId) => rpc('padron', company(companyId)),
     pointsOfSale: (companyId) => rpc('points_of_sale', company(companyId)),
     taxAccount: (companyId) => rpc('tax_account', company(companyId)),
+    fiscalNotices: (companyId) => rpc('fiscal_notices', company(companyId)),
+    fiscalNoticesToIssue: (companyId) => rpc('fiscal_notice_candidates', company(companyId)),
     authorizedVouchers: (companyId, month) => rpc('authorized_vouchers', { ...company(companyId), p_month: month }),
     loanPreview: (companyId, amount, months) =>
       rpc('loan_preview', { ...company(companyId), p_amount: amount, p_months: months }),
@@ -464,6 +466,11 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     presentTaxReturn: (docId) => rpc('tax_return_present', doc(docId)),
     receiveTaxReturn: (docId, reception) => rpc('tax_return_receive', { ...doc(docId), p_input: reception }),
     payTaxReturn: (docId) => rpc('tax_return_pay', doc(docId)),
+    issueFiscalNotice: (companyId, input) => rpc('fiscal_notice_issue', { ...company(companyId), p_input: input }),
+    respondFiscalNotice: (companyId, id, response) =>
+      rpc('fiscal_notice_respond', { ...company(companyId), p_id: id, p_response: response }),
+    closeFiscalNotice: (companyId, id, comment) =>
+      rpc('fiscal_notice_close', { ...company(companyId), p_id: id, p_comment: comment }),
     cancelTaxReturn: (docId, reason) => rpc('tax_return_cancel', { ...doc(docId), p_reason: reason }),
     createRouteSheet: (companyId, input) => rpc('rs_create', { ...company(companyId), p_input: input }),
     departRouteSheet: (docId) => rpc('rs_depart', doc(docId)),

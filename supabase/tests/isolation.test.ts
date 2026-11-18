@@ -122,6 +122,7 @@ async function snapshot(company: string) {
     'bank_loan_installments',
     'taxpayers',
     'points_of_sale',
+    'fiscal_notices',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -274,7 +275,15 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_user_ids: `{${u.alumnoB}}`,
     p_member_role_id: B.memberRole,
     // La orden que se reenvía al banco es un movimiento de la cuenta de B; el punto de venta, el pedido de B.
-    p_id: fn === 'bank_order_resend' ? B.bankMovement : fn === 'point_of_sale_decide' ? B.pointOfSale : B.product,
+    p_id:
+      fn === 'bank_order_resend'
+        ? B.bankMovement
+        : fn === 'point_of_sale_decide'
+          ? B.pointOfSale
+          : fn === 'fiscal_notice_respond' || fn === 'fiscal_notice_close'
+            ? B.fiscalNotice
+            : B.product,
+    p_response: 'Descargo de un intruso que no corresponde',
     p_kind: fn === 'export_rows' ? 'stock' : 'product',
     p_slug: B.slug,
     // La lista de B se busca por su código.
@@ -749,6 +758,20 @@ beforeAll(async () => {
     })
   ).id
 
+  // La intimación de B (8f.1): su alta, 75 días atrás, deja obligaciones vencidas para intimar.
+  await db.admin(`update public.companies set created_at = now() - interval '75 days' where id = $1`, [B.id])
+  const [candidate] = await rpc<{ kind: string; tax: string; period: string }[]>(
+    'docenteB',
+    'fiscal_notice_candidates',
+    { p_company_id: B.id },
+  )
+  B.fiscalNotice = (
+    await rpc<{ id: string }>('docenteB', 'fiscal_notice_issue', {
+      p_company_id: B.id,
+      p_input: JSON.stringify({ kind: candidate.kind, tax: candidate.tax, period: candidate.period, note: '' }),
+    })
+  ).id
+
   bIds = new Set(
     (
       await db.admin<{ id: string }>(
@@ -795,6 +818,7 @@ beforeAll(async () => {
          union select id::text from public.carriers where company_id = $1
          union select id::text from public.vehicles where company_id = $1
          union select id::text from public.route_sheet_lines where company_id = $1
+         union select id::text from public.fiscal_notices where company_id = $1
          union select $2::text`,
         [B.id, u.alumnoB],
       )

@@ -91,6 +91,7 @@ export interface DB {
   bankLoanInstallments: T.BankLoanInstallment[]
   taxpayers: T.Taxpayer[]
   pointsOfSale: T.PointOfSale[]
+  fiscalNotices: T.FiscalNotice[]
   jobCategories: T.JobCategory[]
   employees: T.Employee[]
   pyLines: T.PayrollLine[]
@@ -108,7 +109,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 31
+export const DB_VERSION = 32
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -175,6 +176,7 @@ const COLLECTIONS = [
   'bankLoanInstallments',
   'taxpayers',
   'pointsOfSale',
+  'fiscalNotices',
   'jobCategories',
   'employees',
   'pyLines',
@@ -232,6 +234,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   bankLoanInstallments: 26,
   taxpayers: 28,
   pointsOfSale: 29,
+  fiscalNotices: 32,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -599,6 +602,10 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
       insertBasePostingRules(ctx, company.id)
     }
+  },
+  // v31 → v32: el domicilio fiscal electrónico (Fase 8f.1): las intimaciones del fisco.
+  31: (db) => {
+    db.fiscalNotices ??= []
   },
 }
 

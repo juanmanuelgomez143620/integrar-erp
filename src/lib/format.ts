@@ -77,6 +77,13 @@ export function relative(iso: string): string {
   return date(iso)
 }
 
+/** El día en Argentina (aaaa-mm-dd) de un momento (un timestamp). */
+export function dateAR(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+    new Date(iso),
+  )
+}
+
 /** Fecha de negocio de hoy en Argentina (aaaa-mm-dd). */
 export function todayAR(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(

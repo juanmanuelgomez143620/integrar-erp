@@ -11,6 +11,8 @@ import type {
   BankMovementStatus,
   DeliveryStatus,
   DocType,
+  FiscalNoticeKind,
+  FiscalNoticeStatus,
   FiscoMode,
   JournalEntryOrigin,
   LoanStatus,
@@ -782,6 +784,7 @@ export const ACTION_VERBS: Record<string, string> = {
   RESET_PASSWORD: 'Restableció contraseña',
   LOGIN: 'Ingresó',
   RESET: 'Reinició',
+  RESPOND: 'Respondió',
 }
 
 // ---------------------------------------------------------------- Tareas
@@ -881,6 +884,8 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   RESOLVER_RECHAZO_BANCO: 'Resolver órdenes rechazadas por el banco',
   EVALUAR_PRESTAMO: 'Evaluar pedido de préstamo',
   HABILITAR_PUNTO_VENTA: 'Habilitar punto de venta',
+  RESPONDER_INTIMACION: 'Responder intimaciones del fisco',
+  EVALUAR_DESCARGO: 'Evaluar descargos (fisco)',
   CONSIGNA: 'Consigna del docente',
 }
 
@@ -978,6 +983,24 @@ export const FISCO_DEFAULTS = {
    * mensual simple, en por ciento, sobre el saldo y por los días de atraso, con mes de 30 días.
    */
   interest_rate: 4,
+  /** Días para responder una intimación (Fase 8f.1, a validar). */
+  notice_days: 15,
+}
+
+/** Qué intima el fisco (Fase 8f.1) y el asunto de cada intimación. */
+export const FISCAL_NOTICE_KINDS: Record<FiscalNoticeKind, { label: string; subject: string }> = {
+  PRESENTACION: { label: 'Falta de presentación', subject: 'Intimación por falta de presentación' },
+  PAGO: { label: 'Falta de pago', subject: 'Intimación de pago' },
+  DIFERENCIA: {
+    label: 'Diferencia del control cruzado',
+    subject: 'Requerimiento por diferencia en el control cruzado',
+  },
+}
+
+export const FISCAL_NOTICE_STATUSES: Record<FiscalNoticeStatus, { label: string; badge: Badge }> = {
+  PENDIENTE: { label: 'Pendiente', badge: 'warning' },
+  RESPONDIDA: { label: 'Respondida', badge: 'info' },
+  CUMPLIDA: { label: 'Cumplida', badge: 'success' },
 }
 
 export const POINT_OF_SALE_STATUSES: Record<PointOfSaleStatus, { label: string; badge: Badge }> = {
@@ -1001,6 +1024,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   ORDEN_RECHAZADA: 'Orden rechazada por el banco',
   PRESTAMO: 'Préstamo del banco',
   PUNTO_VENTA: 'Punto de venta',
+  INTIMACION: 'Intimación del fisco',
 }
 
 // ---------------------------------------------------------------- Etiquetas

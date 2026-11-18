@@ -33,6 +33,7 @@ import {
   Inbox,
   Landmark,
   Layers,
+  Mail,
   LayoutDashboard,
   ListTree,
   Network,
@@ -229,6 +230,7 @@ export const NAV: NavGroup[] = [
       { label: 'Puntos de venta', path: 'fisco/puntos-de-venta', icon: Store, permission: 'fisco.read' },
       { label: 'Comprobantes autorizados', path: 'fisco/comprobantes', icon: BadgeCheck, permission: 'fisco.read' },
       { label: 'Cuenta corriente', path: 'fisco/cuenta-corriente', icon: Landmark, permission: 'fisco.read' },
+      { label: 'Domicilio fiscal electrónico', path: 'fisco/domicilio-fiscal', icon: Mail, permission: 'fisco.read' },
     ],
   },
   {

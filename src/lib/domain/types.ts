@@ -545,6 +545,44 @@ export type TaxCode = 'IVA' | 'IIBB'
  * lo que se calculó de los libros del mes y el saldo que queda a pagar o a favor (que es
  * documents.total y el saldo a favor de la del mes siguiente).
  */
+/** Qué intima el fisco (Fase 8f.1). */
+export type FiscalNoticeKind = 'PRESENTACION' | 'PAGO' | 'DIFERENCIA'
+export type FiscalNoticeStatus = 'PENDIENTE' | 'RESPONDIDA' | 'CUMPLIDA'
+
+/** Una intimación del fisco en el domicilio fiscal electrónico de la empresa (Fase 8f.1). */
+export interface FiscalNotice {
+  id: string
+  company_id: string
+  /** Correlativo de la empresa. */
+  number: number
+  kind: FiscalNoticeKind
+  tax: TaxCode
+  /** El mes de la obligación: aaaa-mm. */
+  period: string
+  /** La declaración del mes, si la había al intimar. */
+  tax_return_id: string | null
+  subject: string
+  /** El texto del fisco, con sus observaciones si las hay. */
+  body: string
+  issued_on: string
+  issued_by: string | null
+  /** Hasta cuándo se responde: 15 días después de la intimación. */
+  response_due: string
+  status: FiscalNoticeStatus
+  /** El descargo de la empresa. */
+  response: string | null
+  responded_on: string | null
+  responded_by: string | null
+  /** Cuándo se dio por cumplida y quién (null: el sistema, porque se cumplió la obligación o el fisco lo opera el sistema). */
+  closed_on: string | null
+  closed_by: string | null
+  close_note: string | null
+  created_at: string
+  created_by: string | null
+  updated_at: string
+  updated_by: string | null
+}
+
 export interface TaxReturnHeader {
   tax: TaxCode
   /** El mes declarado: aaaa-mm. */
