@@ -150,6 +150,7 @@ export const BASE_CHART: ChartRow[] = [
   ['5.3.02', 'Otras pérdidas'],
   ['5.3.02.01', 'Faltante de inventario', 'Diferencia en contra entre el conteo físico y el stock registrado.'],
   ['5.3.02.02', 'Pérdida por roturas', 'Bienes que se rompieron o deterioraron y se dan de baja.'],
+  ['5.3.02.03', 'Multas fiscales', 'Multas que aplica el fisco, como la de presentar una declaración fuera de término.'],
 ]
 
 /** Saldos fijos del asiento de apertura (a validar). Los bienes de cambio salen del inventario inicial. */
@@ -222,6 +223,7 @@ export const BASE_POSTING_RULES: { event: string; key: string; code: string }[] 
   { event: 'IIBB', key: 'IIBB_A_PAGAR', code: '2.1.04.03' },
   { event: 'PAGO_IIBB', key: 'IIBB_A_PAGAR', code: '2.1.04.03' },
   { event: 'PAGO_IIBB', key: 'INTERESES', code: '5.3.01.04' },
+  { event: 'PAGO_MULTA', key: 'MULTA', code: '5.3.02.03' },
   // Los cargos que el Banco Aula debita por su cuenta (Fase 8b).
   { event: 'CARGOS_BANCARIOS', key: 'COMISION', code: '5.3.01.03' },
   { event: 'CARGOS_BANCARIOS', key: 'IMPUESTO_DC', code: '5.3.01.03' },

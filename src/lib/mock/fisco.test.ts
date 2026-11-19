@@ -3,7 +3,7 @@
 // que sale del padrón (8d.1); los puntos de venta que pide Ventas y habilita Impuestos, y la
 // autorización de cada factura de venta (8d.2); la recepción de las declaraciones (8e.1), y la cuenta
 // corriente tributaria y el pago de las declaraciones por el banco, con los intereses (8e.2); el
-// domicilio fiscal electrónico y las intimaciones (8f.1).
+// domicilio fiscal electrónico y las intimaciones (8f.1); la multa por presentar fuera de término (8f.2).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cuitIsValid } from '../domain/cuit'
@@ -22,6 +22,7 @@ import {
   cmdCreateTaxReturn,
   cmdDecidePointOfSale,
   cmdIssueFiscalNotice,
+  cmdPayTaxFine,
   cmdPayTaxReturn,
   cmdPresentTaxReturn,
   cmdProcessBankOrders,
@@ -980,6 +981,121 @@ describe('Fisco: el domicilio fiscal electrónico y las intimaciones (8f.1)', ()
   })
 })
 
+describe('Fisco: la multa por presentar fuera de término (8f.2)', () => {
+  const at = (iso: string) => vi.setSystemTime(new Date(`${iso}T10:00:00-03:00`))
+  const account = (code: string) => db.accounts.find((a) => a.company_id === companyId() && a.code === code)!.id
+  /** La declaración de IVA de un mes, preparada y presentada por Contabilidad y aceptada por el fisco. */
+  const accepted = (period: string) => {
+    const dj = byNumber(
+      cmdCreateTaxReturn(ctx('contabilidad'), companyId(), { tax: 'IVA', period, notes: '' }).display_number,
+    )
+    cmdPresentTaxReturn(ctx('contabilidad'), dj.id)
+    cmdReceiveTaxReturn(ctx('impuestos2'), dj.id, { accept: true })
+    return dj
+  }
+  const fines = () => db.documents.filter((d) => d.company_id === companyId() && d.doc_type === 'TAX_FINE')
+  /** Las líneas del último asiento de un documento. */
+  const lastEntry = (id: string) => {
+    const entry = db.docLinks
+      .filter((l) => l.from_document_id === id)
+      .map((l) => db.documents.find((d) => d.id === l.to_document_id)!)
+      .filter((d) => d.doc_type === 'JOURNAL_ENTRY')
+      .at(-1)!
+    return db.jeLines
+      .filter((l) => l.document_id === entry.id)
+      .map((l) => `${db.accounts.find((a) => a.id === l.account_id)!.code} ${l.debit} ${l.credit}`)
+  }
+
+  it('presentada después del vencimiento, el fisco aplica la multa; dentro de los 15 días se paga la mitad', () => {
+    at('2027-06-25')
+    const dj = accepted('2027-05')
+    const [fine] = fines()
+    expect(fine).toMatchObject({
+      display_number: 'MUL-00001',
+      status: 'NOTIFICADA',
+      total: 100000,
+      tf: {
+        tax: 'IVA',
+        period: '2027-05',
+        tax_return_id: dj.id,
+        presented_on: '2027-06-25',
+        due_date: '2027-06-20',
+        amount: 100000,
+        reduced_amount: 50000,
+        reduction_until: '2027-07-10',
+        paid_on: null,
+      },
+    })
+    expect(db.docLinks.some((l) => l.from_document_id === dj.id && l.to_document_id === fine.id)).toBe(true)
+    expect(db.audit.find((a) => a.document_id === fine.id && a.action === 'CREATE')).toMatchObject({
+      actor_user_id: null,
+      summary: `El fisco aplicó MUL-00001: multa por presentar ${dj.display_number} (IVA de 05/2027) fuera de término, ${money(100000)}; ${money(50000)} si se paga hasta el 10/07/2027`,
+    })
+    expect(
+      db.tasks
+        .filter((t) => t.document_id === fine.id && t.status === 'PENDIENTE')
+        .map((t) => [t.task_type, t.assigned_role, t.title]),
+    ).toEqual([['PAGAR_MULTA', 'TESORERIA', `Pagar MUL-00001 por ${money(100000)}`]])
+    const notified = db.notifications.filter((n) => n.type === 'MULTA').map((n) => n.recipient_user_id)
+    for (const u of ['tesoreria', 'gerencia', 'contabilidad']) expect(notified).toContain(userId(u))
+    // En la cuenta corriente, la multa va después de su declaración: a pagar, la mitad.
+    expect(taxAccount(db, userId('contabilidad'), companyId()).rows).toMatchObject([
+      { kind: 'DECLARACION', document: { display_number: dj.display_number } },
+      { kind: 'MULTA', document: { display_number: 'MUL-00001' }, state: 'A_PAGAR', declared: 50000, balance: 50000 },
+    ])
+    // La paga Tesorería, por el banco.
+    expectBusinessError(() => cmdPayTaxFine(ctx('contabilidad'), fine.id), 'SIN_PERMISO')
+    at('2027-07-05')
+    cmdPayTaxFine(ctx('tesoreria'), fine.id)
+    expect(fine).toMatchObject({
+      status: 'PAGO_EN_BANCO',
+      tf: { paid_on: '2027-07-05', paid_amount: 50000, paid_account_id: account('1.1.01.03') },
+    })
+    expect(lastEntry(fine.id)).toEqual(['5.3.02.03 50000 0', '1.1.01.03 0 50000'])
+    expect(db.audit.find((a) => a.document_id === fine.id && a.action === 'PAY')!.summary).toBe(
+      `Pagó MUL-00001 por transferencia desde el Banco Aula: ${money(50000)}, con la reducción a la mitad`,
+    )
+    const order = db.bankMovements.find((m) => m.source_document_id === fine.id && m.origin === 'ORDEN')!
+    expect(order).toMatchObject({ status: 'PENDIENTE', amount: 50000 })
+    cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order.id])
+    expect(fine).toMatchObject({ status: 'PAGADA', tf: { imputed_on: '2027-07-05' } })
+    expect(taxAccount(db, userId('contabilidad'), companyId()).rows.find((r) => r.kind === 'MULTA')).toMatchObject({
+      state: 'PAGADA',
+      declared: 50000,
+      paid: 50000,
+      balance: 0,
+      bank_transaction: order.transaction_number,
+    })
+    expect(documentDetail(db, userId('tesoreria'), companyId(), 'TAX_FINE', 'MUL-00001')!.tax_fine).toMatchObject({
+      amount_due: 50000,
+      imputed_on: '2027-07-05',
+      tax_return: { display_number: dj.display_number },
+    })
+  })
+
+  it('a término no hay multa; una sola por obligación; vencida la reducción, se paga entera', () => {
+    at('2027-06-10')
+    accepted('2027-05')
+    expect(fines()).toEqual([])
+    at('2027-07-25')
+    const late = accepted('2027-06')
+    expect(fines()).toHaveLength(1)
+    // Anulada y presentada otra vez, fuera de término: la multa es la misma.
+    cmdCancelTaxReturn(ctx('contabilidad'), late.id, 'Corregimos el crédito fiscal')
+    accepted('2027-06')
+    expect(fines()).toHaveLength(1)
+    const [fine] = fines()
+    expect(fine.tf!.reduction_until).toBe('2027-08-09')
+    at('2027-08-10')
+    expect(documentDetail(db, userId('tesoreria'), companyId(), 'TAX_FINE', fine.display_number)!.next_step.text).toBe(
+      `Pagar ${money(100000)} por transferencia desde el Banco Aula: el plazo de la reducción venció el 09/08/2027.`,
+    )
+    cmdPayTaxFine(ctx('tesoreria'), fine.id)
+    expect(fine.tf).toMatchObject({ paid_amount: 100000 })
+    expect(lastEntry(fine.id)).toEqual(['5.3.02.03 100000 0', '1.1.01.03 0 100000'])
+  })
+})
+
 describe('Fisco: las bases guardadas', () => {
   it('una base de la versión 27 recibe el padrón', () => {
     const old = structuredClone(db) as Partial<DB> & { version: number }
@@ -1091,6 +1207,23 @@ describe('Fisco: las bases guardadas', () => {
       ['PAGO_IVA', interest.id],
       ['PAGO_IIBB', interest.id],
     ])
+  })
+
+  it('una base de la versión 32 recibe la cuenta de las multas y la regla de su pago', () => {
+    const company = companyId()
+    const old = structuredClone(db) as Partial<DB> & { version: number }
+    old.accounts = old.accounts!.filter((a) => a.company_id !== company || a.code !== '5.3.02.03')
+    old.postingRules = old.postingRules!.filter((r) => r.event !== 'PAGO_MULTA')
+    old.version = 32
+    db = upgradeDatabase(old as DB)!
+    expect(db.version).toBe(DB_VERSION)
+    const fines = db.accounts.find((a) => a.company_id === company && a.code === '5.3.02.03')!
+    expect(fines).toMatchObject({ name: 'Multas fiscales', is_imputable: true })
+    expect(
+      db.postingRules
+        .filter((r) => r.company_id === company && r.event === 'PAGO_MULTA')
+        .map((r) => [r.key, r.account_id]),
+    ).toEqual([['MULTA', fines.id]])
   })
 
   it('una base de la versión 31 recibe el domicilio fiscal electrónico, vacío', () => {

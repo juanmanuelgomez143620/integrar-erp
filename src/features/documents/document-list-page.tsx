@@ -53,6 +53,8 @@ const SECTION: Record<DocType, { area: string; areaPath?: string; newLabel: stri
   },
   PAYROLL: { area: 'RRHH', newLabel: 'Nueva liquidación', createPerm: 'payroll.create' },
   TAX_RETURN: { area: 'Impuestos', newLabel: 'Nueva declaración', createPerm: 'tax_return.create' },
+  // La multa la aplica el fisco (8f.2): nadie la crea.
+  TAX_FINE: { area: 'Impuestos', newLabel: '', createPerm: 'tax_fine.create' },
   ROUTE_SHEET: { area: 'Logística', newLabel: 'Nueva hoja de ruta', createPerm: 'route_sheet.create' },
 }
 
@@ -388,6 +390,24 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
       { key: 'stops', header: 'Entregas', align: 'right', sort: (d) => d.line_count, cell: (d) => d.line_count },
     )
   }
+  if (docType === 'TAX_FINE') {
+    columns.push(
+      { key: 'period', header: 'Declaración', sort: (d) => d.tf!.period, cell: (d) => d.summary },
+      {
+        key: 'until',
+        header: 'Mitad hasta',
+        sort: (d) => d.tf!.reduction_until,
+        cell: (d) => date(d.tf!.reduction_until),
+      },
+      {
+        key: 'amount',
+        header: 'Multa',
+        align: 'right',
+        sort: (d) => d.total,
+        cell: (d) => <span className="tabular">{money(d.total)}</span>,
+      },
+    )
+  }
   if (docType === 'TAX_RETURN') {
     columns.push(
       { key: 'period', header: 'Impuesto y mes', sort: (d) => d.tr!.period, cell: (d) => d.summary },
@@ -573,7 +593,7 @@ export function DocumentListPage({ docType }: { docType: DocType }) {
               ? 'Buscar por número o producto…'
               : docType === 'ROUTE_SHEET'
                 ? 'Buscar por número, transporte o remito…'
-                : docType === 'PAYROLL' || docType === 'TAX_RETURN'
+                : docType === 'PAYROLL' || docType === 'TAX_RETURN' || docType === 'TAX_FINE'
                   ? 'Buscar por número o mes…'
                   : ['SALES_ORDER', 'DELIVERY_NOTE', 'SALES_INVOICE', 'CUSTOMER_RECEIPT', 'SALES_QUOTE'].includes(
                         docType,

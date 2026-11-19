@@ -76,6 +76,7 @@ export const RESOURCE_MODULE: Record<string, ModuleCode> = {
   employee: 'hr',
   payroll: 'hr',
   tax_return: 'tax',
+  tax_fine: 'tax',
   carrier: 'logistics',
   route_sheet: 'logistics',
   supplier_invoice: 'purchasing',
@@ -166,7 +167,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Autoriza los pedidos que superan el crédito; anula remitos despachados por Depósito (SoD-3).
     'sales_order.read', 'sales_order.approve', 'delivery_note.read', 'delivery_note.cancel',
     'sales_invoice.read', 'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'carrier.read', 'route_sheet.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'tax_return.read', 'tax_fine.read', 'carrier.read', 'route_sheet.read',
     // Autoriza las liquidaciones de sueldos o las devuelve a RRHH (Fase 6d; SoD-11).
     'payroll.read', 'payroll.approve',
     // La cuenta en el Banco Aula: el homebanking de la empresa (Fase 8a); pide los préstamos (8c).
@@ -235,7 +236,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bank_reconciliation.read', 'bank_reconciliation.create', 'bank_reconciliation.cancel',
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'price_list.read', 'sales_quote.read',
-    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read',
+    'bom.read', 'production_order.read', 'work_center.read', 'employee.read', 'payroll.read', 'tax_return.read', 'tax_fine.read',
     'bank.read', 'fisco.read',
   ],
   TESORERIA: [
@@ -247,7 +248,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     // Cobra a los clientes (SoD-9: no cobra las facturas que emitió).
     'receivable.read', 'customer_receipt.read', 'customer_receipt.create', 'customer_receipt.cancel', 'sales_quote.read',
     // Paga los sueldos y las cargas sociales (Fase 6c; SoD-6: no los que liquidó) y los impuestos (7a).
-    'payroll.read', 'payroll.pay', 'tax_return.read', 'tax_return.pay',
+    'payroll.read', 'payroll.pay', 'tax_return.read', 'tax_return.pay', 'tax_fine.read', 'tax_fine.pay',
     // Opera contra el Banco Aula y, además, lo opera: procesa las órdenes que no envió (Fase 8a; SoD-12).
     'bank.read', 'bank.operate',
   ],
@@ -262,7 +263,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'rfq.read', 'supplier_quote.read', 'sales_order.read', 'delivery_note.read', 'sales_invoice.read',
     'receivable.read', 'customer_receipt.read', 'sales_quote.read',
     // Liquida los impuestos (Fase 7a); Tesorería los paga. Opera el fisco simulado (Fase 8d).
-    'tax_return.read', 'tax_return.create', 'tax_return.cancel', 'fisco.read', 'fisco.operate',
+    'tax_return.read', 'tax_return.create', 'tax_return.cancel', 'tax_fine.read', 'fisco.read', 'fisco.operate',
   ],
   LOGISTICA: [
     ...CORE_READ, 'customer.read', 'supplier.read', 'product.read', 'stock.read', 'purchase_order.read', 'goods_receipt.read',
@@ -281,7 +282,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'funds_transfer.read', 'bank_reconciliation.read', 'rfq.read', 'supplier_quote.read',
     'sales_order.read', 'delivery_note.read', 'sales_invoice.read', 'receivable.read', 'customer_receipt.read',
     'price_list.read', 'sales_quote.read', 'bom.read', 'production_order.read', 'work_center.read', 'employee.read',
-    'payroll.read', 'tax_return.read', 'carrier.read', 'route_sheet.read', 'bank.read', 'fisco.read',
+    'payroll.read', 'tax_return.read', 'tax_fine.read', 'carrier.read', 'route_sheet.read', 'bank.read', 'fisco.read',
   ],
   DOCENTE: [],
 }
@@ -395,6 +396,11 @@ export const DOC_TYPES: Record<DocType, DocTypeInfo> = {
     code: 'TAX_RETURN', prefix: 'DJ', name: 'Declaración de impuestos', plural: 'Declaraciones de impuestos',
     resource: 'tax_return', module: 'tax', path: 'impuestos/declaraciones',
     description: 'La liquidación mensual de un impuesto que la empresa le presenta al fisco simulado: lo que sale de los libros del mes y el saldo a pagar o a favor. Simulada: sin validez fiscal.',
+  },
+  TAX_FINE: {
+    code: 'TAX_FINE', prefix: 'MUL', name: 'Multa del fisco', plural: 'Multas del fisco',
+    resource: 'tax_fine', module: 'tax', path: 'impuestos/multas',
+    description: 'La multa formal que el fisco simulado le aplica a la empresa por presentar una declaración fuera de término: se paga desde el Banco Aula, a la mitad dentro de los 15 días de notificada. Simulada: sin validez fiscal.',
   },
   PRODUCTION_ORDER: {
     code: 'PRODUCTION_ORDER', prefix: 'OPR', name: 'Orden de producción', plural: 'Órdenes de producción',
@@ -535,6 +541,11 @@ export const DOC_STATUSES: Record<DocType, Record<string, StatusInfo>> = {
     SIN_SALDO: { label: 'Presentada sin saldo a pagar', badge: 'success', final: true, description: 'El fisco la aceptó y no hay nada que pagar: el saldo a favor, si lo hay, se descuenta en la del mes siguiente.' },
     PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'El fisco imputó el pago del saldo (con los intereses resarcitorios, si se pagó después del vencimiento).' },
     ANULADA: { label: 'Anulada', badge: 'neutral', final: true, description: 'Sin efecto: si estaba presentada, un contraasiento revirtió el del impuesto.' },
+  },
+  TAX_FINE: {
+    NOTIFICADA: { label: 'Notificada', badge: 'warning', final: false, description: 'El fisco aplicó la multa por presentar la declaración fuera de término: Tesorería la paga desde el Banco Aula (la mitad, dentro de los 15 días de notificada).' },
+    PAGO_EN_BANCO: { label: 'Pago en el banco', badge: 'warning', final: false, description: 'Tesorería pagó por transferencia desde el Banco Aula: cuando el banco procesa la orden, el fisco imputa el pago. Si el banco la rechaza por falta de fondos, Tesorería la reenvía.' },
+    PAGADA: { label: 'Pagada', badge: 'success', final: true, description: 'El fisco imputó el pago de la multa.' },
   },
   ROUTE_SHEET: {
     BORRADOR: { label: 'En preparación', badge: 'neutral', final: false, description: 'Logística la arma: todavía no salió.' },
@@ -738,6 +749,8 @@ export const TRANSITIONS: TransitionInfo[] = [
   t('TAX_RETURN', 'OBSERVADA', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'La declaración observada queda sin efecto: después se presenta de nuevo.', true, 'destructive'),
   t('TAX_RETURN', 'PRESENTADA', 'PAY', 'PAGO_EN_BANCO', 'tax_return.pay', 'Pagar', 'Paga el saldo por transferencia desde el Banco Aula, con los intereses resarcitorios si ya venció: genera el asiento del pago y la orden al banco. El fisco lo imputa cuando el banco la procesa.'),
   t('TAX_RETURN', 'PAGO_EN_BANCO', 'SYSTEM', 'PAGADA', null, '', ''),
+  t('TAX_FINE', 'NOTIFICADA', 'PAY', 'PAGO_EN_BANCO', 'tax_fine.pay', 'Pagar', 'Paga la multa por transferencia desde el Banco Aula (la mitad, dentro de los 15 días de notificada): genera el asiento del pago y la orden al banco. El fisco la imputa cuando el banco la procesa.'),
+  t('TAX_FINE', 'PAGO_EN_BANCO', 'SYSTEM', 'PAGADA', null, '', ''),
   t('TAX_RETURN', 'PRESENTADA', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
   t('TAX_RETURN', 'SIN_SALDO', 'CANCEL', 'ANULADA', 'tax_return.cancel', 'Anular', 'Un contraasiento revierte el asiento del impuesto.', true, 'destructive'),
   // Hoja de ruta (Fase 7c.2): rendirla tiene su propio diálogo, con el resultado de cada remito.
@@ -837,6 +850,7 @@ export const TASK_RULES: TaskRule[] = [
   { docType: 'TAX_RETURN', status: 'OBSERVADA', taskType: 'CORREGIR_DJ', assignee: 'CREATOR', title: 'Volver a presentar {number}', description: 'El fisco observó la declaración: leer el motivo, anularla y presentarla de nuevo.' },
   { docType: 'ROUTE_SHEET', status: 'BORRADOR', taskType: 'SALIR_HOJA', assignee: 'CREATOR', title: 'Salir con {number}', description: 'Cargar la mercadería de los remitos en el orden de visita, controlar el transporte y salir a repartir.' },
   { docType: 'ROUTE_SHEET', status: 'EN_CAMINO', taskType: 'RENDIR_HOJA', assignee: 'CREATOR', title: 'Rendir {number}', description: 'Al volver, registrar qué remitos se entregaron (y quién los recibió) y cuáles no (y por qué).' },
+  { docType: 'TAX_FINE', status: 'NOTIFICADA', taskType: 'PAGAR_MULTA', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar la multa del fisco por transferencia desde el Banco Aula: dentro de los 15 días de notificada se paga la mitad.' },
   { docType: 'TAX_RETURN', status: 'PRESENTADA', taskType: 'PAGAR_DJ', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar {number} por {total}', description: 'Pagar el saldo de la declaración por transferencia desde el Banco Aula antes del vencimiento (después, con intereses resarcitorios).' },
   { docType: 'PAYROLL', status: 'SUELDOS_PAGADOS', taskType: 'PAGAR_CARGAS_SOCIALES', assignee: 'ROLE', role: 'TESORERIA', title: 'Pagar las cargas sociales de {number}', description: 'Pagar los aportes retenidos y las contribuciones del mes antes del vencimiento, y registrar el pago.' },
   { docType: 'PRODUCTION_ORDER', status: 'EN_PROCESO', taskType: 'TERMINAR_OPR', assignee: 'ROLE', role: 'PRODUCCION', title: 'Terminar {number}', description: 'Cuando termine la fabricación, registrar las unidades que salieron bien.' },
@@ -878,6 +892,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   RECIBIR_DJ: 'Recibir declaración en el fisco',
   CORREGIR_DJ: 'Volver a presentar declaración',
   PAGAR_DJ: 'Pagar impuesto',
+  PAGAR_MULTA: 'Pagar multa del fisco',
   REPONER_STOCK: 'Evaluar reposición',
   PROCESAR_BANCO: 'Procesar órdenes del banco',
   REGISTRAR_CARGOS_BANCO: 'Registrar movimientos del banco',
@@ -985,6 +1000,12 @@ export const FISCO_DEFAULTS = {
   interest_rate: 4,
   /** Días para responder una intimación (Fase 8f.1, a validar). */
   notice_days: 15,
+  /**
+   * La multa formal por presentar una declaración fuera de término (Fase 8f.2, a validar): un importe
+   * fijo simulado, que se reduce a la mitad si se paga dentro de los días de la reducción.
+   */
+  late_filing_fine: 100000,
+  fine_reduction_days: 15,
 }
 
 /** Qué intima el fisco (Fase 8f.1) y el asunto de cada intimación. */
@@ -1025,6 +1046,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   PRESTAMO: 'Préstamo del banco',
   PUNTO_VENTA: 'Punto de venta',
   INTIMACION: 'Intimación del fisco',
+  MULTA: 'Multa del fisco',
 }
 
 // ---------------------------------------------------------------- Etiquetas
@@ -1219,6 +1241,13 @@ export const POSTING_EVENTS: Record<string, { label: string; keys: Record<string
       // La contrapartida es el banco (la cuenta del Banco Aula), no una regla.
       IIBB_A_PAGAR: 'Saldo que se paga',
       INTERESES: 'Intereses resarcitorios (pago fuera de término)',
+    },
+  },
+  PAGO_MULTA: {
+    label: 'Pago de multas del fisco',
+    keys: {
+      // La contrapartida es el banco (la cuenta del Banco Aula), no una regla.
+      MULTA: 'Multa que se paga',
     },
   },
   CARGOS_BANCARIOS: {

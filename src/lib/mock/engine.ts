@@ -3828,19 +3828,20 @@ function executeBankOrder(ctx: Ctx, order: T.BankMovement, on: string, userId: s
 }
 
 /**
- * Si la orden que el banco procesó es el pago de una declaración, el fisco lo imputa (8e.2): la
- * declaración queda Pagada, con la fecha del proceso.
+ * Si la orden que el banco procesó es el pago de una declaración (8e.2) o de una multa (8f.2), el fisco
+ * lo imputa: queda Pagada, con la fecha del proceso.
  */
 function imputeTaxPayment(ctx: Ctx, order: T.BankMovement, on: string) {
   if (order.origin !== 'ORDEN' || order.reverses_id !== null || !order.source_document_id) return
   const doc = ctx.db.documents.find((d) => d.id === order.source_document_id)
-  if (doc?.doc_type !== 'TAX_RETURN' || doc.status !== 'PAGO_EN_BANCO') return
-  doc.tr = { ...doc.tr!, imputed_on: on }
+  if (!doc || (doc.doc_type !== 'TAX_RETURN' && doc.doc_type !== 'TAX_FINE') || doc.status !== 'PAGO_EN_BANCO') return
+  if (doc.tr) doc.tr = { ...doc.tr, imputed_on: on }
+  if (doc.tf) doc.tf = { ...doc.tf, imputed_on: on }
   transition(ctx, doc, 'SYSTEM', {
     to: 'PAGADA',
     summary: `El fisco imputó el pago de ${doc.display_number}: ${money(order.amount)} (transacción ${order.transaction_number} del Banco Aula)`,
   })
-  fulfillFiscalNotices(ctx, doc, ['PAGO'], `el fisco imputó el pago de ${doc.display_number}`)
+  if (doc.tr) fulfillFiscalNotices(ctx, doc, ['PAGO'], `el fisco imputó el pago de ${doc.display_number}`)
 }
 
 /** La orden de una línea del mayor: al debe entra dinero (crédito en el extracto); al haber, sale (débito). */
@@ -9697,6 +9698,114 @@ function receiveTaxReturn(
     ],
     `el fisco aceptó ${doc.display_number}`,
   )
+  imposeLateFilingFine(ctx, doc)
+}
+
+/**
+ * La multa formal por presentar fuera de término (8f.2, a validar): si el fisco acepta una declaración
+ * que se presentó después de su vencimiento, la aplica en el momento (una por impuesto y mes, aunque la
+ * declaración se anule y se presente de nuevo), con la reducción a la mitad dentro de los 15 días.
+ */
+function imposeLateFilingFine(ctx: Ctx, dj: T.Document) {
+  const { db } = ctx
+  const tr = dj.tr!
+  const presented = dateAR(tr.presented_at!)
+  if (presented <= tr.due_date) return
+  if (
+    db.documents.some(
+      (d) =>
+        d.company_id === dj.company_id &&
+        d.doc_type === 'TAX_FINE' &&
+        d.tf!.tax === tr.tax &&
+        d.tf!.period === tr.period,
+    )
+  )
+    return
+  const today = businessDate(getCompany(db, dj.company_id))
+  const amount = FISCO_DEFAULTS.late_filing_fine
+  const reduced = round2(amount / 2)
+  const until = addDays(today, FISCO_DEFAULTS.fine_reduction_days)
+  const fine = newDocument(ctx, dj.company_id, 'TAX_FINE', SYSTEM_ACTOR, {
+    status: 'NOTIFICADA',
+    subtotal: amount,
+    total: amount,
+    tf: {
+      tax: tr.tax,
+      period: tr.period,
+      tax_return_id: dj.id,
+      presented_on: presented,
+      due_date: tr.due_date,
+      amount,
+      reduced_amount: reduced,
+      reduction_until: until,
+      paid_on: null,
+      paid_amount: null,
+      paid_account_id: null,
+      imputed_on: null,
+    },
+  })
+  link(ctx, dj.company_id, dj.id, fine.id)
+  const what = `${TAX_NAMES[tr.tax]} de ${periodLabel(tr.period)}`
+  logAudit(ctx, {
+    company_id: dj.company_id,
+    actor: SYSTEM_ACTOR,
+    action: 'CREATE',
+    entity_type: 'tax_fine',
+    entity_id: fine.id,
+    entity_label: fine.display_number,
+    document_id: fine.id,
+    to_status: 'NOTIFICADA',
+    summary: `El fisco aplicó ${fine.display_number}: multa por presentar ${dj.display_number} (${what}) fuera de término, ${money(amount)}; ${money(reduced)} si se paga hasta el ${fmtDate(until)}`,
+  })
+  notifyRoles(ctx, dj.company_id, ['IMPUESTOS', 'GERENCIA', 'TESORERIA'], {
+    type: 'MULTA',
+    title: `El fisco aplicó una multa (${fine.display_number})`,
+    body: `Por presentar ${dj.display_number} (${what}) fuera de término: ${money(amount)}, o ${money(reduced)} si se paga hasta el ${fmtDate(until)}.`,
+    link_path: docPath(db, fine),
+  })
+  openTasksForStatus(ctx, fine, SYSTEM_ACTOR)
+}
+
+/**
+ * Tesorería paga la multa del fisco (8f.2): por transferencia desde el Banco Aula, a la mitad dentro del
+ * plazo de la reducción. Como la declaración, queda en el banco hasta que el fisco la imputa.
+ */
+export function cmdPayTaxFine(ctx: Ctx, docId: string) {
+  const { db } = ctx
+  const doc = getDoc(db, docId, 'TAX_FINE')
+  requireTransition(doc, 'PAY')
+  const actor = requirePermission(ctx, doc.company_id, 'tax_fine.pay')
+  const company = getCompany(db, doc.company_id)
+  const bank = db.bankAccounts.find((b) => b.company_id === doc.company_id && b.is_active)
+  if (!bank) fail('DATO_INVALIDO', 'La empresa no tiene su cuenta en el Banco Aula: las multas se pagan desde ahí.')
+  const account = getAccount(db, doc.company_id, bank.ledger_account_id)
+  const today = businessDate(company)
+  const tf = doc.tf!
+  const reduced = today <= tf.reduction_until
+  const amount = reduced ? tf.reduced_amount : tf.amount
+  const balance = accountBalance(db, account.id)
+  if (amount > balance + EPS)
+    fail(
+      'SALDO_INSUFICIENTE',
+      `No alcanza el saldo de ${accountLabel(account)}: hay ${money(balance)} y la multa es ${money(amount)}.`,
+      'Antes de pagar hay que controlar que haya fondos: el flujo de fondos proyectado lo anticipa.',
+    )
+  transition(ctx, doc, 'PAY', {
+    actor,
+    summary: `Pagó ${doc.display_number} por transferencia desde el Banco Aula: ${money(amount)}${reduced ? ', con la reducción a la mitad' : ''}`,
+  })
+  doc.tf = { ...tf, paid_on: today, paid_amount: amount, paid_account_id: account.id }
+  postEvent(
+    ctx,
+    actor,
+    doc,
+    'PAGO_MULTA',
+    `Pago de la multa del fisco por presentar fuera de término la declaración de ${TAX_NAMES[tf.tax]} de ${periodLabel(tf.period)} (${doc.display_number}).`,
+    [
+      { key: 'MULTA', debit: amount, credit: 0 },
+      { account_id: account.id, debit: 0, credit: amount },
+    ],
+  )
 }
 
 /** La declaración posterior de su impuesto, si la hay: sólo se anula la última. */
@@ -9814,7 +9923,7 @@ export function cmdCreateTaxReturn(ctx: Ctx, companyId: string, input: TaxReturn
     entity_label: doc.display_number,
     document_id: doc.id,
     to_status: 'BORRADOR',
-    summary: `Creó ${doc.display_number}: ${name} de ${month}, ${result > 0 ? `${money(result)} a pagar` : `saldo a favor de ${money(-result)}`}`,
+    summary: `Creó ${doc.display_number}: ${name} de ${month}, ${result > 0 ? `${money(result)} a pagar` : `saldo a favor de ${money(Math.abs(result))}`}`,
   })
   openTasksForStatus(ctx, doc, actor)
   return { id: doc.id, display_number: doc.display_number }

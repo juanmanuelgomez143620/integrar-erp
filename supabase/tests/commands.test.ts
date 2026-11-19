@@ -3795,6 +3795,76 @@ describe('paridad de comandos', () => {
         (c) => E.cmdCreateTaxReturn(c, company, data),
         (b) => b.commands.createTaxReturn(companyPg, data),
       )
+    // Fuera de término (8f.2): la de hace tres meses, presentada hoy, recibe la multa del fisco; se paga a la
+    // mitad por el banco y la declaración se anula para seguir con la del mes pasado.
+    const late = await createdReturn('una de hace tres meses', input({ period: month(-3) }))
+    await ok(
+      'presentarla fuera de término',
+      'contabilidad',
+      (c) => E.cmdPresentTaxReturn(c, late),
+      (b) => b.commands.presentTaxReturn(pg(late)),
+    )
+    await ok(
+      'el fisco la acepta y aplica la multa',
+      'impuestos2',
+      (c) => E.cmdReceiveTaxReturn(c, late, { accept: true }),
+      (b) => b.commands.receiveTaxReturn(pg(late), { accept: true }),
+    )
+    const fine = mock.documents.find((d) => d.company_id === company && d.doc_type === 'TAX_FINE')!
+    expect(fine.tf!.tax_return_id).toBe(late)
+    const [pgFine] = await db.admin<{ id: string }>(
+      `select id from public.documents where company_id = $1 and doc_type = 'TAX_FINE'`,
+      [companyPg],
+    )
+    await linkDocument(fine.id, pgFine.id)
+    const fineReads = async (label: string) => {
+      await sameRead(
+        `la multa ${label}`,
+        'tesoreria',
+        (b) => b.api.document(companyPg, 'TAX_FINE', fine.display_number),
+        (u) => Q.documentDetail(mock, u, company, 'TAX_FINE', fine.display_number),
+      )
+      await sameRead(
+        `las multas ${label}`,
+        'contabilidad',
+        (b) => b.api.documents(companyPg, 'TAX_FINE'),
+        (u) => Q.listDocuments(mock, u, company, 'TAX_FINE'),
+      )
+      await sameRead(
+        `la cuenta corriente con la multa ${label}`,
+        'contabilidad',
+        (b) => b.api.taxAccount(companyPg),
+        (u) => Q.taxAccount(mock, u, company),
+      )
+    }
+    await fineReads('notificada')
+    const payFine = (label: string, username: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdPayTaxFine(c, fine.id),
+        (b) => b.commands.payTaxFine(pg(fine.id)),
+      )
+    expect(await payFine('Compras no paga multas', 'compras1')).toBeNull()
+    expect(await payFine('Tesorería paga la multa', 'tesoreria')).not.toBeNull()
+    expect(await payFine('pagarla otra vez', 'tesoreria')).toBeNull()
+    await fineReads('con el pago en el banco')
+    const fineOrder = (await linkPendingBankOrders()).find((m) => m.source_document_id === fine.id)!
+    await ok(
+      'el banco procesa el pago de la multa',
+      'tesoreria2',
+      (c) => E.cmdProcessBankOrders(c, company, [fineOrder.id]),
+      (b) => b.commands.processBankOrders(companyPg, [pg(fineOrder.id)]),
+    )
+    expect(mock.documents.find((d) => d.id === fine.id)!.status).toBe('PAGADA')
+    await fineReads('pagada')
+    await ok(
+      'anularla para seguir con la del mes pasado',
+      'contabilidad',
+      (c) => E.cmdCancelTaxReturn(c, late, 'Se presenta de nuevo más adelante'),
+      (b) => b.commands.cancelTaxReturn(pg(late), 'Se presenta de nuevo más adelante'),
+    )
+
     expect(await create('Tesorería no la prepara', 'tesoreria', input())).toBeNull()
     for (const [label, over] of [
       ['un mes que no terminó', { period: month(0) }],

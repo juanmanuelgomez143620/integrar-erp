@@ -440,6 +440,7 @@ function lineCount(db: DB, doc: T.Document) {
     case 'PAYROLL':
       return db.pyLines.filter((l) => l.document_id === doc.id).length
     case 'TAX_RETURN':
+    case 'TAX_FINE':
       return 0
     case 'ROUTE_SHEET':
       return db.rsLines.filter((l) => l.document_id === doc.id).length
@@ -482,6 +483,7 @@ function docLines(db: DB, doc: T.Document): { product_id: string }[] {
     // La liquidación es de personas, no de productos; la declaración, de los libros del mes; la hoja de ruta, de remitos.
     case 'PAYROLL':
     case 'TAX_RETURN':
+    case 'TAX_FINE':
     case 'ROUTE_SHEET':
       return []
   }
@@ -524,11 +526,13 @@ function listItem(db: DB, doc: T.Document): DocumentListItem {
             ? `Sueldos de ${periodLabel(doc.py.period)}`
             : doc.tr
               ? taxReturnTitle(doc.tr)
-              : doc.rs
-                ? transportLabel(db, doc.rs)
-                : doc.pd
-                  ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
-                  : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
+              : doc.tf
+                ? `Multa por ${doc.tf.tax === 'IVA' ? 'IVA' : 'ingresos brutos'} de ${periodLabel(doc.tf.period)}`
+                : doc.rs
+                  ? transportLabel(db, doc.rs)
+                  : doc.pd
+                    ? `${products[0]} ${db.products.find((p) => p.id === doc.pd!.product_id)?.name ?? ''}`
+                    : products.slice(0, 3).join(', ') + (products.length > 3 ? ` y ${products.length - 3} más` : ''),
     pending_approver: pending ? ROLES[pending.approver_role].name : null,
     reference_label: origins.length ? origins.join(', ') : null,
     path: docPath(db, doc),
@@ -588,6 +592,7 @@ function documentFlow(db: DB, userId: string, doc: T.Document): FlowNode[] {
     'PRODUCTION_ORDER',
     'PAYROLL',
     'TAX_RETURN',
+    'TAX_FINE',
     'STOCK_ADJUSTMENT',
     'JOURNAL_ENTRY',
   ]
@@ -1193,6 +1198,17 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
             : `Pagar ${money(doc.total)} al fisco (simulado) por transferencia desde el Banco Aula antes del ${date(doc.tr?.due_date)}.`,
       }
     }
+    case 'TAX_FINE:NOTIFICADA': {
+      const tf = doc.tf!
+      return {
+        who: 'Tesorería',
+        text:
+          todayAR() <= tf.reduction_until
+            ? `Pagar la multa por transferencia desde el Banco Aula: ${money(tf.reduced_amount)} (la mitad) hasta el ${date(tf.reduction_until)}; después, ${money(tf.amount)}.`
+            : `Pagar ${money(tf.amount)} por transferencia desde el Banco Aula: el plazo de la reducción venció el ${date(tf.reduction_until)}.`,
+      }
+    }
+    case 'TAX_FINE:PAGO_EN_BANCO':
     case 'TAX_RETURN:PAGO_EN_BANCO': {
       const order = taxPaymentOrder(db, doc.id)
       return order?.status === 'RECHAZADO'
@@ -1524,6 +1540,7 @@ export interface DocumentDetail {
   production_order: ProductionOrderView | null
   payroll: PayrollView | null
   tax_return: TaxReturnView | null
+  tax_fine: TaxFineView | null
   route_sheet: RouteSheetView | null
   delivery: DeliveryView | null
   supplier: T.Supplier | null
@@ -1920,6 +1937,7 @@ function buildDetail(db: DB, userId: string, doc: T.Document): DocumentDetail {
     production_order: doc.pd ? productionOrderView(db, doc) : null,
     payroll: doc.py ? payrollView(db, doc) : null,
     tax_return: doc.tr ? taxReturnView(db, doc) : null,
+    tax_fine: doc.tf ? taxFineView(db, doc) : null,
     route_sheet: doc.rs ? routeSheetView(db, doc) : null,
     delivery: doc.dn ? deliveryView(db, doc) : null,
     supplier: db.suppliers.find((s) => s.id === doc.supplier_id) ?? null,
@@ -3853,13 +3871,15 @@ export function authorizedVouchers(db: DB, userId: string, companyId: string, mo
 
 /** Una declaración en la cuenta corriente tributaria de la empresa (Fase 8e.2). */
 export interface TaxAccountRow {
+  /** Una declaración o una multa (Fase 8f.2). */
+  kind: 'DECLARACION' | 'MULTA'
   document: { id: string; display_number: string; path: string }
   tax: T.TaxCode
   period: string
   due_date: string
-  /** El acuse del fisco (null si es anterior a la 8e). */
+  /** El acuse del fisco (null si es anterior a la 8e o si es una multa). */
   transaction_code: string | null
-  /** El saldo a pagar declarado (0 si quedó a favor). */
+  /** El saldo a pagar declarado (0 si quedó a favor); en una multa, lo que se paga (la mitad dentro de la reducción). */
   declared: number
   /** Lo que quedó a favor para el mes siguiente. */
   balance_in_favor: number
@@ -3872,7 +3892,7 @@ export interface TaxAccountRow {
   bank_transaction: string | null
   /** Lo que se le debe al fisco: lo declarado y los intereses, menos lo imputado. */
   balance: number
-  state: 'SIN_SALDO' | 'A_VENCER' | 'VENCIDA' | 'EN_EL_BANCO' | 'RECHAZADA' | 'PAGADA'
+  state: 'SIN_SALDO' | 'A_VENCER' | 'VENCIDA' | 'A_PAGAR' | 'EN_EL_BANCO' | 'RECHAZADA' | 'PAGADA'
 }
 
 export interface TaxAccount {
@@ -3887,24 +3907,72 @@ export interface TaxAccount {
 const TAX_ACCOUNT_STATUSES = ['PRESENTADA', 'SIN_SALDO', 'PAGO_EN_BANCO', 'PAGADA']
 
 /**
- * La cuenta corriente tributaria de la empresa (Fase 8e.2): las declaraciones que el fisco aceptó, de
- * la más nueva a la más vieja (en un mes, ingresos brutos y después el IVA), con lo declarado, los
- * intereses, lo imputado y el saldo.
+ * La cuenta corriente tributaria de la empresa (Fase 8e.2): las declaraciones que el fisco aceptó y
+ * (8f.2) sus multas, de la más nueva a la más vieja (en un mes, ingresos brutos y después el IVA, cada
+ * declaración antes que su multa), con lo declarado, los intereses, lo imputado y el saldo.
  */
 export function taxAccount(db: DB, userId: string, companyId: string): TaxAccount {
   assertPerm(db, userId, companyId, 'fisco.read')
   const today = todayAR()
+  const key = (d: T.Document) => {
+    const h = d.tr ?? d.tf!
+    return `${h.period}|${h.tax}`
+  }
   const rows = db.documents
-    .filter((d) => d.company_id === companyId && d.doc_type === 'TAX_RETURN' && TAX_ACCOUNT_STATUSES.includes(d.status))
-    .sort((a, b) =>
-      a.tr!.period !== b.tr!.period ? (a.tr!.period < b.tr!.period ? 1 : -1) : a.tr!.tax < b.tr!.tax ? -1 : 1,
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        ((d.doc_type === 'TAX_RETURN' && TAX_ACCOUNT_STATUSES.includes(d.status)) || d.doc_type === 'TAX_FINE'),
     )
+    .sort((a, b) => {
+      const ka = key(a).split('|')
+      const kb = key(b).split('|')
+      return ka[0] !== kb[0]
+        ? ka[0] < kb[0]
+          ? 1
+          : -1
+        : ka[1] !== kb[1]
+          ? ka[1] < kb[1]
+            ? -1
+            : 1
+          : Number(a.doc_type === 'TAX_FINE') - Number(b.doc_type === 'TAX_FINE')
+    })
     .map((d): TaxAccountRow => {
+      if (d.tf) {
+        const tf = d.tf
+        const order = taxPaymentOrder(db, d.id)
+        const declared = tf.paid_amount ?? fineDue(tf, today)
+        const paid = d.status === 'PAGADA' ? declared : 0
+        return {
+          kind: 'MULTA',
+          document: { id: d.id, display_number: d.display_number, path: docPath(db, d) },
+          tax: tf.tax,
+          period: tf.period,
+          due_date: tf.reduction_until,
+          transaction_code: null,
+          declared,
+          balance_in_favor: 0,
+          interest: 0,
+          paid,
+          imputed_on: d.status === 'PAGADA' ? tf.imputed_on : null,
+          bank_transaction: d.status === 'PAGADA' && order?.status === 'PROCESADO' ? order.transaction_number : null,
+          balance: round2(declared - paid),
+          state:
+            d.status === 'PAGADA'
+              ? 'PAGADA'
+              : d.status === 'PAGO_EN_BANCO'
+                ? order?.status === 'RECHAZADO'
+                  ? 'RECHAZADA'
+                  : 'EN_EL_BANCO'
+                : 'A_PAGAR',
+        }
+      }
       const tr = d.tr!
       const order = taxPaymentOrder(db, d.id)
       const interest = d.status === 'PRESENTADA' ? taxInterest(d.total, tr.due_date, today).interest : tr.interest
       const paid = d.status === 'PAGADA' ? round2(d.total + tr.interest) : 0
       return {
+        kind: 'DECLARACION',
         document: { id: d.id, display_number: d.display_number, path: docPath(db, d) },
         tax: tr.tax,
         period: tr.period,
@@ -5183,6 +5251,66 @@ function taxReturnView(db: DB, doc: T.Document): TaxReturnView {
             }
           })
         : [],
+  }
+}
+
+/** La multa del fisco (Fase 8f.2): la declaración que la originó, el importe, la reducción y el pago. */
+export interface TaxFineView {
+  tax: T.TaxCode
+  period: string
+  tax_return: { id: string; display_number: string; path: string }
+  presented_on: string
+  due_date: string
+  amount: number
+  reduced_amount: number
+  reduction_until: string
+  /** Lo que se paga: sin pagar, el reducido dentro del plazo de la reducción; si no, lo que se pagó. */
+  amount_due: number
+  paid_on: string | null
+  paid_amount: number | null
+  paid_account: { id: string; code: string; name: string } | null
+  imputed_on: string | null
+  /** La orden del pago en el Banco Aula, si la hay. */
+  bank_order: {
+    seq: number
+    status: T.BankMovementStatus
+    received_on: string
+    processed_on: string | null
+    transaction_number: string | null
+  } | null
+}
+
+/** Lo que se paga de una multa hoy: la mitad dentro del plazo de la reducción. */
+const fineDue = (tf: T.TaxFineHeader, today: string) => (today <= tf.reduction_until ? tf.reduced_amount : tf.amount)
+
+function taxFineView(db: DB, doc: T.Document): TaxFineView {
+  const tf = doc.tf!
+  const dj = db.documents.find((d) => d.id === tf.tax_return_id)!
+  const paid = tf.paid_account_id ? db.accounts.find((a) => a.id === tf.paid_account_id) : undefined
+  const order = taxPaymentOrder(db, doc.id)
+  return {
+    tax: tf.tax,
+    period: tf.period,
+    tax_return: { id: dj.id, display_number: dj.display_number, path: docPath(db, dj) },
+    presented_on: tf.presented_on,
+    due_date: tf.due_date,
+    amount: tf.amount,
+    reduced_amount: tf.reduced_amount,
+    reduction_until: tf.reduction_until,
+    amount_due: tf.paid_amount ?? fineDue(tf, todayAR()),
+    paid_on: tf.paid_on,
+    paid_amount: tf.paid_amount,
+    paid_account: paid ? { id: paid.id, code: paid.code, name: paid.name } : null,
+    imputed_on: tf.imputed_on,
+    bank_order: order
+      ? {
+          seq: order.seq,
+          status: order.status,
+          received_on: order.received_on,
+          processed_on: order.processed_on,
+          transaction_number: order.transaction_number,
+        }
+      : null,
   }
 }
 

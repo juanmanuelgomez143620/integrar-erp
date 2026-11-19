@@ -109,7 +109,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 32
+export const DB_VERSION = 33
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -606,6 +606,14 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   // v31 → v32: el domicilio fiscal electrónico (Fase 8f.1): las intimaciones del fisco.
   31: (db) => {
     db.fiscalNotices ??= []
+  },
+  // v32 → v33: las multas del fisco (Fase 8f.2): la cuenta Multas fiscales y la regla de su pago.
+  32: (db) => {
+    const ctx = { db, userId: null, now: new Date().toISOString() }
+    for (const company of db.companies) {
+      if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
+      insertBasePostingRules(ctx, company.id)
+    }
   },
 }
 

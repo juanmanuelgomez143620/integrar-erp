@@ -17,6 +17,7 @@ const STATES: Record<TaxAccountRow['state'], { label: string; badge: Badge }> = 
   SIN_SALDO: { label: 'Sin saldo', badge: 'neutral' },
   A_VENCER: { label: 'A vencer', badge: 'info' },
   VENCIDA: { label: 'Vencida', badge: 'danger' },
+  A_PAGAR: { label: 'A pagar', badge: 'warning' },
   EN_EL_BANCO: { label: 'Pago en el banco', badge: 'warning' },
   RECHAZADA: { label: 'Rechazada por el banco', badge: 'danger' },
   PAGADA: { label: 'Pagada', badge: 'success' },
@@ -37,7 +38,7 @@ export function TaxAccountPage() {
       <PageHeader
         crumbs={[{ label: 'Inicio', to: company.to() }, { label: 'Fisco simulado' }, { label: 'Cuenta corriente' }]}
         title="Cuenta corriente tributaria"
-        description={`Lo que la empresa le debe al fisco simulado: cada declaración que aceptó, con su vencimiento, lo declarado, los intereses resarcitorios (${FISCO_DEFAULTS.interest_rate} % mensual simple por los días de atraso: los pagados o, si está vencida sin pagar, a hoy), lo que imputó y el saldo. El fisco imputa un pago cuando el Banco Aula procesa la orden.`}
+        description={`Lo que la empresa le debe al fisco simulado: cada declaración que aceptó, con su vencimiento, lo declarado, los intereses resarcitorios (${FISCO_DEFAULTS.interest_rate} % mensual simple por los días de atraso: los pagados o, si está vencida sin pagar, a hoy), lo que imputó y el saldo; después de cada declaración, su multa si se presentó fuera de término. El fisco imputa un pago cuando el Banco Aula procesa la orden.`}
       />
       {!data ? (
         <Loading error={error} />
@@ -65,6 +66,7 @@ export function TaxAccountPage() {
                 header: 'Declaración',
                 cell: (r) => (
                   <span className="whitespace-normal">
+                    {r.kind === 'MULTA' && 'Multa: '}
                     {taxTitle(r.tax, r.period)}
                     <span className="block text-xs text-muted-foreground">
                       <Link className="underline" to={r.document.path}>

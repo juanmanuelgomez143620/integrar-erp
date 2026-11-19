@@ -47,7 +47,14 @@ import { PayDialog } from '@/features/payables/pay-dialog'
 import { ReconciliationLines } from '@/features/payables/reconciliation-views'
 import { PayrollSection, periodLabel } from '@/features/hr/payroll'
 import { PayrollPayDialog } from '@/features/hr/payroll-pay-dialog'
-import { TaxReturnFiscoSection, TaxReturnPayDialog, TaxReturnSection, taxTitle } from '@/features/tax/tax-return'
+import {
+  TaxFinePayDialog,
+  TaxFineSection,
+  TaxReturnFiscoSection,
+  TaxReturnPayDialog,
+  TaxReturnSection,
+  taxTitle,
+} from '@/features/tax/tax-return'
 import { CloseRouteSheetDialog, DeliveryStatusInfo, RouteSheetSection } from '@/features/logistics/route-sheet'
 import {
   FinishDialog,
@@ -159,6 +166,8 @@ const RUNNERS: Record<DocType, Partial<Record<TransitionAction, Runner>>> = {
     REJECT: (id, t) => commands.receiveTaxReturn(id, { accept: false, reason: t }),
     CANCEL: (id, t) => commands.cancelTaxReturn(id, t),
   },
+  // Pagarla tiene su propio diálogo (8f.2).
+  TAX_FINE: {},
   // Rendirla tiene su propio diálogo: hay que indicar el resultado de cada remito.
   ROUTE_SHEET: {
     SEND: (id) => commands.departRouteSheet(id),
@@ -186,6 +195,7 @@ const AREA: Record<DocType, string> = {
   PRODUCTION_ORDER: 'Producción',
   PAYROLL: 'RRHH',
   TAX_RETURN: 'Impuestos',
+  TAX_FINE: 'Impuestos',
   ROUTE_SHEET: 'Logística',
 }
 
@@ -470,6 +480,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
                   <TaxReturnSection detail={detail} />
                   <TaxReturnFiscoSection detail={detail} />
                 </>
+              ) : detail.tax_fine ? (
+                <TaxFineSection detail={detail} />
               ) : detail.route_sheet ? (
                 <RouteSheetSection detail={detail} />
               ) : (
@@ -587,6 +599,8 @@ function DocumentView({ detail }: { detail: DocumentDetail }) {
           <PayrollPayDialog detail={detail} open={paying} onOpenChange={setPaying} />
         ) : detail.tax_return ? (
           <TaxReturnPayDialog detail={detail} open={paying} onOpenChange={setPaying} />
+        ) : detail.tax_fine ? (
+          <TaxFinePayDialog detail={detail} open={paying} onOpenChange={setPaying} />
         ) : (
           <PayDialog detail={detail} open={paying} onOpenChange={setPaying} />
         ))}
@@ -1047,6 +1061,28 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
           {doc.created_by_name} · {doc.sector_name}
         </InfoRow>
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
+      </dl>
+    )
+  }
+  if (doc.doc_type === 'TAX_FINE' && detail.tax_fine) {
+    const tf = detail.tax_fine
+    return (
+      <dl className={grid}>
+        <InfoRow label="Multa por">Presentar fuera de término {tf.tax_return.display_number}</InfoRow>
+        <InfoRow label="Declaración">{taxTitle(tf.tax, tf.period)}</InfoRow>
+        <InfoRow label="Importe">
+          <span className="font-semibold">{money(tf.amount_due)}</span>
+          <span className="text-xs text-muted-foreground">
+            {!tf.paid_on
+              ? tf.amount_due < tf.amount
+                ? ` · la mitad hasta el ${date(tf.reduction_until)}`
+                : ' · sin pagar'
+              : tf.imputed_on
+                ? ` · pagada el ${date(tf.paid_on)} desde ${tf.paid_account?.name}`
+                : ` · pago en el banco desde el ${date(tf.paid_on)}`}
+          </span>
+        </InfoRow>
+        <InfoRow label="Notificada">{date(doc.document_date)}</InfoRow>
       </dl>
     )
   }

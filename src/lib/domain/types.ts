@@ -61,6 +61,7 @@ export type DocType =
   | 'PRODUCTION_ORDER'
   | 'PAYROLL'
   | 'TAX_RETURN'
+  | 'TAX_FINE'
   | 'ROUTE_SHEET'
 
 /** Cómo se pagó una orden de pago o se cobró un recibo. */
@@ -581,6 +582,28 @@ export interface FiscalNotice {
   created_by: string | null
   updated_at: string
   updated_by: string | null
+}
+
+/** La multa formal del fisco por presentar una declaración fuera de término (Fase 8f.2). */
+export interface TaxFineHeader {
+  tax: TaxCode
+  /** El mes de la declaración: aaaa-mm. */
+  period: string
+  /** La declaración presentada fuera de término. */
+  tax_return_id: string
+  /** Cuándo se presentó y cuándo vencía. */
+  presented_on: string
+  due_date: string
+  /** El importe de la multa y el reducido (la mitad), que vale hasta reduction_until. */
+  amount: number
+  reduced_amount: number
+  reduction_until: string
+  /** El pago: el día en que Tesorería lo registró, lo que se pagó y la cuenta (la del Banco Aula). */
+  paid_on: string | null
+  paid_amount: number | null
+  paid_account_id: string | null
+  /** Cuándo el fisco imputó el pago: el día en que el banco procesó la orden. */
+  imputed_on: string | null
 }
 
 export interface TaxReturnHeader {
@@ -1105,6 +1128,7 @@ export interface Document extends Audited {
   pd?: ProductionOrderHeader
   py?: PayrollHeader
   tr?: TaxReturnHeader
+  tf?: TaxFineHeader
   rs?: RouteSheetHeader
 }
 

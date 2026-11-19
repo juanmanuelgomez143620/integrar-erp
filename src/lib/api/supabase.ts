@@ -466,6 +466,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     presentTaxReturn: (docId) => rpc('tax_return_present', doc(docId)),
     receiveTaxReturn: (docId, reception) => rpc('tax_return_receive', { ...doc(docId), p_input: reception }),
     payTaxReturn: (docId) => rpc('tax_return_pay', doc(docId)),
+    payTaxFine: (docId) => rpc('tax_fine_pay', doc(docId)),
     issueFiscalNotice: (companyId, input) => rpc('fiscal_notice_issue', { ...company(companyId), p_input: input }),
     respondFiscalNotice: (companyId, id, response) =>
       rpc('fiscal_notice_respond', { ...company(companyId), p_id: id, p_response: response }),

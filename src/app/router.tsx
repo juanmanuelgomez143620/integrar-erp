@@ -265,6 +265,8 @@ export const router = createBrowserRouter(
                 { path: 'impuestos/declaraciones', element: <DocumentListPage key="dj" docType="TAX_RETURN" /> },
                 { path: 'impuestos/declaraciones/nueva', element: <TaxReturnFormPage /> },
                 { path: 'impuestos/declaraciones/:number', element: <DocumentPage key="dj" docType="TAX_RETURN" /> },
+                { path: 'impuestos/multas', element: <DocumentListPage key="mul" docType="TAX_FINE" /> },
+                { path: 'impuestos/multas/:number', element: <DocumentPage key="mul" docType="TAX_FINE" /> },
                 { path: 'impuestos/libros-iva', element: <IvaBooksPage /> },
                 { path: 'impuestos/vencimientos', element: <ObligationsPage /> },
                 { path: 'logistica/transporte', element: <TransportPage /> },

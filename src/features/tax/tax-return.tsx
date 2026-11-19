@@ -380,6 +380,126 @@ export function TaxReturnPayDialog({
   )
 }
 
+/**
+ * La multa del fisco (Fase 8f.2): por qué se aplicó, cuánto es y hasta cuándo vale la reducción, y el
+ * pago (la orden en el banco o la imputación).
+ */
+export function TaxFineSection({ detail }: { detail: DocumentDetail }) {
+  const { doc } = detail
+  const view = detail.tax_fine
+  if (!view) return null
+  const order = view.bank_order
+  const payment =
+    doc.status === 'NOTIFICADA' ? (
+      <>
+        Sin pagar: {money(view.reduced_amount)} (la mitad) hasta el {date(view.reduction_until)}; después,{' '}
+        {money(view.amount)}.
+      </>
+    ) : doc.status === 'PAGO_EN_BANCO' ? (
+      order?.status === 'RECHAZADO' ? (
+        <>
+          El Banco Aula rechazó la orden N.º {order.seq} por falta de fondos: Tesorería la reenvía desde la bandeja del
+          banco cuando haya fondos.
+        </>
+      ) : (
+        <>
+          Enviado al Banco Aula el {date(view.paid_on)}
+          {order ? ` (orden N.º ${order.seq})` : ''}: {money(view.amount_due)}. El fisco lo imputa cuando el banco
+          procesa la orden.
+        </>
+      )
+    ) : (
+      <>
+        Imputado el {date(view.imputed_on)}: {money(view.amount_due)}
+        {order?.transaction_number && (
+          <>
+            , transacción <span className="font-mono">{order.transaction_number}</span> del Banco Aula
+          </>
+        )}
+        .
+      </>
+    )
+  return (
+    <Section
+      title="Multa por presentar fuera de término"
+      description="El fisco la aplica en el momento en que acepta una declaración presentada después de su vencimiento, una por impuesto y mes. Si se paga dentro de los 15 días de notificada, se paga la mitad (simulada: a validar)."
+    >
+      <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[180px_1fr]">
+        <dt className="text-muted-foreground">Declaración</dt>
+        <dd>
+          <Link to={view.tax_return.path} className="font-medium text-primary hover:underline">
+            {view.tax_return.display_number}
+          </Link>{' '}
+          ({taxTitle(view.tax, view.period)}): vencía el {date(view.due_date)} y se presentó el{' '}
+          {date(view.presented_on)}.
+        </dd>
+        <dt className="text-muted-foreground">Importe</dt>
+        <dd>
+          {money(view.amount)}; {money(view.reduced_amount)} si se paga hasta el {date(view.reduction_until)}.
+        </dd>
+        <dt className="text-muted-foreground">Pago</dt>
+        <dd>{payment}</dd>
+      </dl>
+    </Section>
+  )
+}
+
+/** Tesorería paga la multa por transferencia desde el Banco Aula (Fase 8f.2). */
+export function TaxFinePayDialog({
+  detail,
+  open,
+  onOpenChange,
+}: {
+  detail: DocumentDetail
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const view = detail.tax_fine!
+  const reduced = view.amount_due < view.amount
+  const run = useCommand(() => commands.payTaxFine(detail.doc.id), {
+    success: 'Pago enviado al Banco Aula: el fisco lo imputa cuando el banco procesa la orden.',
+    onSuccess: () => onOpenChange(false),
+  })
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Pagar {detail.doc.display_number}</DialogTitle>
+          <DialogDescription>
+            La multa por presentar fuera de término {view.tax_return.display_number} ({taxTitle(view.tax, view.period)}
+            ). Sale por transferencia desde la cuenta de la empresa en el Banco Aula: se registra el asiento del pago y
+            la orden llega al banco; el fisco lo imputa cuando el banco la procesa.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-1 text-sm">
+          <div className="flex justify-between gap-4">
+            <span>Multa</span>
+            <span className="tabular">{money(view.amount)}</span>
+          </div>
+          {reduced && (
+            <div className="flex justify-between gap-4">
+              <span>Reducción a la mitad (hasta el {date(view.reduction_until)})</span>
+              <span className="tabular">{money(view.amount_due - view.amount)}</span>
+            </div>
+          )}
+          <div className="flex justify-between gap-4 font-semibold text-navy">
+            <span>Total de la transferencia</span>
+            <span className="tabular">{money(view.amount_due)}</span>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={run.isPending}>
+            Volver
+          </Button>
+          <Button disabled={run.isPending} onClick={() => run.mutate([])}>
+            {run.isPending ? 'Procesando…' : `Pagar ${money(view.amount_due)}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** El docente fija la alícuota de ingresos brutos de la empresa (a validar). */
 export function IibbRateSection() {
   const company = useCompany()

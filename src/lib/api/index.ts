@@ -487,6 +487,7 @@ const mockCommands = {
     command((c) => E.cmdReceiveTaxReturn(c, docId, reception)),
   presentTaxReturn: (docId: string) => command((c) => E.cmdPresentTaxReturn(c, docId)),
   payTaxReturn: (docId: string) => command((c) => E.cmdPayTaxReturn(c, docId)),
+  payTaxFine: (docId: string) => command((c) => E.cmdPayTaxFine(c, docId)),
   issueFiscalNotice: (companyId: string, input: E.FiscalNoticeInput) =>
     command((c) => E.cmdIssueFiscalNotice(c, companyId, input)),
   respondFiscalNotice: (companyId: string, id: string, response: string) =>

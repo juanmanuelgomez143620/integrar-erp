@@ -5,7 +5,7 @@
 // claves de la imputación automática (posting_keys, desde la Fase 3).
 //
 // Uso: npm run db:catalog [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de catálogos (la de la Fase 8f.1).
+// Sin argumento reescribe la última migración de catálogos (la de la Fase 8f.2).
 // Una migración ya aplicada en alguna instancia no se reescribe: si cambian
 // los catálogos después, se genera una nueva con otro nombre (el script es
 // idempotente: inserta o actualiza, y reemplaza las tablas de correspondencias).
@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261115120100_catalog_data_domicilio_fiscal.sql'
+const target = process.argv[2] ?? '20261116120100_catalog_data_multas.sql'
 
 const server = await createServer({
   root,

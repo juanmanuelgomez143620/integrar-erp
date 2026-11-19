@@ -19,6 +19,7 @@ import {
   BookCheck,
   CalendarClock,
   FileCheck,
+  Gavel,
   ClipboardList,
   Coins,
   Factory,
@@ -218,6 +219,7 @@ export const NAV: NavGroup[] = [
     label: 'Impuestos',
     items: [
       { label: 'Declaraciones', path: 'impuestos/declaraciones', icon: FileCheck, permission: 'tax_return.read' },
+      { label: 'Multas del fisco', path: 'impuestos/multas', icon: Gavel, permission: 'tax_fine.read' },
       { label: 'Libros IVA', path: 'impuestos/libros-iva', icon: BookCheck, permission: 'tax_return.read' },
       { label: 'Vencimientos', path: 'impuestos/vencimientos', icon: CalendarClock, permission: 'tax_return.read' },
     ],
