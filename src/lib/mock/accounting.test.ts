@@ -93,7 +93,7 @@ describe('empresa plantilla', () => {
     expect(amount('1.1.05.02')).toBe(2301900)
     expect(amount('1.1.05.04')).toBe(14079000)
     expect(amount('1.1.05.05')).toBe(2580000)
-    expect(amount('3.2.02.01')).toBe(-41548900)
+    expect(amount('3.2.02.01')).toBe(-83548900)
     // Primero las cuentas del debe, después las del haber.
     const sides = lines(opening.id)
       .sort((a, b) => a.line_no - b.line_no)

@@ -723,10 +723,29 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     }
   })
 
+  it('la plantilla que ya existía suma la flota de la demo que le falta, sin repetir (9c.2)', async () => {
+    // Como estaba antes de la flota nueva; se deshace al terminar.
+    await db.admin('begin')
+    try {
+      await db.admin(`delete from public.carriers where company_id = $1 and code = 'TR-003'`, [template])
+      await db.admin(`delete from public.vehicles where company_id = $1 and code in ('CAM-02', 'FUR-01', 'FUR-02')`, [
+        template,
+      ])
+      expect(await carriers(template)).toHaveLength(2)
+      expect(await vehicles(template)).toHaveLength(1)
+      for (let i = 0; i < 2; i++)
+        await db.admin('select private.insert_demo_carriers($1), private.insert_demo_vehicles($1)', [template])
+      expect(await carriers(template)).toEqual(mockCarriers)
+      expect(await vehicles(template)).toEqual(mockVehicles)
+    } finally {
+      await db.admin('rollback')
+    }
+  })
+
   it('tiene los mismos transportistas y vehículos propios que la demo', async () => {
-    expect(mockCarriers).toHaveLength(2)
+    expect(mockCarriers).toHaveLength(3)
     expect(await carriers(template)).toEqual(mockCarriers)
-    expect(mockVehicles).toHaveLength(1)
+    expect(mockVehicles).toHaveLength(4)
     expect(await vehicles(template)).toEqual(mockVehicles)
   })
 

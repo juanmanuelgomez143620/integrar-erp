@@ -4147,7 +4147,7 @@ describe('paridad de comandos', () => {
     // Transportistas.
     const carrierInput = (over: Partial<E.CarrierInput> = {}): E.CarrierInput => ({
       id: '',
-      code: ' tr-003 ',
+      code: ' tr-004 ',
       legal_name: 'Fletes del Alto Paraná SRL',
       tax_id: '30-00000112-7',
       phone: '3757 400000',

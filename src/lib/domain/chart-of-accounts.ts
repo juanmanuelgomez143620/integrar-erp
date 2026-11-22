@@ -156,7 +156,7 @@ export const BASE_CHART: ChartRow[] = [
 /**
  * Saldos fijos del asiento de apertura (a validar). Los bienes de cambio salen del inventario inicial.
  * La empresa que crece (Fase 9a) suma 80 millones en el banco, aportados por los socios, para pagar
- * a su personal.
+ * a su personal, y los rodados crecen con la flota (9c.2: un segundo camión y dos furgones).
  */
 // prettier-ignore
 export const OPENING_BALANCES: { code: string; debit: number; credit: number }[] = [
@@ -164,7 +164,7 @@ export const OPENING_BALANCES: { code: string; debit: number; credit: number }[]
   { code: '1.1.01.03', debit: 92500000, credit: 0 },
   { code: '1.2.01.01', debit: 85000000, credit: 0 },
   { code: '1.2.01.02', debit: 24000000, credit: 0 },
-  { code: '1.2.01.03', debit: 18000000, credit: 0 },
+  { code: '1.2.01.03', debit: 60000000, credit: 0 },
   { code: '1.2.01.04', debit: 3200000, credit: 0 },
   { code: '2.1.02.01', debit: 0, credit: 10000000 },
   { code: '3.1.01.01', debit: 0, credit: 200000000 },

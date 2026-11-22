@@ -8,6 +8,8 @@
 export const DEMO_CARRIERS: { code: string; legal_name: string; tax_id: string; phone: string }[] = [
   { code: 'TR-001', legal_name: 'Transportes Ruta 12 SRL', tax_id: '30-00000107-0', phone: '' },
   { code: 'TR-002', legal_name: 'Expreso Tierra Colorada SRL', tax_id: '30-00000111-9', phone: '' },
+  // La empresa que crece (Fase 9c.2): un flete de Corrientes para los viajes largos (el del banco ficticio).
+  { code: 'TR-003', legal_name: 'Logística Lapacho SRL', tax_id: '30-00000315-4', phone: '' },
 ]
 
 /**
@@ -23,8 +25,14 @@ export const DEMO_DELIVERY_ZONES: { code: string; name: string; delivery_days: n
   { code: 'Z-CHA', name: 'Chaco', delivery_days: [5], notes: 'Viaje largo: conviene un camión con transportista.', cities: ['Resistencia', 'Presidencia Roque Sáenz Peña'] },
 ]
 
-/** Los vehículos propios: el camión que maneja el chofer (legajo 11). */
+/**
+ * Los vehículos propios: el camión que maneja el chofer (legajo 11) y, con la empresa que crece (Fase 9c.2),
+ * un segundo camión y dos furgones para los repartos de la ciudad, para los cuatro choferes.
+ */
 // prettier-ignore
 export const DEMO_VEHICLES: { code: string; plate: string; description: string }[] = [
   { code: 'CAM-01', plate: 'AF 512 MS', description: 'Camión con caja cerrada para muebles (3,5 t)' },
+  { code: 'CAM-02', plate: 'AG 145 KM', description: 'Camión con caja cerrada para muebles (3,5 t)' },
+  { code: 'FUR-01', plate: 'AH 233 PL', description: 'Furgón utilitario para las entregas de la ciudad' },
+  { code: 'FUR-02', plate: 'AH 871 RT', description: 'Furgón utilitario para las entregas de la ciudad' },
 ]

@@ -73,7 +73,7 @@ function expectBusinessError(fn: () => void, code: string) {
 
 const carrierInput = (over: Partial<CarrierInput> = {}): CarrierInput => ({
   id: '',
-  code: 'TR-003',
+  code: 'TR-004',
   legal_name: 'Fletes del Alto Paraná SRL',
   tax_id: '30-00000112-7',
   phone: '3757 400000',
@@ -89,22 +89,26 @@ const vehicleInput = (over: Partial<VehicleInput> = {}): VehicleInput => ({
 })
 
 describe('transporte (Fase 7c.1)', () => {
-  it('la demo trae los dos fletes y el camión; los ven Logística, Depósito, Gerencia y Auditoría', () => {
+  it('la demo trae los tres fletes y los cuatro vehículos; los ven Logística, Depósito, Gerencia y Auditoría', () => {
     expect(listCarriers(db, userId('deposito'), companyId()).map((c) => [c.code, c.tax_id, c.is_active])).toEqual([
       ['TR-001', '30-00000107-0', true],
       ['TR-002', '30-00000111-9', true],
+      ['TR-003', '30-00000315-4', true],
     ])
     expect(listVehicles(db, userId('gerencia'), companyId()).map((v) => [v.code, v.plate])).toEqual([
       ['CAM-01', 'AF 512 MS'],
+      ['CAM-02', 'AG 145 KM'],
+      ['FUR-01', 'AH 233 PL'],
+      ['FUR-02', 'AH 871 RT'],
     ])
-    expect(listCarriers(db, userId('auditor'), companyId())).toHaveLength(2)
+    expect(listCarriers(db, userId('auditor'), companyId())).toHaveLength(3)
     expect(() => listCarriers(db, userId('ventas'), companyId())).toThrow('Tu rol no tiene acceso')
   })
 
   it('transportistas: alta, cambios con auditoría, validaciones y desactivación', () => {
-    const { id } = cmdSaveCarrier(ctx('deposito'), companyId(), carrierInput({ code: ' tr-003 ' }))
-    expect(db.carriers.find((c) => c.id === id)).toMatchObject({ code: 'TR-003', is_active: true })
-    expect(db.audit.at(-1)!.summary).toBe('Dio de alta el transportista TR-003 Fletes del Alto Paraná SRL')
+    const { id } = cmdSaveCarrier(ctx('deposito'), companyId(), carrierInput({ code: ' tr-004 ' }))
+    expect(db.carriers.find((c) => c.id === id)).toMatchObject({ code: 'TR-004', is_active: true })
+    expect(db.audit.at(-1)!.summary).toBe('Dio de alta el transportista TR-004 Fletes del Alto Paraná SRL')
     cmdSaveCarrier(ctx('deposito'), companyId(), carrierInput({ id, phone: '3757 411111' }))
     expect(db.audit.at(-1)).toMatchObject({
       action: 'UPDATE',
@@ -116,11 +120,11 @@ describe('transporte (Fase 7c.1)', () => {
     expect(save(carrierInput({ code: 'TR 4' }))).toBe(
       'El código del transportista tiene de 1 a 12 letras, números o guiones.',
     )
-    expect(save(carrierInput({ code: 'TR-004', legal_name: 'F' }))).toBe('La razón social tiene de 2 a 80 caracteres.')
-    expect(save(carrierInput({ code: 'TR-004', tax_id: '30000001127' }))).toBe(
+    expect(save(carrierInput({ code: 'TR-005', legal_name: 'F' }))).toBe('La razón social tiene de 2 a 80 caracteres.')
+    expect(save(carrierInput({ code: 'TR-005', tax_id: '30000001127' }))).toBe(
       'El CUIT debe tener el formato 30-12345678-9.',
     )
-    expect(save(carrierInput({ code: 'TR-004', phone: '1'.repeat(41) }))).toBe('El teléfono tiene hasta 40 caracteres.')
+    expect(save(carrierInput({ code: 'TR-005', phone: '1'.repeat(41) }))).toBe('El teléfono tiene hasta 40 caracteres.')
     expect(save(carrierInput({ id: 'no-existe' }))).toBe('El transportista no existe.')
     for (const username of ['gerencia', 'ventas'])
       expectBusinessError(
@@ -128,7 +132,7 @@ describe('transporte (Fase 7c.1)', () => {
         'SIN_PERMISO',
       )
     cmdSetCarrierActive(ctx('deposito'), companyId(), id, false)
-    expect(db.audit.at(-1)!.summary).toBe('Desactivó el transportista TR-003 Fletes del Alto Paraná SRL')
+    expect(db.audit.at(-1)!.summary).toBe('Desactivó el transportista TR-004 Fletes del Alto Paraná SRL')
     expect(listCarriers(db, userId('deposito'), companyId()).find((c) => c.id === id)!.is_active).toBe(false)
   })
 
@@ -164,15 +168,15 @@ describe('transporte (Fase 7c.1)', () => {
     expect(db.carriers.filter((c) => c.company_id === id).map((c) => c.code)).toEqual(
       db.carriers.filter((c) => c.company_id === template.id).map((c) => c.code),
     )
-    expect(db.vehicles.filter((v) => v.company_id === id)).toHaveLength(1)
+    expect(db.vehicles.filter((v) => v.company_id === id)).toHaveLength(4)
   })
 
-  it('al actualizar una base guardada (v19), cada empresa recibe los fletes y el camión de la demo', () => {
+  it('al actualizar una base guardada (v19), cada empresa recibe los fletes y los vehículos de la demo', () => {
     const { carriers: _carriers, vehicles: _vehicles, ...v19 } = structuredClone(db)
     const upgraded = upgradeDatabase({ ...v19, version: 19 } as DB)!
     expect(upgraded.version).toBe(DB_VERSION)
-    expect(upgraded.carriers.filter((c) => c.company_id === companyId())).toHaveLength(2)
-    expect(upgraded.vehicles.filter((v) => v.company_id === companyId())).toHaveLength(1)
+    expect(upgraded.carriers.filter((c) => c.company_id === companyId())).toHaveLength(3)
+    expect(upgraded.vehicles.filter((v) => v.company_id === companyId())).toHaveLength(4)
     // Una segunda vez no duplica nada.
     expect(upgradeDatabase({ ...upgraded, version: 19 })!.carriers).toHaveLength(upgraded.carriers.length)
   })
