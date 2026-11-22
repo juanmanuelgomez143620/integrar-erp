@@ -20,6 +20,7 @@ import {
   accountBalance,
   businessDate,
   bankAccountFor,
+  bankBalanceAt,
   bankMode,
   bankMonthToClose,
   bankPresented,
@@ -70,6 +71,7 @@ import {
   productionOrderOperations,
   chargesDue,
   nextMonthDay,
+  previousPeriod,
   taxDueDate,
   payrollCharges,
   payrollLines,
@@ -5134,6 +5136,215 @@ export function productionCosts(
         unit_cost: doc.pd!.unit_cost ?? 0,
       }
     })
+}
+
+// ============================================================ Tablero de control (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §5, 7d.1)
+
+/** Un indicador del tablero: el valor del mes elegido y el del anterior. */
+export interface ControlIndicator {
+  key: string
+  label: string
+  value: number
+  previous: number
+  /** Si conviene que suba ('UP'), que baje ('DOWN') o ninguno (null). */
+  better: 'UP' | 'DOWN' | null
+  /** De dónde sale: las cuentas del libro mayor o el banco. */
+  hint: string
+}
+
+export interface ControlArea {
+  key: 'RESULTADOS' | 'PERSONAL' | 'TERCEROS' | 'STOCK' | 'TESORERIA' | 'IMPUESTOS'
+  title: string
+  indicators: ControlIndicator[]
+}
+
+export interface ControlPanel {
+  period: string
+  previous: string
+  /** Hasta qué día se mide cada mes: el último del mes o, en el actual, hoy. */
+  to: string
+  previous_to: string
+  areas: ControlArea[]
+}
+
+/** El último día de un mes (aaaa-mm). */
+function monthEnd(period: string) {
+  const [y, m] = period.split('-').map(Number)
+  return `${period}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`
+}
+
+/**
+ * El tablero de control (7d.1): el mes elegido contra el anterior, desde el libro mayor (lo que se
+ * movió en el mes y los saldos al cierre, o a hoy en el mes en curso) y el Banco Aula. Cada área
+ * aparece si quien mira puede leer lo que la sostiene.
+ */
+export function controlPanel(db: DB, userId: string, companyId: string, period: string): ControlPanel {
+  assertPerm(db, userId, companyId, 'dashboard.read')
+  if (typeof period !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(period))
+    fail('DATO_INVALIDO', 'Elegí el mes: el año y el mes, como 2026-11.')
+  const today = todayAR()
+  if (period > today.slice(0, 7)) fail('DATO_INVALIDO', 'Ese mes todavía no empezó: elegí el actual o uno anterior.')
+  const previous = previousPeriod(period)
+  const to = period === today.slice(0, 7) ? today : monthEnd(period)
+  const previousTo = monthEnd(previous)
+  const eff = effectivePermissions(db, userId, companyId)
+  const lines = postedLines(db, companyId)
+  const codes = new Map(db.accounts.filter((a) => a.company_id === companyId).map((a) => [a.id, a.code]))
+  const under = (code: string, prefixes: string[]) => prefixes.some((p) => code === p || code.startsWith(`${p}.`))
+  /** Debe menos haber de las cuentas de esos rubros entre dos fechas (sin desde: desde el principio). */
+  const net = (prefixes: string[], from: string | null, upTo: string) =>
+    round2(
+      lines.reduce(
+        (s, { line, doc }) =>
+          doc.document_date <= upTo &&
+          (from === null || doc.document_date >= from) &&
+          under(codes.get(line.account_id) ?? '', prefixes)
+            ? s + line.debit - line.credit
+            : s,
+        0,
+      ),
+    )
+  const inMonth = (prefixes: string[], p: string, t: string) => net(prefixes, `${p}-01`, t)
+  // Sin "menos cero": un valor nulo es 0, como en la base.
+  const both = (f: (p: string, t: string) => number) => ({
+    value: f(period, to) || 0,
+    previous: f(previous, previousTo) || 0,
+  })
+  const sales = (p: string, t: string) => -inMonth(['4.1'], p, t)
+  const cost = (p: string, t: string) => inMonth(['5.1.01'], p, t)
+  const ledger = can(eff, 'ledger.read')
+  const areas: ControlArea[] = []
+  if (ledger) {
+    areas.push({
+      key: 'RESULTADOS',
+      title: 'Resultados',
+      indicators: [
+        {
+          key: 'VENTAS',
+          label: 'Ventas',
+          ...both(sales),
+          better: 'UP',
+          hint: 'Ingresos operativos del mes (cuentas 4.1).',
+        },
+        {
+          key: 'COSTO_VENTAS',
+          label: 'Costo de lo vendido',
+          ...both(cost),
+          better: null,
+          hint: 'Cuentas 5.1.01 del mes.',
+        },
+        {
+          key: 'MARGEN',
+          label: 'Margen bruto',
+          ...both((p, t) => round2(sales(p, t) - cost(p, t))),
+          better: 'UP',
+          hint: 'Ventas menos costo de lo vendido.',
+        },
+        {
+          key: 'RESULTADO',
+          label: 'Resultado del mes',
+          ...both((p, t) => -inMonth(['4', '5'], p, t)),
+          better: 'UP',
+          hint: 'Todos los ingresos (4) menos todos los egresos (5) del mes.',
+        },
+      ],
+    })
+    areas.push({
+      key: 'PERSONAL',
+      title: 'Personal',
+      indicators: [
+        {
+          key: 'COSTO_LABORAL',
+          label: 'Costo laboral',
+          ...both((p, t) => inMonth(['5.2.01', '5.1.03'], p, t)),
+          better: null,
+          hint: 'Sueldos, cargas sociales y mano de obra directa del mes (5.2.01 y 5.1.03).',
+        },
+      ],
+    })
+    areas.push({
+      key: 'TERCEROS',
+      title: 'Clientes y proveedores',
+      indicators: [
+        {
+          key: 'DEUDA_CLIENTES',
+          label: 'Deuda de los clientes',
+          ...both((_, t) => net(['1.1.03'], null, t)),
+          better: null,
+          hint: 'Saldo de las cuentas 1.1.03 al cierre.',
+        },
+        {
+          key: 'DEUDA_PROVEEDORES',
+          label: 'Deuda con los proveedores',
+          ...both((_, t) => -net(['2.1.01'], null, t)),
+          better: null,
+          hint: 'Saldo de las cuentas 2.1.01 al cierre.',
+        },
+      ],
+    })
+    areas.push({
+      key: 'STOCK',
+      title: 'Stock',
+      indicators: [
+        {
+          key: 'BIENES_DE_CAMBIO',
+          label: 'Bienes de cambio',
+          ...both((_, t) => net(['1.1.05'], null, t)),
+          better: null,
+          hint: 'Saldo de las cuentas 1.1.05 al cierre.',
+        },
+      ],
+    })
+  }
+  const treasury: ControlIndicator[] = []
+  if (ledger)
+    treasury.push({
+      key: 'DISPONIBLE',
+      label: 'Disponible',
+      ...both((_, t) => net(['1.1.01'], null, t)),
+      better: 'UP',
+      hint: 'Cajas y bancos (1.1.01) al cierre, según los libros.',
+    })
+  const bank = db.bankAccounts.find((b) => b.company_id === companyId && b.is_active)
+  if (bank && can(eff, 'bank.read'))
+    treasury.push({
+      key: 'SALDO_BANCO',
+      label: 'Saldo según el banco',
+      ...both((_, t) => bankBalanceAt(db, bank.id, t)),
+      better: 'UP',
+      hint: 'Lo que procesó el Banco Aula hasta el cierre.',
+    })
+  if (ledger)
+    treasury.push({
+      key: 'PRESTAMOS',
+      label: 'Préstamos bancarios',
+      ...both((_, t) => -net(['2.1.02'], null, t)),
+      better: 'DOWN',
+      hint: 'Saldo de las cuentas 2.1.02 al cierre.',
+    })
+  if (treasury.length) areas.push({ key: 'TESORERIA', title: 'Tesorería y banco', indicators: treasury })
+  if (ledger)
+    areas.push({
+      key: 'IMPUESTOS',
+      title: 'Impuestos',
+      indicators: [
+        {
+          key: 'DEUDAS_FISCALES',
+          label: 'Deudas fiscales',
+          ...both((_, t) => -net(['2.1.04'], null, t)),
+          better: 'DOWN',
+          hint: 'IVA e ingresos brutos (2.1.04) al cierre.',
+        },
+        {
+          key: 'INTERESES_MULTAS',
+          label: 'Intereses y multas fiscales',
+          ...both((p, t) => inMonth(['5.3.01.04', '5.3.02.03'], p, t)),
+          better: 'DOWN',
+          hint: 'Intereses resarcitorios y multas del fisco del mes (5.3.01.04 y 5.3.02.03).',
+        },
+      ],
+    })
+  return { period, previous, to, previous_to: previousTo, areas }
 }
 
 // ============================================================ Impuestos (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2)

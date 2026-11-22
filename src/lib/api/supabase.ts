@@ -267,6 +267,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     padron: (companyId) => rpc('padron', company(companyId)),
     pointsOfSale: (companyId) => rpc('points_of_sale', company(companyId)),
     taxAccount: (companyId) => rpc('tax_account', company(companyId)),
+    controlPanel: (companyId, period) => rpc('control_panel', { ...company(companyId), p_period: period }),
     fiscalNotices: (companyId) => rpc('fiscal_notices', company(companyId)),
     fiscalNoticesToIssue: (companyId) => rpc('fiscal_notice_candidates', company(companyId)),
     authorizedVouchers: (companyId, month) => rpc('authorized_vouchers', { ...company(companyId), p_month: month }),

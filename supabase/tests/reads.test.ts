@@ -377,6 +377,15 @@ describe('tesorería', () => {
       await same(u, () => Q.taxAccount(mock, userId(u), company), 'tax_account', [companyPg])
   })
 
+  it('el tablero de control (7d.1): este mes, el anterior, uno viejo y meses que no se pueden elegir', async () => {
+    const month = todayAR().slice(0, 7)
+    const [y, m] = month.split('-').map(Number)
+    const previous = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
+    for (const u of [...USERS, 'tesoreria2', 'impuestos2'])
+      for (const p of [month, previous, '2026-01', '2027-13', '2099-01'])
+        await same(u, () => Q.controlPanel(mock, userId(u), company, p), 'control_panel', [companyPg, p])
+  })
+
   it('el domicilio fiscal electrónico y los vencimientos para intimar (8f.1)', async () => {
     for (const u of [...USERS, 'tesoreria2', 'impuestos2']) {
       await same(u, () => Q.fiscalNotices(mock, userId(u), company), 'fiscal_notices', [companyPg])

@@ -90,6 +90,9 @@ export type {
   AuthorizedVoucher,
   TaxAccount,
   TaxAccountRow,
+  ControlPanel,
+  ControlArea,
+  ControlIndicator,
   FiscalNoticeRow,
   FiscalNoticeCandidateRow,
   ProductionCostRow,
@@ -262,6 +265,7 @@ const mockApi = {
   padron: (companyId: string) => query((db, u) => Q.padron(db, u, companyId)),
   pointsOfSale: (companyId: string) => query((db, u) => Q.pointsOfSale(db, u, companyId)),
   taxAccount: (companyId: string) => query((db, u) => Q.taxAccount(db, u, companyId)),
+  controlPanel: (companyId: string, period: string) => query((db, u) => Q.controlPanel(db, u, companyId, period)),
   fiscalNotices: (companyId: string) => query((db, u) => Q.fiscalNotices(db, u, companyId)),
   fiscalNoticesToIssue: (companyId: string) => query((db, u) => Q.fiscalNoticesToIssue(db, u, companyId)),
   authorizedVouchers: (companyId: string, month: string) =>

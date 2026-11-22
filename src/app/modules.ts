@@ -19,6 +19,7 @@ import {
   BookCheck,
   CalendarClock,
   FileCheck,
+  Gauge,
   Gavel,
   ClipboardList,
   Coins,
@@ -270,6 +271,7 @@ export const NAV: NavGroup[] = [
   {
     label: 'Control',
     items: [
+      { label: 'Tablero de control', path: 'control/tablero', icon: Gauge, permission: 'dashboard.read' },
       { label: 'Auditoría', path: 'auditoria', icon: History, permission: 'audit.read' },
       { label: 'Empresa', path: 'empresa', icon: Building2, permission: 'company.read' },
       { label: 'Panel docente', path: 'docente', icon: GraduationCap, supervisorOnly: true },

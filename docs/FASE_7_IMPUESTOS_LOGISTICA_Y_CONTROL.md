@@ -13,7 +13,7 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
 | 7a | Libros IVA compras y ventas por mes; declaración mensual de IVA (débito menos crédito y saldo a favor anterior) con su asiento al presentarla; pago por Tesorería | Impuestos sabe cuánto IVA se paga y de dónde sale | Hecho (simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 7b | Ingresos brutos simplificado (alícuota sobre las ventas netas del mes) con percepciones y retenciones sufridas (7b.1); calendario de obligaciones (IVA, ingresos brutos, cargas sociales y sueldos) con su estado (7b.2) | Nada vence sin que se vea | Hecho (29/10: 7b.1 y 7b.2, simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
 | 7c | Logística: transportistas y vehículos; hojas de ruta con los remitos despachados; entrega con conformidad o no entrega con motivo | El pedido termina cuando el cliente lo recibe | Hecho (29/10: 7c.1 y 7c.2, simulador, pantallas y Supabase con paridad; falta aplicarlo en la base publicada) |
-| 7d | Tablero de control: indicadores por área, comparación con el mes anterior y alertas | Gerencia ve la empresa entera en una pantalla | Pendiente |
+| 7d | Tablero de control: indicadores por área, comparación con el mes anterior y alertas | Gerencia ve la empresa entera en una pantalla | En curso: 7d.1 hecha (21/11: los indicadores del mes contra el anterior, desde el libro mayor y el banco); falta la 7d.2 (las alertas) |
 
 ## 2. IVA (7a)
 
@@ -81,6 +81,13 @@ Límites: el fisco es simulado (no hay conexión con organismos reales, ni CAE, 
   - Impuestos: IVA e ingresos brutos del mes y vencimientos.
 - **Alertas**: lo que requiere atención, con el enlace a cada caso (stock bajo el mínimo, facturas vencidas, falta de fondos, obligaciones vencidas).
 - Todo sale de los documentos y del libro mayor; cada indicador respeta lo que el usuario puede leer.
+- Decisiones de la implementación (21/11, **a validar**):
+  - Se hace en dos pasos: **7d.1** (los indicadores del mes contra el anterior) y **7d.2** (las alertas, con el enlace a cada caso, y lo que está vencido o pendiente hoy).
+  - **Quién lo ve:** el permiso `dashboard.read`, que ya tenían Gerencia y Auditoría y no usaba ninguna pantalla (y el docente). Cada área aparece si quien mira puede leer lo que la sostiene: el libro mayor (`ledger.read`) y, para el saldo según el banco, `bank.read`.
+  - **El mes:** se elige uno (por defecto, el actual) y se compara con el anterior. El mes en curso se mide hasta hoy; uno que todavía no empezó no se puede elegir.
+  - **7d.1, de dónde sale:** del libro mayor (los asientos registrados, por su fecha), para que cada número se pueda rastrear: lo que se movió en el mes (ventas, costo, resultado, costo laboral, intereses y multas) y los saldos al cierre (o a hoy). El saldo según el banco sale del Banco Aula.
+  - **7d.1, los indicadores:** **Resultados** (ventas de las cuentas 4.1, costo de lo vendido 5.1.01, margen bruto con su porcentaje y resultado del mes: todos los ingresos menos todos los egresos); **Personal** (costo laboral: sueldos, cargas sociales y mano de obra directa, 5.2.01 y 5.1.03); **Clientes y proveedores** (deuda de los clientes 1.1.03 y con los proveedores 2.1.01, al cierre); **Stock** (bienes de cambio 1.1.05, al cierre); **Tesorería y banco** (disponible en cajas y bancos 1.1.01 y saldo según el banco, al cierre, y préstamos bancarios 2.1.02); **Impuestos** (deudas fiscales 2.1.04 al cierre e intereses resarcitorios y multas fiscales del mes, 5.3.01.04 y 5.3.02.03). Cada uno con el valor del mes, el del anterior y la variación, en verde o en rojo según convenga que suba o que baje (sin color si no está claro).
+- Notas de la 7d.1 (21/11): **Control → Tablero de control** (`control/tablero`, `dashboard.read`; `controlPanel`/`control_panel`) con el mes elegido (por defecto, el actual; parámetro `mes`) y el anterior: seis áreas (Resultados, Personal, Clientes y proveedores, Stock, Tesorería y banco, Impuestos), cada indicador con el valor, el del mes anterior, la variación (con el porcentaje) y de qué cuentas sale; el margen bruto dice además qué parte de las ventas es. La suma por rubro (`private.ledger_net`: el código o sus subcuentas, por la fecha de los asientos registrados) es la misma en los dos lados. Base de datos: migración 113 (`20261117120000_tablero_control.sql`: `ledger_net`, `control_indicator` y `control_panel`).
 
 ## 6. Asientos automáticos (reglas base, a validar)
 
