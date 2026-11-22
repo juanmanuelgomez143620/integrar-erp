@@ -256,6 +256,21 @@ async function sameRead(
   expect(canonical(got), label).toEqual(canonical(want))
 }
 
+/** El tablero de control del mes en curso con sus alertas (7d.2): el mismo en los dos lados. */
+function samePanel(label: string, username: string) {
+  const period = todayAR().slice(0, 7)
+  return sameRead(
+    `el tablero de control ${label} (${username})`,
+    username,
+    (b) => b.api.controlPanel(pg(company), period),
+    (u) => Q.controlPanel(mock, u, company, period),
+  )
+}
+
+/** Las alertas de hoy del tablero que ve Gerencia, según el simulador. */
+const alerts = () => Q.controlPanel(mock, mockId('gerencia'), company, todayAR().slice(0, 7)).alerts
+const alertKeys = () => alerts().map((a) => a.key)
+
 /** Las órdenes pendientes del Banco Aula, en el orden en que llegaron: el mismo registro en los dos lados. */
 async function linkPendingBankOrders() {
   const orders = mock.bankMovements
@@ -3838,6 +3853,8 @@ describe('paridad de comandos', () => {
       )
     }
     await fineReads('notificada')
+    await samePanel('con la multa notificada', 'gerencia')
+    expect(alertKeys()).toContain('MULTAS')
     const payFine = (label: string, username: string) =>
       step(
         label,
@@ -3932,6 +3949,11 @@ describe('paridad de comandos', () => {
     const second = await createdReturn('la del mes pasado, por cuarta vez', input())
     expect(await present('presentar la corregida', 'contabilidad', second)).not.toBeNull()
     expect(await receive('el fisco acepta la corregida', 'impuestos2', second, { accept: true })).not.toBeNull()
+    // El tablero la avisa si ya venció sin pagar (7d.2).
+    await samePanel('con la declaración presentada sin pagar', 'gerencia')
+    expect(alertKeys().includes('DECLARACIONES_VENCIDAS')).toBe(
+      mock.documents.find((d) => d.id === second)!.tr!.due_date < todayAR(),
+    )
 
     // Pagarla (8e.2): por transferencia desde el Banco Aula; quién y SoD-10.
     const pay = (label: string, username: string) =>
@@ -4744,6 +4766,8 @@ describe('paridad de comandos', () => {
     ).not.toBeNull()
     await linkBankCharges()
     await view('la orden rechazada y la comisión', 'tesoreria')
+    await samePanel('con la orden rechazada', 'gerencia')
+    expect(alertKeys()).toContain('BANCO_RECHAZADAS')
 
     // Reenviarla: sólo quien opera el banco y sólo una rechazada; sin fondos, vuelve a rechazarse.
     expect(await resend('Gerencia no reenvía', 'gerencia', refused)).toBeNull()
@@ -4896,6 +4920,8 @@ describe('paridad de comandos', () => {
       pg(id),
     ])
     await loans('las cuotas vencidas', 'tesoreria2')
+    await samePanel('con las cuotas vencidas', 'gerencia')
+    expect(alertKeys()).toContain('CUOTAS_VENCIDAS')
     expect(await debit('Producción no opera el banco', 'produccion')).toBeNull()
     expect(await debit('Tesorería debita las vencidas', 'tesoreria2')).not.toBeNull()
     await linkBankCharges()
@@ -5298,6 +5324,22 @@ describe('paridad de comandos', () => {
     expect(await issue('la misma otra vez', 'impuestos2', first)).toBeNull()
     const two = await issued('otra intimación', second)
     await reads('con dos intimaciones')
+    // El tablero las avisa (7d.2): en amarillo mientras corre el plazo y en rojo si alguna lo tiene vencido.
+    const notices = async (label: string) => {
+      await samePanel(label, 'gerencia')
+      return alerts().find((a) => a.key === 'INTIMACIONES')
+    }
+    expect(await notices('con dos intimaciones')).toMatchObject({ severity: 'warning' })
+    // La segunda, con el plazo vencido ayer (sin tocar quién ni cuándo la modificó).
+    const yesterday = addDays(todayAR(), -1)
+    mock.fiscalNotices.find((n) => n.id === two)!.response_due = yesterday
+    await db.admin('alter table public.fiscal_notices disable trigger fiscal_notices_audit')
+    await db.admin('update public.fiscal_notices set response_due = $2 where id = $1', [pg(two), yesterday])
+    await db.admin('alter table public.fiscal_notices enable trigger fiscal_notices_audit')
+    expect(await notices('con una intimación vencida')).toMatchObject({
+      severity: 'danger',
+      detail: '1 tiene el plazo vencido.',
+    })
 
     // El descargo: lo escribe Impuestos de la empresa, no quien la emitió (SoD-16).
     const respond = (label: string, username: string, id: string, text: string) =>
@@ -5567,6 +5609,7 @@ describe('paridad de comandos', () => {
         (b) => b.api.cashFlow(companyPg, `${year}-01-01`, `${year}-12-31`),
         (u) => Q.cashFlow(mock, u, company, `${year}-01-01`, `${year}-12-31`),
       )
+      await samePanel('al final', username)
       await sameRead(
         `flujo de fondos proyectado (${username})`,
         username,

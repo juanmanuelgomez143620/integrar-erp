@@ -91,6 +91,7 @@ export type {
   TaxAccount,
   TaxAccountRow,
   ControlPanel,
+  ControlAlert,
   ControlArea,
   ControlIndicator,
   FiscalNoticeRow,

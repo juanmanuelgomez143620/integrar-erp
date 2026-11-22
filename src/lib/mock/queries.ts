@@ -5165,12 +5165,179 @@ export interface ControlPanel {
   to: string
   previous_to: string
   areas: ControlArea[]
+  /** Lo que requiere atención hoy (7d.2). */
+  alerts: ControlAlert[]
 }
 
 /** El último día de un mes (aaaa-mm). */
 function monthEnd(period: string) {
   const [y, m] = period.split('-').map(Number)
   return `${period}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`
+}
+
+/** Una alerta del tablero (7d.2): lo que requiere atención hoy, con el enlace a su pantalla. */
+export interface ControlAlert {
+  key:
+    | 'STOCK_MINIMO'
+    | 'CLIENTES_VENCIDOS'
+    | 'PROVEEDORES_VENCIDOS'
+    | 'FALTA_DE_FONDOS'
+    | 'DECLARACIONES_VENCIDAS'
+    | 'BANCO_RECHAZADAS'
+    | 'CUOTAS_VENCIDAS'
+    | 'INTIMACIONES'
+    | 'MULTAS'
+  /** En rojo lo que ya está en falta; en amarillo, lo demás. */
+  severity: 'danger' | 'warning'
+  title: string
+  detail: string
+  path: string
+}
+
+/** "1 producto" o "3 productos". */
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** "MP-001, MP-002, MP-003 y 2 más": los tres primeros códigos y cuántos quedan. */
+const someCodes = (codes: string[]) =>
+  `${codes.slice(0, 3).join(', ')}${codes.length > 3 ? ` y ${codes.length - 3} más` : ''}`
+
+/**
+ * Las alertas del tablero (7d.2): lo que requiere atención hoy, sin importar el mes elegido. Cada una
+ * aparece si quien mira puede leer su pantalla y sale de la misma lectura, para que el número coincida.
+ */
+function controlAlerts(db: DB, userId: string, companyId: string): ControlAlert[] {
+  const eff = effectivePermissions(db, userId, companyId)
+  const base = `/e/${db.companies.find((c) => c.id === companyId)!.slug}`
+  const today = todayAR()
+  const alerts: ControlAlert[] = []
+  if (can(eff, 'stock.read')) {
+    const low = db.products
+      .filter(
+        (p) =>
+          p.company_id === companyId &&
+          p.is_active &&
+          p.is_stockable &&
+          p.min_stock > 0 &&
+          stockOf(db, p.id).qty < p.min_stock,
+      )
+      .map((p) => p.code)
+      .sort(compareCodes)
+    if (low.length)
+      alerts.push({
+        key: 'STOCK_MINIMO',
+        severity: 'warning',
+        title: `${plural(low.length, 'producto', 'productos')} bajo el stock mínimo`,
+        detail: someCodes(low),
+        path: `${base}/stock`,
+      })
+  }
+  if (can(eff, 'receivable.read')) {
+    const late = listReceivables(db, userId, companyId).filter((r) => r.overdue > 0)
+    if (late.length)
+      alerts.push({
+        key: 'CLIENTES_VENCIDOS',
+        severity: 'warning',
+        title: `${money(round2(late.reduce((s, r) => s + r.overdue, 0)))} vencidos de los clientes`,
+        detail: `${plural(late.length, 'cliente', 'clientes')} con facturas vencidas.`,
+        path: `${base}/ventas/clientes`,
+      })
+  }
+  if (can(eff, 'payable.read')) {
+    const late = listPayables(db, userId, companyId).filter((r) => r.overdue > 0)
+    if (late.length)
+      alerts.push({
+        key: 'PROVEEDORES_VENCIDOS',
+        severity: 'danger',
+        title: `${money(round2(late.reduce((s, r) => s + r.overdue, 0)))} vencidos con los proveedores`,
+        detail: `${plural(late.length, 'proveedor', 'proveedores')} con facturas vencidas.`,
+        path: `${base}/pagos/proveedores`,
+      })
+  }
+  if (can(eff, 'treasury.read')) {
+    const projection = cashProjection(db, userId, companyId)
+    const bucket = projection.buckets.find((b) => b.key === projection.shortfall)
+    if (bucket)
+      alerts.push({
+        key: 'FALTA_DE_FONDOS',
+        severity: 'danger',
+        title: 'Falta de fondos en el flujo proyectado',
+        detail: `El saldo proyectado queda en negativo en el tramo «${bucket.label}».`,
+        path: `${base}/pagos/flujo-de-fondos`,
+      })
+  }
+  if (can(eff, 'tax_return.read')) {
+    const late = db.documents.filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'TAX_RETURN' &&
+        d.status === 'PRESENTADA' &&
+        d.tr!.due_date < today,
+    )
+    if (late.length)
+      alerts.push({
+        key: 'DECLARACIONES_VENCIDAS',
+        severity: 'danger',
+        title: `${plural(late.length, 'declaración vencida', 'declaraciones vencidas')} sin pagar`,
+        detail: `${money(round2(late.reduce((s, d) => s + d.total, 0)))}, más los intereses resarcitorios.`,
+        path: `${base}/impuestos/declaraciones`,
+      })
+  }
+  if (can(eff, 'bank.read')) {
+    const rejected = db.bankMovements.filter((m) => m.company_id === companyId && m.status === 'RECHAZADO')
+    if (rejected.length)
+      alerts.push({
+        key: 'BANCO_RECHAZADAS',
+        severity: 'danger',
+        title: `${plural(rejected.length, 'orden rechazada', 'órdenes rechazadas')} por el banco`,
+        detail:
+          rejected.length === 1
+            ? 'Por falta de fondos: hay que reenviarla cuando haya fondos o anular la operación.'
+            : 'Por falta de fondos: hay que reenviarlas cuando haya fondos o anular las operaciones.',
+        path: `${base}/pagos/banco-aula`,
+      })
+    const loans = new Set(
+      db.bankLoans.filter((l) => l.company_id === companyId && l.status === 'VIGENTE').map((l) => l.id),
+    )
+    const due = db.bankLoanInstallments.filter(
+      (i) => loans.has(i.loan_id) && i.status === 'PENDIENTE' && i.due_on <= today,
+    )
+    if (due.length)
+      alerts.push({
+        key: 'CUOTAS_VENCIDAS',
+        severity: 'warning',
+        title: `${plural(due.length, 'cuota vencida', 'cuotas vencidas')} de préstamos`,
+        detail: `${money(round2(due.reduce((s, i) => s + i.principal + i.interest, 0)))} para debitar.`,
+        path: `${base}/pagos/prestamos`,
+      })
+  }
+  if (can(eff, 'fisco.read')) {
+    const pending = db.fiscalNotices.filter((n) => n.company_id === companyId && n.status === 'PENDIENTE')
+    const overdue = pending.filter((n) => today > n.response_due).length
+    if (pending.length)
+      alerts.push({
+        key: 'INTIMACIONES',
+        severity: overdue ? 'danger' : 'warning',
+        title: `${plural(pending.length, 'intimación', 'intimaciones')} del fisco sin responder`,
+        detail: overdue
+          ? `${plural(overdue, 'tiene', 'tienen')} el plazo vencido.`
+          : 'Hay que cumplir o responder dentro del plazo.',
+        path: `${base}/fisco/domicilio-fiscal`,
+      })
+  }
+  if (can(eff, 'tax_fine.read')) {
+    const fines = db.documents.filter(
+      (d) => d.company_id === companyId && d.doc_type === 'TAX_FINE' && d.status === 'NOTIFICADA',
+    )
+    if (fines.length)
+      alerts.push({
+        key: 'MULTAS',
+        severity: 'warning',
+        title: `${plural(fines.length, 'multa', 'multas')} del fisco sin pagar`,
+        detail: `A pagar hoy: ${money(round2(fines.reduce((s, d) => s + fineDue(d.tf!, today), 0)))} (dentro de los 15 días de notificada, la multa se reduce a la mitad).`,
+        path: `${base}/impuestos/multas`,
+      })
+  }
+  return alerts
 }
 
 /**
@@ -5344,7 +5511,7 @@ export function controlPanel(db: DB, userId: string, companyId: string, period: 
         },
       ],
     })
-  return { period, previous, to, previous_to: previousTo, areas }
+  return { period, previous, to, previous_to: previousTo, areas, alerts: controlAlerts(db, userId, companyId) }
 }
 
 // ============================================================ Impuestos (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §2)

@@ -1,10 +1,10 @@
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Gauge } from 'lucide-react'
+import { CircleAlert, Gauge, TriangleAlert } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { EmptyState, Field, Loading, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
-import { api, type ControlArea, type ControlIndicator } from '@/lib/api'
+import { api, type ControlAlert, type ControlArea, type ControlIndicator } from '@/lib/api'
 import { date, money, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/app/company'
@@ -31,6 +31,45 @@ function Variation({ indicator }: { indicator: ControlIndicator }) {
       {diff > 0 ? '▲' : '▼'} {money(Math.abs(diff))}
       {pct !== null && ` (${diff > 0 ? '+' : '−'}${percent(Math.abs(pct))})`}
     </span>
+  )
+}
+
+/** Las alertas (7d.2): lo que requiere atención hoy, cada una con el enlace a su pantalla. */
+function AlertsSection({ alerts }: { alerts: ControlAlert[] }) {
+  return (
+    <Section
+      title="Alertas de hoy"
+      description="Lo que requiere atención, sin importar el mes elegido: en rojo lo que ya está en falta."
+      className="mb-4"
+    >
+      {alerts.length ? (
+        <ul className="grid gap-2 sm:grid-cols-2">
+          {alerts.map((a) => (
+            <li key={a.key}>
+              <Link
+                to={a.path}
+                className={cn(
+                  'flex gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-muted/50',
+                  a.severity === 'danger' ? 'border-red-200 bg-red-50/60' : 'border-amber-200 bg-amber-50/60',
+                )}
+              >
+                {a.severity === 'danger' ? (
+                  <CircleAlert className="mt-0.5 size-4 shrink-0 text-red-700" />
+                ) : (
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-700" />
+                )}
+                <span>
+                  <span className="font-medium">{a.title}</span>
+                  <span className="block text-xs text-muted-foreground">{a.detail}</span>
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">Nada que requiera atención hoy.</p>
+      )}
+    </Section>
   )
 }
 
@@ -104,6 +143,7 @@ export function ControlPanelPage() {
           </p>
         )}
       </Section>
+      {data && <AlertsSection alerts={data.alerts} />}
       {!valid ? null : !data ? (
         <Loading error={error} />
       ) : data.areas.length ? (
