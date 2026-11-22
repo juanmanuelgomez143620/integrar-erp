@@ -89,11 +89,11 @@ describe('empresa plantilla', () => {
       const l = lines(opening.id).find((x) => x.account_id === account(code))!
       return l.debit - l.credit
     }
-    expect(amount('1.1.05.01')).toBe(7310000)
-    expect(amount('1.1.05.02')).toBe(1896500)
-    expect(amount('1.1.05.04')).toBe(6110000)
-    expect(amount('1.1.05.05')).toBe(1680000)
-    expect(amount('3.2.02.01')).toBe(-30546500)
+    expect(amount('1.1.05.01')).toBe(9038000)
+    expect(amount('1.1.05.02')).toBe(2301900)
+    expect(amount('1.1.05.04')).toBe(14079000)
+    expect(amount('1.1.05.05')).toBe(2580000)
+    expect(amount('3.2.02.01')).toBe(-41548900)
     // Primero las cuentas del debe, después las del haber.
     const sides = lines(opening.id)
       .sort((a, b) => a.line_no - b.line_no)

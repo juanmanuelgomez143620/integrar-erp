@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9b.1).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9b.2).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261119120000_demo_template_clientes.sql'
+const target = process.argv[2] ?? '20261120120000_demo_template_productos.sql'
 
 const server = await createServer({
   root,
@@ -101,17 +101,16 @@ try {
         .map((l, i) => ({ code: productCode[l.product_id], qty: l.quantity_delta, cost: l.unit_cost, ord: i + 1 })),
     }))
 
-  const stockBlocks = initial
-    .map(
-      (adj) => `  perform private.post_initial_stock(v_id,
-    (select w.id from public.warehouses w where w.company_id = v_id and w.code = ${sql(adj.warehouse)}),
-    (select jsonb_agg(jsonb_build_object('product_id', p.id, 'quantity_delta', l.qty, 'unit_cost', l.cost) order by l.ord)
-       from (values
-${values(adj.lines, ['code', 'qty', 'cost', 'ord'])}
-       ) as l (code, qty, cost, ord)
-       join public.products p on p.company_id = v_id and p.code = l.code));`,
-    )
-    .join('\n')
+  // El inventario inicial, línea por línea, en el orden de sus ajustes (uno por depósito).
+  const stockRows = initial.flatMap((adj, a) =>
+    adj.lines.map((l) => ({
+      warehouse: adj.warehouse,
+      code: l.code,
+      qty: l.qty,
+      cost: l.cost,
+      ord: (a + 1) * 1000 + l.ord,
+    })),
+  )
 
   const out = `-- 16. Empresa plantilla de demostración: FORESTAL DEL NORTE SRL (datos ficticios),
 -- ahora con su contabilidad, y los datos del plan de cuentas básico y de la apertura.
@@ -314,6 +313,88 @@ begin
     select p_company, v_bom.id, r.line_no, w.id, r.hours
       from private.demo_bom_operation_rows() r join public.work_centers w on w.company_id = p_company and w.code = r.center
      where r.product = v_bom.code;
+  end loop;
+end;
+$$;
+
+-- ------------------------------------------------------------------ Los productos y el inventario inicial de la demo
+create or replace function private.demo_product_rows()
+returns table (code text, name text, description text, category text, product_type text, uom_code text,
+               is_stockable boolean, standard_cost numeric, sale_price numeric, vat_rate numeric, min_stock numeric,
+               reorder_qty numeric, supplier_code text, warehouse_code text, location text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select p.code::text, p.name::text, p.description::text, p.category::text, p.product_type::text, p.uom_code::text,
+         p.is_stockable::boolean, p.standard_cost::numeric, p.sale_price::numeric, p.vat_rate::numeric,
+         p.min_stock::numeric, p.reorder_qty::numeric, p.supplier_code::text, p.warehouse_code::text, p.location::text
+    from (values
+${values(productRows, ['code', 'name', 'description', 'category', 'product_type', 'uom_code', 'is_stockable', 'standard_cost', 'sale_price', 'vat_rate', 'min_stock', 'reorder_qty', 'supplier_code', 'warehouse_code', 'location'])}
+    ) as p (code, name, description, category, product_type, uom_code, is_stockable, standard_cost, sale_price, vat_rate,
+            min_stock, reorder_qty, supplier_code, warehouse_code, location)
+$$;
+
+-- Los productos de la demo que la empresa todavía no tiene, por código, con su proveedor y su depósito
+-- habituales (la empresa que crece, Fase 9b.2).
+create or replace function private.insert_demo_products(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.products (company_id, code, name, description, category, product_type, uom_code, is_stockable,
+                               standard_cost, sale_price, vat_rate, min_stock, reorder_qty, default_supplier_id,
+                               default_warehouse_id, location)
+  select p_company, r.code, r.name, r.description, r.category, r.product_type, r.uom_code, r.is_stockable,
+         r.standard_cost, r.sale_price, r.vat_rate, r.min_stock, r.reorder_qty, s.id, w.id, r.location
+    from private.demo_product_rows() r
+    left join public.suppliers s on s.company_id = p_company and s.code = r.supplier_code
+    left join public.warehouses w on w.company_id = p_company and w.code = r.warehouse_code
+   where not exists (select 1 from public.products x where x.company_id = p_company and x.code = r.code)
+$$;
+
+create or replace function private.demo_initial_stock_rows()
+returns table (warehouse text, code text, qty numeric, cost numeric, ord int)
+language sql
+immutable
+set search_path = ''
+as $$
+  select r.warehouse::text, r.code::text, r.qty::numeric, r.cost::numeric, r.ord::int
+    from (values
+${values(stockRows, ['warehouse', 'code', 'qty', 'cost', 'ord'])}
+    ) as r (warehouse, code, qty, cost, ord)
+$$;
+
+-- El inventario inicial de la demo de los productos que todavía no tuvieron stock: un ajuste
+-- "Inventario inicial" por depósito, en el orden de la demo. En la plantilla nueva son todos; en la
+-- que ya existía, los productos que suma la empresa que crece (Fase 9b.2).
+create or replace function private.post_demo_initial_stock(p_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_warehouse record;
+  v_lines jsonb;
+begin
+  for v_warehouse in
+    select r.warehouse, min(r.ord) as first_line from private.demo_initial_stock_rows() r
+     group by r.warehouse
+     order by 2
+  loop
+    select jsonb_agg(jsonb_build_object('product_id', p.id, 'quantity_delta', r.qty, 'unit_cost', r.cost) order by r.ord)
+      into v_lines
+      from private.demo_initial_stock_rows() r
+      join public.products p on p.company_id = p_company and p.code = r.code
+     where r.warehouse = v_warehouse.warehouse
+       and not exists (select 1 from public.stock_movements m where m.company_id = p_company and m.product_id = p.id);
+    if v_lines is not null then
+      perform private.post_initial_stock(p_company,
+        (select w.id from public.warehouses w where w.company_id = p_company and w.code = v_warehouse.warehouse),
+        v_lines);
+    end if;
   end loop;
 end;
 $$;
@@ -606,17 +687,8 @@ ${values(of(db.approvalRules), ['doc_type', 'level', 'min_amount', 'max_amount',
   -- Los proveedores y los clientes (Fase 9b.1: los del banco ficticio que suma la empresa que crece).
   perform private.insert_demo_partners(v_id);
 
-  insert into public.products (company_id, code, name, description, category, product_type, uom_code, is_stockable,
-                               standard_cost, sale_price, vat_rate, min_stock, reorder_qty, default_supplier_id,
-                               default_warehouse_id, location)
-  select v_id, p.code, p.name, p.description, p.category, p.product_type, p.uom_code, p.is_stockable,
-         p.standard_cost, p.sale_price::numeric, p.vat_rate, p.min_stock, p.reorder_qty::numeric, s.id, w.id, p.location
-    from (values
-${values(productRows, ['code', 'name', 'description', 'category', 'product_type', 'uom_code', 'is_stockable', 'standard_cost', 'sale_price', 'vat_rate', 'min_stock', 'reorder_qty', 'supplier_code', 'warehouse_code', 'location'])}
-    ) as p (code, name, description, category, product_type, uom_code, is_stockable, standard_cost, sale_price, vat_rate,
-            min_stock, reorder_qty, supplier_code, warehouse_code, location)
-    left join public.suppliers s on s.company_id = v_id and s.code = p.supplier_code
-    left join public.warehouses w on w.company_id = v_id and w.code = p.warehouse_code;
+  -- Los productos, con su proveedor y su depósito habituales (Fase 9b.2: las líneas nuevas).
+  perform private.insert_demo_products(v_id);
 
   -- Los centros de trabajo y las listas de materiales de los muebles, con sus horas.
   perform private.insert_demo_work_centers(v_id);
@@ -632,7 +704,7 @@ ${values(productRows, ['code', 'name', 'description', 'category', 'product_type'
 
   -- Inventario inicial documentado (un ajuste por depósito), contabilidad con su
   -- asiento de apertura y alertas de arranque.
-${stockBlocks}
+  perform private.post_demo_initial_stock(v_id);
   perform private.start_accounting(v_id);
   -- La cuenta en el Banco Aula, con el saldo inicial del asiento de apertura (Fase 8a).
   perform private.bank_open_account(v_id);

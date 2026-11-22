@@ -93,7 +93,7 @@ describe('Préstamos: el pedido de Gerencia', () => {
     expect(preview).toEqual(loanIndicators(db, companyId(), 1_000_000, 12))
     // La demo: buena liquidez, poca deuda y sin ventas en mayo (la cuota sobre ventas no se calcula).
     expect(preview).toMatchObject({
-      liquidity: 10.77,
+      liquidity: 11.85,
       debt_ratio: 0.04,
       installment: 106_552.17,
       sales: 0,
@@ -106,7 +106,7 @@ describe('Préstamos: el pedido de Gerencia', () => {
       amount: 1_000_000,
       months: 12,
       status: 'SOLICITADO',
-      liquidity: 10.77,
+      liquidity: 11.85,
       debt_ratio: 0.04,
       sales_share: null,
       requested_on: '2027-05-14',

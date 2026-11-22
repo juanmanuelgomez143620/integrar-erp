@@ -13,8 +13,8 @@ Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas):
 | Personal (legajos) | 11: la encargada general, 6 en el taller, 1 en el depósito, 1 chofer, 1 vendedora y 1 administrativa | **36**: taller 16, depósito 3, logística 5 (4 choferes y un coordinador), ventas 4, administración 6 (compras, tesorería, contabilidad e impuestos, RRHH) y 2 en la gerencia y la jefatura de planta |
 | Clientes | 10 | **40**, repartidos en zonas de reparto (9c), cada uno con su plazo y su límite de crédito; las listas de precios las sigue armando Ventas (4d) |
 | Proveedores | 10 | **20** |
-| Productos | 20 | **unos 35**: dos o tres líneas nuevas de muebles con sus materiales |
-| Listas de materiales y centros de trabajo | 4 y 3 | **unas 12 y 4** (un centro nuevo, por ejemplo tapicería) |
+| Productos | 20 | **35**: tres líneas nuevas de muebles (dormitorio, oficina y escolar, living con tapicería) con sus materiales |
+| Listas de materiales y centros de trabajo | 4 y 3 | **12 y 4** (el centro nuevo: tapicería) |
 | Vehículos, transportistas y choferes | 2, 2 y 1 | **4, 3 y 4** |
 | Puntos de venta | 1 (casa central) | el segundo, el del showroom de Posadas, lo pide Ventas y lo habilita Impuestos, como actividad (8d.2) |
 | Balance inicial | el de hoy | crece en proporción: más fondos y capital (en la 9a, para pagar al personal) y más stock y rodados (9b) |
@@ -26,7 +26,7 @@ Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas):
 |---|---|---|---|
 | 9a | Más personal: los legajos nuevos en todos los sectores, con sus categorías y convenios (madera, comercio y camioneros, como desde la 6d) | La liquidación de cada mes tiene más del triple de recibos: más trabajo para RRHH, Gerencia, Tesorería y Contabilidad | Hecha (22/11): 34 legajos (los dos de tapicería llegan con su centro en la 9b) y 80 millones más en el banco de la apertura |
 | 9b.1 | Más clientes y proveedores: los del banco de contribuyentes ficticios (`partner-bank.ts`), con su plazo y su límite de crédito; el padrón del fisco los incluye | Más a quién vender y a quién comprar | Hecha (22/11): 40 clientes y 20 proveedores |
-| 9b.2 | Más productos: las líneas nuevas con sus materiales, sus listas de materiales y el centro de trabajo nuevo (tapicería, con sus dos legajos), y el inventario inicial más grande | Más para vender y fabricar | Pendiente |
+| 9b.2 | Más productos: las líneas nuevas con sus materiales, sus listas de materiales y el centro de trabajo nuevo (tapicería, con sus dos legajos), y el inventario inicial más grande | Más para vender y fabricar | Hecha (22/11): 35 productos, 12 listas de materiales, 4 centros y 36 legajos |
 | 9c | Logística a escala: zonas de reparto (cada cliente en una, con sus días de reparto), más vehículos y choferes, y la hoja de ruta que propone los remitos de una zona | Varias hojas de ruta por semana | Pendiente |
 | 9d | La actividad del entorno: el docente genera la semana (más adelante, el sistema con un ritmo): los pedidos de los clientes llegan para que Ventas los revise, los proveedores avisan que entregan lo pedido y el personal tiene sus novedades del mes | El volumen no depende de que los estudiantes inventen operaciones; cada curso arranca con una semana de trabajo pendiente | Pendiente |
 
@@ -48,6 +48,19 @@ Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas):
 - **Las listas de precios no vienen armadas:** son el ejercicio de Ventas de la 4d (crear una lista, ajustarla por porcentaje y asignarla, por ejemplo a las mueblerías que revenden), y las empresas de los cursos no las copian de la plantilla.
 - **El segundo punto de venta no viene habilitado:** pedirlo (Ventas) y habilitarlo (Impuestos) es la actividad de la 8d.2; el showroom de Posadas ya está como cliente para sus ventas de mostrador.
 - **Dónde crece:** como en la 9a, la plantilla (en el simulador, al restablecer la demo, y en la base real, con una migración que le suma los proveedores y los clientes que le falten, por código, y el padrón) y las empresas que se creen después.
+
+### La 9b.2 en detalle (22/11, a validar)
+
+- **15 productos nuevos (35 en total), en tres líneas que piden los clientes nuevos:**
+  - Dormitorio (mueblerías y alojamientos): PT-005 Mesa de luz de pino con cajón y PT-006 Cómoda de MDF 4 cajones.
+  - Oficina y escolar (constructoras e instituciones): PT-007 Escritorio de MDF 1,20 m con cajón, PT-008 Biblioteca de MDF 5 estantes y PT-009 Pupitre escolar de pino y fenólico.
+  - Living con tapicería (mueblerías, decoración y alojamientos): PT-010 Silla tapizada de eucalipto, PT-011 Sillón tapizado de 1 cuerpo y PT-012 Sofá tapizado de 3 cuerpos.
+  - Sus materiales: MP-008 Tela chenille (por metro) y MP-009 Espuma de poliuretano D24 (de los proveedores de tapicería de la 9b.1), IN-008 Grampas y IN-009 Cincha elástica para tapicería, IN-010 Tapacanto de PVC e IN-011 Manija de aluminio; y MR-002 Colchón 1 plaza de reventa, para los alojamientos.
+- **Un centro de trabajo nuevo, Tapicería** ($ 8.200 la hora de mano de obra y $ 2.500 de carga fabril), con una categoría nueva (oficial tapicero, Madera, por hora) y sus dos legajos: el oficial y un ayudante. Con ellos, 36 legajos y 16 en el taller.
+- **Ocho listas de materiales nuevas (12 en total)**, con sus horas por centro: los sillones y el sofá pasan por corte, armado y tapicería; la silla tapizada, por los cuatro centros. El costo estándar de cada mueble es el de sus materiales más sus horas por las tarifas de los centros (como en los de antes: la mesa de comedor da $ 258.950 contra $ 260.000), y el precio de venta, el doble.
+- **El inventario inicial** suma unos $ 11 millones de stock (los productos nuevos, todos por encima de su mínimo), y con él crecen los bienes de cambio de la apertura. Los rodados crecen con los vehículos de la 9c.
+- **Dónde crece:** como en la 9a y la 9b.1. La plantilla de la base carga los productos por código y registra el inventario inicial de los que nunca tuvieron stock: la plantilla nueva y la que ya existía pasan por las mismas funciones.
+- Notas de la 9b.2 (22/11): el inventario inicial suma $ 11.002.400 a los bienes de cambio de la apertura (materias primas $ 9.038.000, insumos $ 2.301.900, productos terminados $ 14.079.000 y reventa $ 2.580.000). En el Mapa vivo, el taller sigue con sus tres máquinas: los dos de tapicería se dibujan junto a ellas. Base de datos: migraciones 120 (`20261120120000_demo_template_productos.sql`, la plantilla regenerada con `insert_demo_products`, `demo_initial_stock_rows` y `post_demo_initial_stock`) y 121 (`20261120120100_productos_plantilla.sql`, la plantilla que ya existía).
 
 ## 3. Decisiones (a validar)
 

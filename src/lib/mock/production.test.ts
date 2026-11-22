@@ -113,14 +113,29 @@ const entriesOf = (docId: string) =>
     )
 
 describe('listas de materiales', () => {
-  it('la demo trae las de los cuatro muebles, con el costo estimado de sus materiales', () => {
+  it('la demo trae las de los doce muebles, con el costo estimado de sus materiales', () => {
     const rows = listBoms(db, userId('produccion'), companyId())
     expect(rows.map((r) => [r.product.code, r.components, r.material_cost, r.conversion_cost])).toEqual([
       ['PT-001', 8, 188950, 70000],
       ['PT-002', 6, 39490, 22800],
       ['PT-003', 6, 255800, 54000],
       ['PT-004', 8, 234350, 55200],
+      // Las líneas nuevas de la empresa que crece (Fase 9b.2): su costo estándar es la suma.
+      ['PT-005', 10, 79550, 29600],
+      ['PT-006', 7, 229040, 46800],
+      ['PT-007', 7, 119760, 35200],
+      ['PT-008', 5, 184420, 36000],
+      ['PT-009', 7, 51100, 24400],
+      ['PT-010', 9, 48740, 25750],
+      ['PT-011', 9, 171270, 60750],
+      ['PT-012', 9, 431675, 121500],
     ])
+    // Cada mueble de las líneas nuevas cuesta lo que suman sus materiales y sus horas (con hasta un 1 % de
+    // redondeo); los de antes se fijaron con otros precios de los materiales.
+    for (const r of rows.filter((x) => x.product.code >= 'PT-005')) {
+      const standard = product(r.product.code).standard_cost
+      expect(Math.abs(standard - (r.material_cost + r.conversion_cost)), r.product.code).toBeLessThan(standard * 0.01)
+    }
     const detail = bomDetail(db, userId('deposito'), companyId(), 'PT-002')!
     expect(detail.lines.map((l) => `${l.component.code} ${l.quantity} ${l.line_cost}`)).toEqual([
       'MP-002 18 28800',
@@ -186,6 +201,14 @@ describe('listas de materiales', () => {
       'PT-001',
       'PT-003',
       'PT-004',
+      'PT-005',
+      'PT-006',
+      'PT-007',
+      'PT-008',
+      'PT-009',
+      'PT-010',
+      'PT-011',
+      'PT-012',
     ])
     expectBusinessError(
       () => cmdCreateProductionOrder(ctx('produccion'), companyId(), order('PT-002', 1), false),
@@ -230,18 +253,19 @@ describe('listas de materiales', () => {
     const course = cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º B', orientation: 'Gestión' })
     const { id } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
     const boms = db.boms.filter((b) => b.company_id === id)
-    expect(boms).toHaveLength(4)
+    expect(boms).toHaveLength(12)
     const lines = db.bomLines.filter((l) => boms.some((b) => b.id === l.bom_id))
-    expect(lines).toHaveLength(28)
+    expect(lines).toHaveLength(91)
     for (const l of lines) expect(db.products.find((p) => p.id === l.component_id)!.company_id).toBe(id)
     // Y sus centros de trabajo, con las horas de cada lista.
     expect(db.workCenters.filter((w) => w.company_id === id).map((w) => w.code)).toEqual([
       'CORTE',
       'ARMADO',
       'TERMINACION',
+      'TAPICERIA',
     ])
     const operations = db.bomOperations.filter((o) => boms.some((b) => b.id === o.bom_id))
-    expect(operations).toHaveLength(12)
+    expect(operations).toHaveLength(37)
     for (const o of operations) expect(db.workCenters.find((w) => w.id === o.work_center_id)!.company_id).toBe(id)
   })
 
@@ -263,7 +287,7 @@ describe('listas de materiales', () => {
     stored.accounts = stored.accounts.filter((a) => !a.code.startsWith('5.1.02'))
     const upgraded = upgradeDatabase(stored)!
     expect(upgraded.version).toBe(DB_VERSION)
-    expect(upgraded.boms).toHaveLength(4)
+    expect(upgraded.boms).toHaveLength(12)
     expect(upgraded.prdLines).toEqual([])
     expect(upgraded.postingRules.filter((r) => events.includes(r.event))).toHaveLength(8)
     expect(upgraded.accounts.filter((a) => a.code.startsWith('5.1.02')).map((a) => a.code)).toEqual([
@@ -271,8 +295,8 @@ describe('listas de materiales', () => {
       '5.1.02.01',
       '5.1.02.02',
     ])
-    expect(upgraded.workCenters).toHaveLength(3)
-    expect(upgraded.bomOperations).toHaveLength(12)
+    expect(upgraded.workCenters).toHaveLength(4)
+    expect(upgraded.bomOperations).toHaveLength(37)
   })
 })
 
@@ -477,11 +501,12 @@ describe('orden de producción', () => {
 })
 
 describe('centros de trabajo y costos de conversión', () => {
-  it('la demo trae tres centros; Producción los crea, modifica y desactiva', () => {
+  it('la demo trae cuatro centros; Producción los crea, modifica y desactiva', () => {
     expect(listWorkCenters(db, userId('contabilidad'), companyId()).map((w) => `${w.code} ${w.boms}`)).toEqual([
-      'ARMADO 4',
-      'CORTE 4',
-      'TERMINACION 4',
+      'ARMADO 12',
+      'CORTE 12',
+      'TAPICERIA 3',
+      'TERMINACION 10',
     ])
     const { id } = cmdSaveWorkCenter(ctx('produccion'), companyId(), {
       id: '',

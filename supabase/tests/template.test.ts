@@ -577,18 +577,18 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
   })
 
   it('tiene los mismos centros de trabajo y las mismas horas por lista que la demo', async () => {
-    expect(mockCenters).toHaveLength(3)
+    expect(mockCenters).toHaveLength(4)
     expect(await centers(template)).toEqual(mockCenters)
-    expect(mockOperations).toHaveLength(12)
+    expect(mockOperations).toHaveLength(37)
     expect(await operations(template)).toEqual(mockOperations)
   })
 
   it('tiene los mismos convenios, categorías y personal que la demo', async () => {
     expect(mockAgreements).toHaveLength(4)
     expect(await agreements(template)).toEqual(mockAgreements)
-    expect(mockCategories).toHaveLength(10)
+    expect(mockCategories).toHaveLength(11)
     expect(await categories(template)).toEqual(mockCategories)
-    expect(mockStaff).toHaveLength(34)
+    expect(mockStaff).toHaveLength(36)
     expect(await staff(template)).toEqual(mockStaff)
   })
 
@@ -630,6 +630,13 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
            union all select c.tax_id from public.customers c where c.company_id = $1 and c.code like 'CLI-1%')`,
         [template],
       )
+      // Los productos de la 9b.2 los tienen como proveedor habitual.
+      await db.admin(
+        `update public.products p set default_supplier_id = null
+           from public.suppliers s
+          where p.company_id = $1 and s.id = p.default_supplier_id and s.code like 'PRV-1%'`,
+        [template],
+      )
       await db.admin(`delete from public.suppliers where company_id = $1 and code like 'PRV-1%'`, [template])
       await db.admin(`delete from public.customers where company_id = $1 and code like 'CLI-1%'`, [template])
       expect(await codes('suppliers')).toHaveLength(10)
@@ -639,6 +646,25 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
       expect(await codes('suppliers')).toEqual(suppliers)
       expect(await codes('customers')).toEqual(customers)
       expect(await padron(template)).toEqual(mockPadron)
+    } finally {
+      await db.admin('rollback')
+    }
+  })
+
+  it('cargar otra vez los productos, sus listas y su inventario inicial no repite nada (9b.2)', async () => {
+    const tables = ['products', 'work_centers', 'boms', 'bom_lines', 'bom_operations', 'employees', 'stock_movements']
+    const counts = async () => Promise.all(tables.map((t) => count(t, template)))
+    const before = await counts()
+    expect(before.slice(0, 3)).toEqual([35, 4, 12])
+    await db.admin('begin')
+    try {
+      await db.admin(
+        `select private.insert_demo_products($1), private.insert_demo_work_centers($1), private.insert_demo_boms($1),
+                private.insert_demo_bom_operations($1), private.insert_demo_job_categories($1),
+                private.insert_demo_employees($1), private.post_demo_initial_stock($1)`,
+        [template],
+      )
+      expect(await counts()).toEqual(before)
     } finally {
       await db.admin('rollback')
     }

@@ -49,12 +49,15 @@ export const DEMO_JOB_CATEGORIES: {
   // La empresa crece (Fase 9a).
   { code: 'JEFE-PLANTA', name: 'Jefe de planta', agreement: 'FUERA', basic_salary: 1400000, is_direct_labor: false },
   { code: 'COORD-LOG', name: 'Coordinador de logística', agreement: 'CAMIONEROS', basic_salary: 1250000, is_direct_labor: false },
+  // La línea de living con tapicería (Fase 9b.2).
+  { code: 'OFICIAL-TAP', name: 'Oficial tapicero', agreement: 'MADERA', basic_salary: 6900, is_direct_labor: true },
 ]
 
 /**
  * El personal (a validar): los once del principio (seis en el taller, dos por centro de trabajo) y los
  * que suma la empresa que crece (Fase 9a): la jefatura de planta, ocho más en el taller, depósito,
- * logística, ventas y un administrativo en cada sector de la administración.
+ * logística, ventas y un administrativo en cada sector de la administración; y los dos de tapicería,
+ * con su centro de trabajo (9b.2).
  */
 // prettier-ignore
 export const DEMO_EMPLOYEES: {
@@ -100,4 +103,6 @@ export const DEMO_EMPLOYEES: {
   { file_number: 32, first_name: 'Karina', last_name: 'Juárez', hire_date: '2020-10-01', category: 'ADMIN', sector: 'CON', work_center: null },
   { file_number: 33, first_name: 'Mónica', last_name: 'Arce', hire_date: '2021-03-01', category: 'ADMIN', sector: 'IMP', work_center: null },
   { file_number: 34, first_name: 'Roxana', last_name: 'Barrios', hire_date: '2023-01-09', category: 'ADMIN', sector: 'RRH', work_center: null },
+  { file_number: 35, first_name: 'Hernán', last_name: 'Sena', hire_date: '2019-05-06', category: 'OFICIAL-TAP', sector: 'PRO', work_center: 'TAPICERIA' },
+  { file_number: 36, first_name: 'Lorena', last_name: 'Vallejos', hire_date: '2024-06-03', category: 'AYUDANTE', sector: 'PRO', work_center: 'TAPICERIA' },
 ]

@@ -93,14 +93,14 @@ const employeeInput = (over: Partial<EmployeeInput> = {}): EmployeeInput => ({
 })
 
 describe('la demo', () => {
-  it('trae los convenios, las categorías y el personal: catorce en el taller, cada uno en su centro', () => {
+  it('trae los convenios, las categorías y el personal: dieciséis en el taller, cada uno en su centro', () => {
     expect(
       listLaborAgreements(db, userId('rrhh'), companyId()).map((a) => [a.code, a.pay_basis, a.categories, a.employees]),
     ).toEqual([
       ['CAMIONEROS', 'MONTHLY', 2, 5],
       ['COMERCIO', 'MONTHLY', 2, 10],
       ['FUERA', 'MONTHLY', 2, 2],
-      ['MADERA', 'HOURLY', 4, 17],
+      ['MADERA', 'HOURLY', 5, 19],
     ])
     expect(
       listJobCategories(db, userId('rrhh'), companyId()).map((c) => [
@@ -112,21 +112,27 @@ describe('la demo', () => {
       ]),
     ).toEqual([
       ['ADMIN', 'COMERCIO', 1050000, false, 7],
-      ['AYUDANTE', 'MADERA', 5400, true, 4],
+      ['AYUDANTE', 'MADERA', 5400, true, 5],
       ['CHOFER', 'CAMIONEROS', 1150000, false, 4],
       ['COORD-LOG', 'CAMIONEROS', 1250000, false, 1],
       ['ENCARGADO', 'FUERA', 1500000, false, 1],
       ['JEFE-PLANTA', 'FUERA', 1400000, false, 1],
       ['MEDIO-OF', 'MADERA', 6250, true, 5],
       ['OFICIAL', 'MADERA', 7100, true, 5],
+      ['OFICIAL-TAP', 'MADERA', 6900, true, 1],
       ['OPERARIO', 'MADERA', 5570, false, 3],
       ['VENDEDOR', 'COMERCIO', 1000000, false, 3],
     ])
     const staff = listEmployees(db, userId('rrhh'), companyId())
-    expect(staff).toHaveLength(34)
-    expect(staff.map((e) => e.file_number)).toEqual(Array.from({ length: 34 }, (_, i) => i + 1))
-    // La empresa que crece (Fase 9a): el taller con catorce, la jefatura de planta sin centro de trabajo.
-    expect(staff.filter((e) => e.work_center).map((e) => e.work_center!.code)).toHaveLength(14)
+    expect(staff).toHaveLength(36)
+    expect(staff.map((e) => e.file_number)).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))
+    // La empresa que crece (Fases 9a y 9b.2): el taller con dieciséis (dos en tapicería), la jefatura
+    // de planta sin centro de trabajo.
+    expect(staff.filter((e) => e.work_center).map((e) => e.work_center!.code)).toHaveLength(16)
+    expect(staff.filter((e) => e.work_center?.code === 'TAPICERIA').map((e) => e.category.code)).toEqual([
+      'OFICIAL-TAP',
+      'AYUDANTE',
+    ])
     expect(staff.find((e) => e.file_number === 12)).toMatchObject({
       last_name: 'Domínguez',
       category: { code: 'JEFE-PLANTA', agreement_code: 'FUERA' },
@@ -161,7 +167,7 @@ describe('la demo', () => {
       insertEmployees(ctx('admin'), companyId(), DEMO_EMPLOYEES)
     }
     const staff = listEmployees(db, userId('rrhh'), companyId())
-    expect(staff.map((e) => e.file_number)).toEqual(Array.from({ length: 34 }, (_, i) => i + 1))
+    expect(staff.map((e) => e.file_number)).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))
     // Los de antes quedan como estaban (los mismos legajos, no copias).
     expect(staff.filter((e) => e.file_number <= 11).map((e) => e.id)).toEqual(before)
     expect(staff.find((e) => e.file_number === 23)).toMatchObject({ category: { code: 'COORD-LOG' } })
@@ -171,9 +177,9 @@ describe('la demo', () => {
     const course = cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º B', orientation: 'Gestión' })
     const { id } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
     expect(db.laborAgreements.filter((a) => a.company_id === id)).toHaveLength(4)
-    expect(db.jobCategories.filter((c) => c.company_id === id)).toHaveLength(10)
+    expect(db.jobCategories.filter((c) => c.company_id === id)).toHaveLength(11)
     const staff = db.employees.filter((e) => e.company_id === id)
-    expect(staff).toHaveLength(34)
+    expect(staff).toHaveLength(36)
     for (const e of staff) {
       const own = db.jobCategories.find((c) => c.id === e.category_id)!
       expect(own.company_id).toBe(id)
@@ -194,10 +200,10 @@ describe('la demo', () => {
     const upgraded = upgradeDatabase(stored)!
     expect(upgraded.version).toBe(DB_VERSION)
     expect(upgraded.laborAgreements).toHaveLength(4)
-    expect(upgraded.jobCategories).toHaveLength(10)
-    expect(upgraded.employees).toHaveLength(34)
+    expect(upgraded.jobCategories).toHaveLength(11)
+    expect(upgraded.employees).toHaveLength(36)
     // Una segunda vez no duplica nada.
-    expect(upgradeDatabase({ ...upgraded, version: 13 })!.employees).toHaveLength(34)
+    expect(upgradeDatabase({ ...upgraded, version: 13 })!.employees).toHaveLength(36)
   })
 
   it('al actualizar una base guardada (v17), cada categoría pasa a su convenio y se suma el chofer', () => {
@@ -319,15 +325,15 @@ describe('legajos', () => {
   it('alta con el número siguiente, cambios, validaciones y baja', () => {
     const { id } = cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput())
     const employee = db.employees.find((e) => e.id === id)!
-    expect(employee).toMatchObject({ file_number: 35, last_name: 'Acuña', status: 'ACTIVO' })
-    expect(db.audit.at(-1)!.summary).toBe('Dio de alta el legajo 35: Acuña, Rubén (Ayudante de taller)')
+    expect(employee).toMatchObject({ file_number: 37, last_name: 'Acuña', status: 'ACTIVO' })
+    expect(db.audit.at(-1)!.summary).toBe('Dio de alta el legajo 37: Acuña, Rubén (Ayudante de taller)')
     // Pasa a Medio oficial en Terminación.
     cmdSaveEmployee(
       ctx('rrhh'),
       companyId(),
       employeeInput({ id, category_id: category('MEDIO-OF').id, work_center_id: center('TERMINACION').id }),
     )
-    expect(db.audit.at(-1)).toMatchObject({ action: 'UPDATE', summary: 'Modificó el legajo 35 (Acuña, Rubén)' })
+    expect(db.audit.at(-1)).toMatchObject({ action: 'UPDATE', summary: 'Modificó el legajo 37 (Acuña, Rubén)' })
     expect(Object.keys(db.audit.at(-1)!.changes!)).toEqual(['category_id', 'work_center_id'])
 
     const save = (input: EmployeeInput) =>
@@ -387,13 +393,13 @@ describe('legajos', () => {
     )
     terminate('2027-05-10', 'Renuncia')
     expect(employee).toMatchObject({ status: 'BAJA', termination_date: '2027-05-10', termination_reason: 'Renuncia' })
-    expect(db.audit.at(-1)!.summary).toBe('Dio de baja el legajo 35 (Acuña, Rubén Darío) el 10/05/2027 — Renuncia')
+    expect(db.audit.at(-1)!.summary).toBe('Dio de baja el legajo 37 (Acuña, Rubén Darío) el 10/05/2027 — Renuncia')
     expectBusinessError(() => terminate('2027-05-12', 'Otra vez'), 'TRANSICION_INVALIDA')
     expectBusinessError(() => cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput({ id })), 'TRANSICION_INVALIDA')
     // Ya no cuenta como personal activo de su categoría.
     expect(listJobCategories(db, userId('rrhh'), companyId()).find((c) => c.code === 'MEDIO-OF')!.employees).toBe(5)
     // La antigüedad de un legajo dado de baja es la del día de la baja.
-    expect(listEmployees(db, userId('gerencia'), companyId()).find((e) => e.file_number === 35)).toMatchObject({
+    expect(listEmployees(db, userId('gerencia'), companyId()).find((e) => e.file_number === 37)).toMatchObject({
       status: 'BAJA',
       seniority_years: 0,
       termination_date: '2027-05-10',
@@ -402,13 +408,13 @@ describe('legajos', () => {
 
   it('permisos: RRHH da de alta; Gerencia, Contabilidad y Auditoría consultan; los demás no ven los legajos', () => {
     for (const username of ['gerencia', 'contabilidad', 'auditor'])
-      expect(listEmployees(db, userId(username), companyId())).toHaveLength(34)
+      expect(listEmployees(db, userId(username), companyId())).toHaveLength(36)
     for (const username of ['produccion', 'ventas', 'compras1'])
       expect(() => listEmployees(db, userId(username), companyId())).toThrow()
     for (const username of ['gerencia', 'produccion'])
       expectBusinessError(() => cmdSaveEmployee(ctx(username), companyId(), employeeInput()), 'SIN_PERMISO')
     // El número de legajo sigue al último aunque haya bajas.
-    cmdTerminateEmployee(ctx('rrhh'), companyId(), byFile(34).id, '2027-05-14', 'Fin del contrato')
-    expect(cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput()).id).toBe(byFile(35).id)
+    cmdTerminateEmployee(ctx('rrhh'), companyId(), byFile(36).id, '2027-05-14', 'Fin del contrato')
+    expect(cmdSaveEmployee(ctx('rrhh'), companyId(), employeeInput()).id).toBe(byFile(37).id)
   })
 })
