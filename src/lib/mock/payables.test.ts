@@ -345,7 +345,7 @@ describe('órdenes de pago', () => {
     ])
     expect(statement.pending).toEqual([])
     const bank = treasuryAccounts(db, userId('tesoreria'), companyId()).find((t) => t.account.code === '1.1.01.03')!
-    expect(bank.balance).toBe(12500000 + 300000 - 266200)
+    expect(bank.balance).toBe(92500000 + 300000 - 266200)
   })
 
   it('separación de funciones: quien prepara no aprueba y quien registró la factura no la paga', () => {

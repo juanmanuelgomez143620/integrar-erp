@@ -180,7 +180,7 @@ describe('liquidación de sueldos', () => {
     const doc = byNumber('LIQ-00001')
     expect(doc).toMatchObject({ status: 'BORRADOR', py: { period: '2027-05', rates: PAYROLL_DEFAULT_RATES } })
     const lines = payrollLines(db, doc.id)
-    expect(lines).toHaveLength(12)
+    expect(lines).toHaveLength(35)
     // El oficial, de Madera: por hora, con los porcentajes de su convenio.
     expect(lineOf(doc.id, 2)).toMatchObject({
       agreement_id: agreement('MADERA').id,
@@ -210,16 +210,16 @@ describe('liquidación de sueldos', () => {
       union_dues: 0,
       union_contribution: 0,
     })
-    expect(lineOf(doc.id, 12)).toMatchObject({ days_worked: 0, hours_worked: 123.2, seniority_years: 0, basic: 665280 })
+    expect(lineOf(doc.id, 35)).toMatchObject({ days_worked: 0, hours_worked: 123.2, seniority_years: 0, basic: 665280 })
     expect(doc.subtotal).toBe(Math.round(lines.reduce((s, l) => s + l.gross, 0) * 100) / 100)
     expect(doc.total).toBe(Math.round(lines.reduce((s, l) => s + l.net, 0) * 100) / 100)
-    expect(db.audit.at(-1)!.summary).toBe('Creó LIQ-00001: sueldos de 05/2027 (12 empleados)')
+    expect(db.audit.at(-1)!.summary).toBe('Creó LIQ-00001: sueldos de 05/2027 (35 empleados)')
     expect(db.tasks.filter((t) => t.document_id === doc.id).map((t) => t.title)).toEqual([
       'Enviar LIQ-00001 a autorizar',
     ])
     expect(listDocuments(db, userId('tesoreria'), companyId(), 'PAYROLL')[0]).toMatchObject({
       summary: 'Sueldos de 05/2027',
-      line_count: 12,
+      line_count: 35,
     })
   })
 
@@ -303,7 +303,7 @@ describe('liquidación de sueldos', () => {
       Math.round(rows.reduce((s, l) => s + value(l), 0) * 100) / 100
     const direct = lines.filter((l) => l.is_direct_labor)
     const others = lines.filter((l) => !l.is_direct_labor)
-    expect(direct).toHaveLength(6)
+    expect(direct).toHaveLength(14)
     // Las contribuciones incluyen la del convenio; lo retenido y lo contribuido al sindicato, en su cuenta.
     expect(entriesOf(id)).toEqual([
       [
@@ -648,9 +648,9 @@ describe('pago de sueldos y cargas sociales (Fase 6c)', () => {
     authorize(id)
     const view = report()
     expect(view.rows.map((r) => `${r.work_center?.code} ${r.employees}`)).toEqual([
-      'ARMADO 2',
-      'CORTE 2',
-      'TERMINACION 2',
+      'ARMADO 5',
+      'CORTE 4',
+      'TERMINACION 5',
     ])
     const direct = payrollLines(db, id).filter((l) => l.is_direct_labor)
     const corte = view.rows.find((r) => r.work_center?.code === 'CORTE')!

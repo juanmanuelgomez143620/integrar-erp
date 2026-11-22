@@ -586,10 +586,28 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
   it('tiene los mismos convenios, categorías y personal que la demo', async () => {
     expect(mockAgreements).toHaveLength(4)
     expect(await agreements(template)).toEqual(mockAgreements)
-    expect(mockCategories).toHaveLength(8)
+    expect(mockCategories).toHaveLength(10)
     expect(await categories(template)).toEqual(mockCategories)
-    expect(mockStaff).toHaveLength(11)
+    expect(mockStaff).toHaveLength(34)
     expect(await staff(template)).toEqual(mockStaff)
+  })
+
+  it('la plantilla que ya existía suma los legajos que le faltan, por número, sin repetir (9a)', async () => {
+    // Como estaba antes de la empresa que crece; se deshace al terminar.
+    await db.admin('begin')
+    try {
+      await db.admin('delete from public.employees where company_id = $1 and file_number > 11', [template])
+      await db.admin(
+        `delete from public.job_categories where company_id = $1 and code in ('JEFE-PLANTA', 'COORD-LOG')`,
+        [template],
+      )
+      expect(await staff(template)).toHaveLength(11)
+      for (let i = 0; i < 2; i++)
+        await db.admin('select private.insert_demo_job_categories($1), private.insert_demo_employees($1)', [template])
+      expect(await staff(template)).toEqual(mockStaff)
+    } finally {
+      await db.admin('rollback')
+    }
   })
 
   it('tiene los mismos transportistas y vehículos propios que la demo', async () => {
@@ -623,7 +641,7 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
   })
 
   it('calcula los cargos de un mes: la comisión, el impuesto y los intereses por descubierto (8b.1)', async () => {
-    // Como en src/lib/mock/bank.test.ts: un depósito de 300.000 y un pago de 13 millones el 14 de
+    // Como en src/lib/mock/bank.test.ts: un depósito de 300.000 y un pago de 93 millones el 14 de
     // mayo dejan la cuenta 200.000 en negativo hasta fin de mes (18 días). Se deshace al terminar.
     const year = mockBank.account.opened_on.slice(0, 4)
     const charges = async (period: string) =>
@@ -638,7 +656,7 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     try {
       for (const [direction, amount] of [
         ['CREDITO', 300_000],
-        ['DEBITO', 13_000_000],
+        ['DEBITO', 93_000_000],
       ] as const)
         await db.admin(
           `select private.bank_process_movement(
@@ -647,7 +665,7 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
              from public.bank_accounts b where b.company_id = $1`,
           [template, direction, amount, `${year}-05-14`],
         )
-      expect(await charges(`${year}-05`)).toEqual({ fee: 15_000, tax: 79_800, interest: 7_200 })
+      expect(await charges(`${year}-05`)).toEqual({ fee: 15_000, tax: 559_800, interest: 7_200 })
       // Abril, sin órdenes y con saldo: sólo la comisión.
       expect(await charges(`${year}-04`)).toEqual({ fee: 15_000, tax: 0, interest: 0 })
     } finally {

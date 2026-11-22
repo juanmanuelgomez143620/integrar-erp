@@ -8906,8 +8906,9 @@ export function insertDriver(
 }
 
 /**
- * Carga el personal de la demo si la empresa todavía no tiene legajos: cada uno con
- * su categoría, su sector y su centro de trabajo por código (si falta alguno, ese no).
+ * Carga los legajos de la demo que la empresa todavía no tiene, por número (la empresa que crece,
+ * Fase 9a): cada uno con su categoría, su sector y su centro de trabajo por código (si falta alguno,
+ * ese no).
  */
 export function insertEmployees(
   ctx: Ctx,
@@ -8923,8 +8924,8 @@ export function insertEmployees(
   }[],
 ) {
   const { db } = ctx
-  if (db.employees.some((e) => e.company_id === companyId)) return
   for (const row of rows) {
+    if (db.employees.some((e) => e.company_id === companyId && e.file_number === row.file_number)) continue
     const category = db.jobCategories.find((c) => c.company_id === companyId && c.code === row.category)
     const sector = db.sectors.find((s) => s.company_id === companyId && s.code === row.sector)
     const center = row.work_center

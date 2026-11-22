@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 8f.2).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9a).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261116120200_demo_template_multas.sql'
+const target = process.argv[2] ?? '20261118120000_demo_template_personal.sql'
 
 const server = await createServer({
   root,
@@ -399,9 +399,9 @@ ${values(DEMO_EMPLOYEES, ['file_number', 'first_name', 'last_name', 'hire_date',
     ) as e (file_number, first_name, last_name, hire_date, category, sector, work_center)
 $$;
 
--- El personal de la demo, si la empresa todavía no tiene legajos: cada uno con su
--- categoría, su sector y su centro de trabajo por código; si falta alguno, ese no
--- (insertEmployees).
+-- Los legajos de la demo que la empresa todavía no tiene, por número (la empresa que
+-- crece, Fase 9a): cada uno con su categoría, su sector y su centro de trabajo por
+-- código; si falta alguno, ese no (insertEmployees).
 create or replace function private.insert_demo_employees(p_company uuid)
 returns void
 language sql
@@ -415,7 +415,7 @@ as $$
     join public.job_categories c on c.company_id = p_company and c.code = r.category
     join public.sectors s on s.company_id = p_company and s.code = r.sector
     left join public.work_centers w on w.company_id = p_company and w.code = r.work_center
-   where not exists (select 1 from public.employees x where x.company_id = p_company)
+   where not exists (select 1 from public.employees x where x.company_id = p_company and x.file_number = r.file_number)
      and (r.work_center is null or w.id is not null)
 $$;
 

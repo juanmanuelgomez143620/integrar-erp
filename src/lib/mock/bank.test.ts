@@ -231,26 +231,26 @@ describe('Banco Aula: el extracto y la conciliación (8a.2)', () => {
     expect(may).toMatchObject({
       holder: { legal_name: 'Forestal del Norte SRL' },
       account: { number: 'CC 0001-000001', alias: 'FORESTAL.NORTE.BA' },
-      opening_balance: 12_500_000,
+      opening_balance: 92_500_000,
       debits: 0,
       credits: 400_000,
-      closing_balance: 12_900_000,
+      closing_balance: 92_900_000,
     })
     expect(may.lines.map((l) => [l.date, l.transaction_number, l.credit, l.balance])).toEqual([
-      ['2027-05-14', 'SIM-000001', 300_000, 12_800_000],
-      ['2027-05-14', 'SIM-000002', 100_000, 12_900_000],
+      ['2027-05-14', 'SIM-000001', 300_000, 92_800_000],
+      ['2027-05-14', 'SIM-000002', 100_000, 92_900_000],
     ])
     // Enero: el saldo inicial de la cuenta es su primera línea.
     const january = bankStatement(db, userId('contabilidad'), companyId(), '2027-01-01', '2027-01-31')!
     expect(january.opening_balance).toBe(0)
     expect(january.lines.map((l) => [l.concept, l.transaction_number, l.credit])).toEqual([
-      ['Saldo inicial de la cuenta', null, 12_500_000],
+      ['Saldo inicial de la cuenta', null, 92_500_000],
     ])
     // Un mes sin movimientos termina con el mismo saldo con que empezó.
     expect(bankStatement(db, userId('tesoreria'), companyId(), '2027-03-01', '2027-03-31')).toMatchObject({
-      opening_balance: 12_500_000,
+      opening_balance: 92_500_000,
       lines: [],
-      closing_balance: 12_500_000,
+      closing_balance: 92_500_000,
     })
   })
 
@@ -278,13 +278,13 @@ describe('Banco Aula: el extracto y la conciliación (8a.2)', () => {
       '2027-05-14',
     )!.bank!
     // El depósito de la demo todavía no está en el banco: el extracto sólo tiene el saldo inicial.
-    expect(bank.balance).toBe(12_500_000)
+    expect(bank.balance).toBe(92_500_000)
     expect(bank.lines.map((l) => l.concept)).toEqual(['Saldo inicial de la cuenta'])
   })
 })
 
 describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
-  /** Mayo con descubierto: el depósito de la demo y un pago de 13 millones, los dos procesados el 14/05. */
+  /** Mayo con descubierto: el depósito de la demo y un pago de 93 millones, los dos procesados el 14/05. */
   const mayInOverdraft = () => {
     cmdProcessBankOrders(ctx('tesoreria'), companyId(), [view().pending[0].id])
     const big = cmdCreateJournalEntry(
@@ -294,8 +294,8 @@ describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
         document_date: '2027-05-14',
         description: 'Pago de la ampliación del galpón con transferencia bancaria.',
         lines: [
-          { account_id: account('5.2.02.02'), debit: 13_000_000, credit: 0 },
-          { account_id: account('1.1.01.03'), debit: 0, credit: 13_000_000 },
+          { account_id: account('5.2.02.02'), debit: 93_000_000, credit: 0 },
+          { account_id: account('1.1.01.03'), debit: 0, credit: 93_000_000 },
         ],
       },
       true,
@@ -310,18 +310,18 @@ describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
     expect(view().balance).toBe(-200_000)
     travel('2027-06-03')
     expect(view().to_close).toBe('2027-05')
-    // Impuesto: 0,6 % de lo que movieron las órdenes (300.000 + 13.000.000). Intereses: 200.000 en
+    // Impuesto: 0,6 % de lo que movieron las órdenes (300.000 + 93.000.000). Intereses: 200.000 en
     // negativo del 14 al 31 de mayo (18 días) al 6 % mensual, con mes de 30 días.
-    expect(closeMay()).toEqual({ period: '2027-05', fee: 15_000, tax: 79_800, interest: 7_200 })
+    expect(closeMay()).toEqual({ period: '2027-05', fee: 15_000, tax: 559_800, interest: 7_200 })
     const v = view()
     expect(v.to_close).toBeNull()
     expect(v.movements.slice(0, 3).map((m) => [m.origin, m.charge, m.amount, m.processed_on])).toEqual([
       ['BANCO', 'INTERESES', 7_200, '2027-06-03'],
-      ['BANCO', 'IMPUESTO_DC', 79_800, '2027-06-03'],
+      ['BANCO', 'IMPUESTO_DC', 559_800, '2027-06-03'],
       ['BANCO', 'COMISION', 15_000, '2027-06-03'],
     ])
     expect(v.movements[2].concept).toBe('Comisión de mantenimiento de cuenta · 05/2027')
-    expect(v.balance).toBe(-302_000)
+    expect(v.balance).toBe(-782_000)
     expect(db.audit.at(-1)).toMatchObject({ action: 'CLOSE_MONTH', entity_type: 'bank_account' })
     const tasks = listTasks(db, userId('contabilidad'), companyId(), 'mine').filter(
       (t) => t.task_type === 'REGISTRAR_CARGOS_BANCO',
@@ -359,7 +359,7 @@ describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
     const charges = candidates().charges
     expect(charges.map((c) => [c.charge, c.amount])).toEqual([
       ['COMISION', 15_000],
-      ['IMPUESTO_DC', 79_800],
+      ['IMPUESTO_DC', 559_800],
       ['INTERESES', 7_200],
     ])
     const ids = charges.map((c) => c.id)
@@ -376,9 +376,9 @@ describe('Banco Aula: el cierre del mes y los cargos (8b.1)', () => {
         .sort((a, b) => a.line_no - b.line_no)
         .map((l) => [code(l.account_id), l.debit, l.credit]),
     ).toEqual([
-      ['5.3.01.03', 94_800, 0],
+      ['5.3.01.03', 574_800, 0],
       ['5.3.01.01', 7_200, 0],
-      ['1.1.01.03', 0, 102_000],
+      ['1.1.01.03', 0, 582_000],
     ])
     // Registra lo que el banco ya debitó: no le manda una orden nueva.
     expect(db.bankMovements.length).toBe(movements)
@@ -490,9 +490,9 @@ describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', (
   })
 
   it('sin fondos, el banco rechaza la orden: no la debita, cobra la comisión y avisa a Tesorería', () => {
-    const big = bankPayment(14_000_000)
+    const big = bankPayment(94_000_000)
     const order = orderOf(big.id)
-    // En el orden de llegada: primero el depósito de la demo (12.800.000) y después el pago, que
+    // En el orden de llegada: primero el depósito de la demo (92.800.000) y después el pago, que
     // supera el saldo más el acuerdo de descubierto (1.000.000).
     expect(
       cmdProcessBankOrders(
@@ -507,9 +507,9 @@ describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', (
     const v = view()
     expect(v.pending).toEqual([])
     expect(v.rejected.map((m) => [m.seq, m.status, m.amount, m.processed_on])).toEqual([
-      [order.seq, 'RECHAZADO', 14_000_000, '2027-05-14'],
+      [order.seq, 'RECHAZADO', 94_000_000, '2027-05-14'],
     ])
-    expect(v.balance).toBe(12_800_000 - 2_500)
+    expect(v.balance).toBe(92_800_000 - 2_500)
     expect(v.movements[0]).toMatchObject({
       origin: 'BANCO',
       charge: 'RECHAZO',
@@ -517,7 +517,7 @@ describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', (
       concept: `Comisión por rechazo de la orden N.º ${order.seq}`,
     })
     expect(db.audit.at(-1)!.summary).toBe(
-      `Procesó la orden del Banco Aula: SIM-000001 (crédito de ${money(300_000)}). Rechazó por falta de fondos la orden N.º ${order.seq} (débito de ${money(14_000_000)})`,
+      `Procesó la orden del Banco Aula: SIM-000001 (crédito de ${money(300_000)}). Rechazó por falta de fondos la orden N.º ${order.seq} (débito de ${money(94_000_000)})`,
     )
     // Tesorería: el aviso y la tarea; Contabilidad: la comisión, para registrarla desde la conciliación.
     const notices = db.notifications.filter((n) => n.type === 'ORDEN_RECHAZADA')
@@ -534,8 +534,8 @@ describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', (
   })
 
   it('la orden rechazada se resuelve anulando la operación o reenviándola cuando hay fondos', () => {
-    const first = bankPayment(14_000_000)
-    const second = bankPayment(13_900_000)
+    const first = bankPayment(94_000_000)
+    const second = bankPayment(93_900_000)
     cmdProcessBankOrders(
       ctx('tesoreria'),
       companyId(),
@@ -564,7 +564,7 @@ describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', (
     expectBusinessError(() => cmdProcessBankOrders(ctx('tesoreria'), companyId(), [order.id]), 'SEPARACION_FUNCIONES')
     expect(cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [order.id])).toEqual({ processed: 1, rejected: 0 })
     expect(db.audit.filter((a) => a.action === 'RESEND').map((a) => a.summary)).toEqual([
-      `Reenvió al Banco Aula la orden N.º ${order.seq} (débito de ${money(13_900_000)}), rechazada por falta de fondos`,
+      `Reenvió al Banco Aula la orden N.º ${order.seq} (débito de ${money(93_900_000)}), rechazada por falta de fondos`,
     ])
   })
 
@@ -573,7 +573,7 @@ describe('Banco Aula: cheques al cobro y rechazos por falta de fondos (8b.2)', (
     expect(op.total).toBeGreaterThan(100_000)
     const cheque = pendingOf(op.id).id
     // Un pago deja la cuenta 900.000 en descubierto: el cheque ya no entra en el acuerdo.
-    const big = bankPayment(13_400_000)
+    const big = bankPayment(93_400_000)
     cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [orderOf(big.id).id])
     expect(cmdProcessBankOrders(ctx('tesoreria2'), companyId(), [cheque])).toEqual({ processed: 0, rejected: 1 })
     expect(view().movements[0]).toMatchObject({

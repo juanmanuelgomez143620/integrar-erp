@@ -709,8 +709,8 @@ describe('Fisco: la cuenta corriente y el pago por el banco (8e.2)', () => {
     // El banco queda en el límite del descubierto y un depósito registrado espera en el banco: los
     // libros tienen fondos y el banco no.
     manualEntry('Pago de la ampliación del galpón con transferencia bancaria.', [
-      ['5.2.02.02', 13_800_000, 0],
-      ['1.1.01.03', 0, 13_800_000],
+      ['5.2.02.02', 93_800_000, 0],
+      ['1.1.01.03', 0, 93_800_000],
     ])
     cmdProcessBankOrders(
       ctx('tesoreria2'),

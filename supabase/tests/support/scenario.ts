@@ -279,7 +279,7 @@ export function buildScenario(): DB {
     journal_line_ids: openingLines(code),
     notes,
   })
-  E.cmdCreateBankReconciliation(as('contabilidad'), company, reconciliation('1.1.01.03', 12500000))
+  E.cmdCreateBankReconciliation(as('contabilidad'), company, reconciliation('1.1.01.03', 92500000))
   const count = E.cmdCreateBankReconciliation(
     as('contabilidad'),
     company,

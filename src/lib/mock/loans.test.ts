@@ -93,8 +93,8 @@ describe('Préstamos: el pedido de Gerencia', () => {
     expect(preview).toEqual(loanIndicators(db, companyId(), 1_000_000, 12))
     // La demo: buena liquidez, poca deuda y sin ventas en mayo (la cuota sobre ventas no se calcula).
     expect(preview).toMatchObject({
-      liquidity: 2.98,
-      debt_ratio: 0.07,
+      liquidity: 10.77,
+      debt_ratio: 0.04,
       installment: 106_552.17,
       sales: 0,
       sales_share: null,
@@ -106,8 +106,8 @@ describe('Préstamos: el pedido de Gerencia', () => {
       amount: 1_000_000,
       months: 12,
       status: 'SOLICITADO',
-      liquidity: 2.98,
-      debt_ratio: 0.07,
+      liquidity: 10.77,
+      debt_ratio: 0.04,
       sales_share: null,
       requested_on: '2027-05-14',
       own: true,
@@ -163,7 +163,7 @@ describe('Préstamos: la evaluación y la acreditación', () => {
       concept: 'Acreditación del préstamo N.º 2',
       processed_on: '2027-05-14',
     })
-    expect(v.balance).toBe(12_500_000 + 1_000_000)
+    expect(v.balance).toBe(92_500_000 + 1_000_000)
     const notice = db.notifications.find((n) => n.type === 'PRESTAMO' && n.recipient_user_id === userId('gerencia'))!
     expect(notice).toMatchObject({
       title: 'El Banco Aula aprobó el préstamo N.º 2',
@@ -217,7 +217,7 @@ describe('Préstamos: la evaluación y la acreditación', () => {
     expect(request()).toMatchObject({ status: 'VIGENTE' })
     expect(loans()[0]).toMatchObject({ rate: 48, months: 12, evaluated_by_name: null })
     expect(tasks('tesoreria2', 'EVALUAR_PRESTAMO')).toEqual([])
-    // Una deuda nueva de 25.000.000 deja la liquidez corriente por debajo de 1.
+    // Una deuda nueva de 120.000.000 deja la liquidez corriente por debajo de 1.
     cmdCreateJournalEntry(
       ctx('contabilidad'),
       companyId(),
@@ -225,8 +225,8 @@ describe('Préstamos: la evaluación y la acreditación', () => {
         document_date: '2027-05-14',
         description: 'Compra de una máquina a pagar.',
         lines: [
-          { account_id: account('1.2.01.01'), debit: 25_000_000, credit: 0 },
-          { account_id: account('2.1.05.01'), debit: 0, credit: 25_000_000 },
+          { account_id: account('1.2.01.01'), debit: 120_000_000, credit: 0 },
+          { account_id: account('2.1.05.01'), debit: 0, credit: 120_000_000 },
         ],
       },
       true,

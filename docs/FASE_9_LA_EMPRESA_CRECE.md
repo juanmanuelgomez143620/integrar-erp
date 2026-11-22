@@ -17,17 +17,27 @@ Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas);
 | Listas de materiales y centros de trabajo | 4 y 3 | **unas 12 y 4** (un centro nuevo, por ejemplo tapicería) |
 | Vehículos, transportistas y choferes | 2, 2 y 1 | **4, 3 y 4** |
 | Puntos de venta | 1 (casa central) | **2** (casa central y un local de ventas) |
-| Balance inicial | el de hoy | crece en proporción: más stock, rodados y capital |
+| Balance inicial | el de hoy | crece en proporción: más fondos y capital (en la 9a, para pagar al personal) y más stock y rodados (9b) |
 | Movimiento | lo que generan los estudiantes (y 2 pedidos de arranque) | además, **la actividad del entorno**: los pedidos de los clientes, las entregas de los proveedores y las novedades del personal de cada semana |
 
 ## 2. Pasos
 
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
-| 9a | Más personal: los legajos nuevos en todos los sectores, con sus categorías y convenios (madera, comercio y camioneros, como desde la 6d) | La liquidación de cada mes tiene más del triple de recibos: más trabajo para RRHH, Gerencia, Tesorería y Contabilidad | Pendiente |
+| 9a | Más personal: los legajos nuevos en todos los sectores, con sus categorías y convenios (madera, comercio y camioneros, como desde la 6d) | La liquidación de cada mes tiene más del triple de recibos: más trabajo para RRHH, Gerencia, Tesorería y Contabilidad | Hecha (22/11): 34 legajos (los dos de tapicería llegan con su centro en la 9b) y 80 millones más en el banco de la apertura |
 | 9b | Más clientes, proveedores y productos: los del banco de contribuyentes ficticios (`partner-bank.ts`, revisado antes), las listas de precios y los límites de crédito, las líneas nuevas con sus listas de materiales y el centro de trabajo nuevo, el segundo punto de venta y el balance inicial más grande; el padrón del fisco los incluye | Más para vender, comprar y fabricar | Pendiente |
 | 9c | Logística a escala: zonas de reparto (cada cliente en una, con sus días de reparto), más vehículos y choferes, y la hoja de ruta que propone los remitos de una zona | Varias hojas de ruta por semana | Pendiente |
 | 9d | La actividad del entorno: el docente genera la semana (más adelante, el sistema con un ritmo): los pedidos de los clientes llegan para que Ventas los revise, los proveedores avisan que entregan lo pedido y el personal tiene sus novedades del mes | El volumen no depende de que los estudiantes inventen operaciones; cada curso arranca con una semana de trabajo pendiente | Pendiente |
+
+### La 9a en detalle (escala confirmada por el usuario el 21/11; los nombres y las categorías, a validar)
+
+- **Dos categorías nuevas:** jefe de planta (fuera de convenio, $ 1.400.000) y coordinador de logística (Camioneros, $ 1.250.000). Las demás ya existen: oficial, medio oficial y ayudante del taller y operario de depósito (Madera, por hora), administrativo y vendedor (Comercio), chofer (Camioneros) y encargado general (fuera de convenio).
+- **23 legajos nuevos (12 a 34), con 34 en total:** la jefatura de planta (en Producción, sin centro de trabajo); 8 en el taller (2 en corte, 3 en armado y 3 en terminación: quedan 4, 5 y 5, con oficiales, medio oficiales y ayudantes); 2 operarios de depósito (3 en total); el coordinador y 3 choferes de logística (5); 2 vendedores y una administrativa de ventas (4); y un administrativo en Compras, Tesorería, Contabilidad, Impuestos y RRHH (6 con la de Contabilidad que ya estaba). Los dos que faltan para llegar a 36 son de tapicería y llegan con su centro de trabajo en la 9b.
+- Nombres inventados, sin repetir los de los usuarios de la demo ni los legajos de hoy; ingresos entre 2016 y 2025, para que la antigüedad varíe.
+- **Dónde crece:** la plantilla (en el simulador y en la base real, con una migración que le suma las categorías y los legajos que le falten, por número) y, con ella, las empresas que se creen después. Las empresas de los cursos ya creadas no cambian.
+- **Los fondos para pagarlos (a validar):** con 34 legajos, los sueldos netos de un mes son unos $ 34,6 millones, y el banco de la apertura tenía $ 12,5 millones: la empresa no podía pagar ni un mes. La apertura suma $ 80 millones en el banco, aportados por los socios (capital de $ 120 a $ 200 millones). El resto del balance (stock y rodados) crece en la 9b.
+- **La base guardada en el navegador no cambia:** sumarle el personal sin los fondos de la apertura la dejaría sin poder pagar los sueldos; la empresa grande llega al restablecer la demo (Administración) y con cada empresa nueva. La plantilla de la base real sí suma el personal, porque nadie la opera: sólo se copia, y cada empresa nueva arma su propia apertura, ya con los fondos nuevos.
+- Notas de la 9a (22/11): `DEMO_EMPLOYEES` y `DEMO_JOB_CATEGORIES` (`src/lib/domain/employees.ts`) y `OPENING_BALANCES`; la carga de los legajos de la demo pasa a ser "los que falten, por número" (`insertEmployees` y `private.insert_demo_employees`). Las pruebas que contaban con el saldo chico de la apertura para provocar rechazos por falta de fondos corren sus importes los mismos 80 millones. Base de datos: migraciones 115 (`20261118120000_demo_template_personal.sql`, la plantilla regenerada) y 116 (`20261118120100_personal_plantilla.sql`, la plantilla que ya existía suma lo que le falta).
 
 ## 3. Decisiones (a validar)
 
