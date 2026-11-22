@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9b.2).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9c.1).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261120120000_demo_template_productos.sql'
+const target = process.argv[2] ?? '20261121120100_demo_template_zonas.sql'
 
 const server = await createServer({
   root,
@@ -78,6 +78,10 @@ try {
   const warehouses = of(db.warehouses)
   const warehouseCode = Object.fromEntries(warehouses.map((w) => [w.id, w.code]))
   const suppliers = of(db.suppliers)
+  // Las zonas de reparto (Fase 9c.1), con sus días como arreglo de Postgres, y la de cada cliente por código.
+  const zones = of(db.deliveryZones).map((z) => ({ ...z, days: `{${z.delivery_days.join(',')}}` }))
+  const zoneCode = Object.fromEntries(zones.map((z) => [z.id, z.code]))
+  const customerRows = of(db.customers).map((c) => ({ ...c, zone_code: zoneCode[c.zone_id] ?? null }))
   const supplierCode = Object.fromEntries(suppliers.map((s) => [s.id, s.code]))
   const products = of(db.products)
   const productCode = Object.fromEntries(products.map((p) => [p.id, p.code]))
@@ -417,21 +421,64 @@ ${values(suppliers, ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_conditio
             contact_name, payment_terms_days, lead_time_days, category, notes)
 $$;
 
+-- Las zonas de reparto de la demo (Fase 9c.1, a validar).
+create or replace function private.demo_zone_rows()
+returns table (code text, name text, delivery_days smallint[], notes text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select z.code::text, z.name::text, z.days::smallint[], z.notes::text
+    from (values
+${values(zones, ['code', 'name', 'days', 'notes'])}
+    ) as z (code, name, days, notes)
+$$;
+
+-- Las zonas de reparto de la demo que la empresa todavía no tiene, por código (insertDeliveryZones).
+create or replace function private.insert_demo_zones(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.delivery_zones (company_id, code, name, delivery_days, notes)
+  select p_company, r.code, r.name, r.delivery_days, r.notes
+    from private.demo_zone_rows() r
+   where not exists (select 1 from public.delivery_zones z where z.company_id = p_company and z.code = r.code)
+$$;
+
+-- Suma la zona de reparto de cada cliente (Fase 9c.1): cambia lo que devuelve.
+drop function if exists private.demo_customer_rows();
 create or replace function private.demo_customer_rows()
 returns table (code text, legal_name text, trade_name text, tax_id text, vat_condition text, address_line text,
                city text, province text, phone text, email text, contact_name text, payment_terms_days int,
-               credit_limit numeric, notes text)
+               credit_limit numeric, notes text, zone_code text)
 language sql
 immutable
 set search_path = ''
 as $$
   select c.code::text, c.legal_name::text, c.trade_name::text, c.tax_id::text, c.vat_condition::text,
          c.address_line::text, c.city::text, c.province::text, c.phone::text, c.email::text, c.contact_name::text,
-         c.payment_terms_days::int, c.credit_limit::numeric, c.notes::text
+         c.payment_terms_days::int, c.credit_limit::numeric, c.notes::text, c.zone_code::text
     from (values
-${values(of(db.customers), ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_condition', 'address_line', 'city', 'province', 'phone', 'email', 'contact_name', 'payment_terms_days', 'credit_limit', 'notes'])}
+${values(customerRows, ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_condition', 'address_line', 'city', 'province', 'phone', 'email', 'contact_name', 'payment_terms_days', 'credit_limit', 'notes', 'zone_code'])}
     ) as c (code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province, phone, email,
-            contact_name, payment_terms_days, credit_limit, notes)
+            contact_name, payment_terms_days, credit_limit, notes, zone_code)
+$$;
+
+-- Los clientes de la demo que todavía no tienen zona de reparto reciben la suya, por código (la
+-- plantilla que ya existía, Fase 9c.1).
+create or replace function private.assign_demo_zones(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.customers c
+     set zone_id = z.id
+    from private.demo_customer_rows() r
+    join public.delivery_zones z on z.company_id = p_company and z.code = r.zone_code
+   where c.company_id = p_company and c.code = r.code and c.zone_id is null
 $$;
 
 -- Los proveedores y los clientes de la demo que la empresa todavía no tiene, por código (la empresa
@@ -450,10 +497,11 @@ as $$
     from private.demo_supplier_rows() r
    where not exists (select 1 from public.suppliers s where s.company_id = p_company and s.code = r.code);
   insert into public.customers (company_id, code, legal_name, trade_name, tax_id, vat_condition, address_line, city,
-                                province, phone, email, contact_name, payment_terms_days, credit_limit, notes)
+                                province, phone, email, contact_name, payment_terms_days, credit_limit, notes, zone_id)
   select p_company, r.code, r.legal_name, r.trade_name, r.tax_id, r.vat_condition, r.address_line, r.city, r.province,
-         r.phone, r.email, r.contact_name, r.payment_terms_days, r.credit_limit, r.notes
+         r.phone, r.email, r.contact_name, r.payment_terms_days, r.credit_limit, r.notes, z.id
     from private.demo_customer_rows() r
+    left join public.delivery_zones z on z.company_id = p_company and z.code = r.zone_code
    where not exists (select 1 from public.customers c where c.company_id = p_company and c.code = r.code);
 $$;
 
@@ -684,7 +732,9 @@ ${values(
 ${values(of(db.approvalRules), ['doc_type', 'level', 'min_amount', 'max_amount', 'approver_role', 'require_different_user', 'description'])}
     ) as r (doc_type, level, min_amount, max_amount, approver_role, require_different_user, description);
 
-  -- Los proveedores y los clientes (Fase 9b.1: los del banco ficticio que suma la empresa que crece).
+  -- Las zonas de reparto (Fase 9c.1), y los proveedores y los clientes (Fase 9b.1: los del banco
+  -- ficticio que suma la empresa que crece), cada cliente en su zona.
+  perform private.insert_demo_zones(v_id);
   perform private.insert_demo_partners(v_id);
 
   -- Los productos, con su proveedor y su depósito habituales (Fase 9b.2: las líneas nuevas).

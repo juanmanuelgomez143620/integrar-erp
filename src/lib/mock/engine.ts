@@ -34,6 +34,7 @@ import {
   VAT_CONDITIONS,
   VAT_RATES,
   permissionModule,
+  weekdaysLabel,
   type TransitionInfo,
 } from '../domain/catalog'
 import {
@@ -1729,6 +1730,13 @@ function masterData(
     if (!list || (!list.is_active && priceListId !== (previous as T.Customer | undefined)?.price_list_id))
       fail('DATO_INVALIDO', 'La lista de precios debe estar activa y pertenecer a esta empresa.')
   }
+  // Lo mismo con la zona de reparto (Fase 9c.1): "" es "sin zona".
+  const zoneId = kind === 'customer' ? text('zone_id') || null : null
+  if (zoneId) {
+    const zone = db.deliveryZones.find((z) => z.id === zoneId && z.company_id === companyId)
+    if (!zone || (!zone.is_active && zoneId !== (previous as T.Customer | undefined)?.zone_id))
+      fail('DATO_INVALIDO', 'La zona de reparto debe estar activa y pertenecer a esta empresa.')
+  }
   return {
     legal_name: text('legal_name'),
     trade_name: text('trade_name'),
@@ -1743,7 +1751,7 @@ function masterData(
     payment_terms_days: number('payment_terms_days', 0, true),
     notes: text('notes'),
     ...(kind === 'customer'
-      ? { credit_limit: number('credit_limit', null), price_list_id: priceListId }
+      ? { credit_limit: number('credit_limit', null), price_list_id: priceListId, zone_id: zoneId }
       : { category: text('category'), lead_time_days: number('lead_time_days', null, true) }),
   }
 }
@@ -7556,6 +7564,99 @@ export function cmdSetVehicleActive(ctx: Ctx, companyId: string, vehicleId: stri
   })
 }
 
+// ============================================================ Zonas de reparto (Fase 9c.1, docs/FASE_9_LA_EMPRESA_CRECE.md)
+
+export interface DeliveryZoneInput {
+  /** Vacío para una nueva. */
+  id: string
+  code: string
+  name: string
+  /** Los días de reparto: de lunes (1) a sábado (6). */
+  delivery_days: number[]
+  notes: string
+}
+
+export const deliveryZoneLabel = (z: T.DeliveryZone) => `${z.code} ${z.name}`
+
+/** Logística da de alta o modifica una zona de reparto, con sus días (los permisos del transporte). */
+export function cmdSaveDeliveryZone(ctx: Ctx, companyId: string, input: DeliveryZoneInput) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, input.id ? 'carrier.update' : 'carrier.create')
+  const existing = input.id ? db.deliveryZones.find((z) => z.id === input.id && z.company_id === companyId) : undefined
+  if (input.id && !existing) fail('DATO_INVALIDO', 'La zona de reparto no existe.')
+  const code = input.code.trim().toUpperCase()
+  if (!/^[A-Z0-9-]{1,12}$/.test(code))
+    fail('DATO_INVALIDO', 'El código de la zona tiene de 1 a 12 letras, números o guiones.')
+  if (db.deliveryZones.some((z) => z.company_id === companyId && z.code === code && z.id !== existing?.id))
+    fail('DATO_INVALIDO', `Ya existe una zona de reparto con el código ${code}.`)
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 60) fail('DATO_INVALIDO', 'El nombre de la zona tiene de 2 a 60 caracteres.')
+  const days = input.delivery_days
+  if (!Array.isArray(days) || !days.length || days.some((d) => !Number.isInteger(d) || d < 1 || d > 6))
+    fail('DATO_INVALIDO', 'Elegí al menos un día de reparto, de lunes a sábado.')
+  const deliveryDays = [...new Set(days)].sort((a, b) => a - b)
+  const notes = input.notes.trim()
+  if (notes.length > 200) fail('DATO_INVALIDO', 'La nota de la zona tiene hasta 200 caracteres.')
+  const fields = { code, name, delivery_days: deliveryDays, notes }
+  if (existing) {
+    const changes = diff(existing, { ...existing, ...fields }, ['code', 'name', 'delivery_days', 'notes'])
+    if (!Object.keys(changes).length) return { id: existing.id }
+    Object.assign(existing, fields, { updated_at: ctx.now, updated_by: ctx.userId })
+    logAudit(ctx, {
+      company_id: companyId,
+      actor,
+      action: 'UPDATE',
+      entity_type: 'delivery_zone',
+      entity_id: existing.id,
+      entity_label: deliveryZoneLabel(existing),
+      summary: `Modificó la zona de reparto ${deliveryZoneLabel(existing)}`,
+      changes,
+    })
+    return { id: existing.id }
+  }
+  const zone: T.DeliveryZone = {
+    id: uid(),
+    company_id: companyId,
+    ...fields,
+    is_active: true,
+    created_at: ctx.now,
+    created_by: ctx.userId,
+    updated_at: ctx.now,
+    updated_by: ctx.userId,
+  }
+  db.deliveryZones.push(zone)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'delivery_zone',
+    entity_id: zone.id,
+    entity_label: deliveryZoneLabel(zone),
+    summary: `Dio de alta la zona de reparto ${deliveryZoneLabel(zone)}: ${weekdaysLabel(deliveryDays)}`,
+  })
+  return { id: zone.id }
+}
+
+/** Una zona desactivada no se asigna a clientes nuevos; los que la tienen la conservan. */
+export function cmdSetDeliveryZoneActive(ctx: Ctx, companyId: string, zoneId: string, active: boolean) {
+  const { db } = ctx
+  const actor = requirePermission(ctx, companyId, 'carrier.update')
+  const zone = db.deliveryZones.find((z) => z.id === zoneId && z.company_id === companyId)
+  if (!zone) fail('DATO_INVALIDO', 'La zona de reparto no existe.')
+  if (typeof active !== 'boolean') fail('DATO_INVALIDO', 'Indicá si la zona está activa.')
+  if (zone.is_active === active) return
+  Object.assign(zone, { is_active: active, updated_at: ctx.now, updated_by: ctx.userId })
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: active ? 'ACTIVATE' : 'DEACTIVATE',
+    entity_type: 'delivery_zone',
+    entity_id: zone.id,
+    entity_label: deliveryZoneLabel(zone),
+    summary: `${active ? 'Activó' : 'Desactivó'} la zona de reparto ${deliveryZoneLabel(zone)}`,
+  })
+}
+
 /** Carga los transportistas de la demo que la empresa todavía no tiene (por código). */
 export function insertCarriers(
   ctx: Ctx,
@@ -11058,8 +11159,14 @@ export function cmdCreateCompanyFromTemplate(ctx: Ctx, input: { course_id: strin
   copy(db.approvalRules)
   for (const m of of(db.companyModules)) db.companyModules.push({ ...m, company_id: companyId })
   const supplierIds = copy(db.suppliers, () => audited)
-  // Las listas de precios no se copian: los clientes empiezan sin lista (como en la base).
-  copy(db.customers, () => ({ ...audited, price_list_id: null }))
+  // Las listas de precios no se copian: los clientes empiezan sin lista (como en la base). Las zonas de
+  // reparto sí (Fase 9c.1), con la de cada cliente.
+  const zoneIds = copy(db.deliveryZones, () => audited)
+  copy(db.customers, (c) => ({
+    ...audited,
+    price_list_id: null,
+    zone_id: c.zone_id ? (zoneIds.get(c.zone_id) ?? null) : null,
+  }))
   const productIds = copy(db.products, (p) => ({
     ...audited,
     default_supplier_id: p.default_supplier_id ? (supplierIds.get(p.default_supplier_id) ?? null) : null,

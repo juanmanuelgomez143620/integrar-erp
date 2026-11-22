@@ -10,13 +10,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTable } from '@/components/common/data-table'
 import { Field, Mono } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, commands } from '@/lib/api'
+import { api, commands, type DeliveryZoneRow } from '@/lib/api'
+import { WEEKDAYS, weekdaysLabel } from '@/lib/domain/catalog'
 import type { Carrier, Vehicle } from '@/lib/domain/types'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -24,11 +26,15 @@ import { useCompany } from '@/app/company'
 const status = (active: boolean) =>
   active ? <StatusBadge label="Activo" badge="success" /> : <StatusBadge label="Inactivo" badge="neutral" />
 
-/** Los transportistas (fletes contratados) y los vehículos propios (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §4). */
+/**
+ * Los transportistas (fletes contratados) y los vehículos propios (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §4),
+ * y las zonas de reparto con sus días (Fase 9c.1).
+ */
 export function TransportPage() {
   const company = useCompany()
   const [carrier, setCarrier] = useState<Carrier | 'new' | null>(null)
   const [vehicle, setVehicle] = useState<Vehicle | 'new' | null>(null)
+  const [zone, setZone] = useState<DeliveryZoneRow | 'new' | null>(null)
   const carriers = useQuery({
     queryKey: ['carriers', company.companyId],
     queryFn: () => api.carriers(company.companyId),
@@ -37,6 +43,10 @@ export function TransportPage() {
     queryKey: ['vehicles', company.companyId],
     queryFn: () => api.vehicles(company.companyId),
   })
+  const zones = useQuery({
+    queryKey: ['delivery-zones', company.companyId],
+    queryFn: () => api.deliveryZones(company.companyId),
+  })
   const canCreate = company.can('carrier.create')
   const canEdit = company.can('carrier.update')
   return (
@@ -44,12 +54,13 @@ export function TransportPage() {
       <PageHeader
         crumbs={[{ label: 'Inicio', to: company.to() }, { label: 'Logística' }, { label: 'Transporte' }]}
         title="Transporte"
-        description="Con qué sale el reparto: los fletes contratados y los vehículos propios, que maneja un chofer del legajo. No se borran: se desactivan y una hoja de ruta nueva ya no los usa. Los datos son ficticios."
+        description="Con qué sale el reparto y adónde: los fletes contratados, los vehículos propios (que maneja un chofer del legajo) y las zonas de reparto con sus días. No se borran: se desactivan y una hoja de ruta nueva ya no los usa. Los datos son ficticios."
       />
       <Tabs defaultValue="carriers">
         <TabsList>
           <TabsTrigger value="carriers">Transportistas</TabsTrigger>
           <TabsTrigger value="vehicles">Vehículos propios</TabsTrigger>
+          <TabsTrigger value="zones">Zonas de reparto</TabsTrigger>
         </TabsList>
         <TabsContent value="carriers" className="mt-3">
           <DataTable<Carrier>
@@ -102,6 +113,48 @@ export function TransportPage() {
             ]}
           />
         </TabsContent>
+        <TabsContent value="zones" className="mt-3">
+          <DataTable<DeliveryZoneRow>
+            rows={zones.data ?? []}
+            loading={zones.isLoading}
+            error={zones.error}
+            rowKey={(r) => r.id}
+            search={(r) => `${r.code} ${r.name} ${r.notes}`}
+            searchPlaceholder="Buscar zona…"
+            onRowClick={canEdit ? (r) => setZone(r) : undefined}
+            empty="Todavía no hay zonas de reparto: cada hoja de ruta se arma eligiendo los remitos a mano."
+            toolbar={
+              canCreate ? (
+                <Button size="sm" onClick={() => setZone('new')}>
+                  <Plus /> Nueva zona
+                </Button>
+              ) : undefined
+            }
+            columns={[
+              { key: 'code', header: 'Código', sort: (r) => r.code, cell: (r) => <Mono>{r.code}</Mono> },
+              {
+                key: 'name',
+                header: 'Zona',
+                sort: (r) => r.name,
+                cell: (r) => (
+                  <span>
+                    {r.name}
+                    {r.notes && <span className="block text-xs text-muted-foreground">{r.notes}</span>}
+                  </span>
+                ),
+              },
+              { key: 'days', header: 'Días de reparto', cell: (r) => weekdaysLabel(r.delivery_days) },
+              {
+                key: 'customers',
+                header: 'Clientes',
+                align: 'right',
+                sort: (r) => r.customers,
+                cell: (r) => <span className="tabular">{r.customers}</span>,
+              },
+              { key: 'status', header: 'Estado', cell: (r) => status(r.is_active) },
+            ]}
+          />
+        </TabsContent>
       </Tabs>
       {carrier && (
         <CarrierDialog
@@ -116,6 +169,9 @@ export function TransportPage() {
           open={!!vehicle}
           onOpenChange={(o) => !o && setVehicle(null)}
         />
+      )}
+      {zone && (
+        <ZoneDialog zone={zone === 'new' ? null : zone} open={!!zone} onOpenChange={(o) => !o && setZone(null)} />
       )}
     </>
   )
@@ -221,6 +277,80 @@ function CarrierDialog({
         <DialogActions
           active={carrier?.is_active}
           onToggle={() => setActive.mutate([!carrier!.is_active])}
+          onClose={() => onOpenChange(false)}
+          onSave={() => save.mutate([])}
+          valid={valid}
+          pending={save.isPending || setActive.isPending}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Una zona de reparto: el código, el nombre, los días en que se reparte y una nota (Fase 9c.1). */
+function ZoneDialog({
+  zone,
+  open,
+  onOpenChange,
+}: {
+  zone: DeliveryZoneRow | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const company = useCompany()
+  const [code, setCode] = useState(zone?.code ?? '')
+  const [name, setName] = useState(zone?.name ?? '')
+  const [days, setDays] = useState<number[]>(zone?.delivery_days ?? [])
+  const [notes, setNotes] = useState(zone?.notes ?? '')
+  const save = useCommand(
+    () => commands.saveDeliveryZone(company.companyId, { id: zone?.id ?? '', code, name, delivery_days: days, notes }),
+    { success: 'Zona guardada.', onSuccess: () => onOpenChange(false) },
+  )
+  const setActive = useCommand(
+    (active: boolean) => commands.setDeliveryZoneActive(company.companyId, zone!.id, active),
+    {
+      success: TOGGLED,
+      onSuccess: () => onOpenChange(false),
+    },
+  )
+  const toggleDay = (day: number) =>
+    setDays((d) => (d.includes(day) ? d.filter((x) => x !== day) : [...d, day].sort((a, b) => a - b)))
+  const valid = !!code.trim() && name.trim().length >= 2 && days.length > 0
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{zone ? `Zona ${zone.code}` : 'Nueva zona de reparto'}</DialogTitle>
+          <DialogDescription>
+            Las localidades que se visitan juntas y los días en que sale el reparto. Ventas elige la zona de cada
+            cliente en su ficha.
+            {zone ? ` Hoy tiene ${zone.customers} ${zone.customers === 1 ? 'cliente' : 'clientes'}.` : ''}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
+          <Field label="Código" required hint="Por ejemplo, Z-NOR.">
+            <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={12} />
+          </Field>
+          <Field label="Nombre" required>
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+          </Field>
+        </div>
+        <Field label="Días de reparto" required hint="Al menos uno.">
+          <div className="flex flex-wrap gap-3">
+            {WEEKDAYS.map((d) => (
+              <label key={d.day} className="flex items-center gap-1.5 text-sm">
+                <Checkbox checked={days.includes(d.day)} onCheckedChange={() => toggleDay(d.day)} />
+                {d.label}
+              </label>
+            ))}
+          </div>
+        </Field>
+        <Field label="Nota" hint="Opcional: el recorrido, lo que conviene saber.">
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={200} />
+        </Field>
+        <DialogActions
+          active={zone?.is_active}
+          onToggle={() => setActive.mutate([!zone!.is_active])}
           onClose={() => onOpenChange(false)}
           onSave={() => save.mutate([])}
           valid={valid}

@@ -18,8 +18,8 @@ import { Field, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { StatusBadge } from '@/components/common/status-badge'
-import { api, commands, type DeliveryView, type DocumentDetail } from '@/lib/api'
-import { DELIVERY_STATUSES } from '@/lib/domain/catalog'
+import { api, commands, type DeliveryView, type DocumentDetail, type RouteCandidate } from '@/lib/api'
+import { DELIVERY_STATUSES, weekdaysLabel } from '@/lib/domain/catalog'
 import { todayAR } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -56,6 +56,19 @@ export function RouteSheetFormPage() {
   })
   const drivers = useQuery({ queryKey: ['drivers', company.companyId], queryFn: () => api.drivers(company.companyId) })
   const byId = useMemo(() => new Map((candidates.data ?? []).map((c) => [c.id, c])), [candidates.data])
+  // Las zonas de los remitos para repartir (Fase 9c.1): elegir una marca sus remitos.
+  const zones = useMemo(() => {
+    const seen = new Map<string, NonNullable<RouteCandidate['zone']>>()
+    for (const c of candidates.data ?? []) if (c.zone && !seen.has(c.zone.id)) seen.set(c.zone.id, c.zone)
+    return [...seen.values()].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0))
+  }, [candidates.data])
+  const [zoneId, setZoneId] = useState('')
+  const proposeZone = (id: string) => {
+    setZoneId(id)
+    if (!id) return
+    const ofZone = (candidates.data ?? []).filter((c) => c.zone?.id === id).map((c) => c.id)
+    setStops((s) => [...s, ...ofZone.filter((x) => !s.includes(x))])
+  }
   const create = useCommand(
     () =>
       commands.createRouteSheet(company.companyId, {
@@ -159,6 +172,20 @@ export function RouteSheetFormPage() {
             title="Remitos despachados pendientes de entrega"
             description="Los más viejos primero. Un remito que no se entregó en otra hoja vuelve a aparecer acá, con el motivo."
             bodyClassName="p-0"
+            actions={
+              zones.length ? (
+                <SimpleSelect
+                  value={zoneId}
+                  onChange={proposeZone}
+                  emptyLabel="Proponer los de una zona…"
+                  options={zones.map((z) => ({
+                    value: z.id,
+                    label: `${z.code} · ${z.name} (${weekdaysLabel(z.delivery_days)})`,
+                  }))}
+                  aria-label="Proponer los remitos de una zona"
+                />
+              ) : undefined
+            }
           >
             {candidates.data && candidates.data.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">
@@ -173,6 +200,7 @@ export function RouteSheetFormPage() {
                       <TableHead className="text-xs">Remito</TableHead>
                       <TableHead className="text-xs">Cliente</TableHead>
                       <TableHead className="text-xs">Entregar en</TableHead>
+                      <TableHead className="text-xs">Zona</TableHead>
                       <TableHead className="text-xs">Pedido</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -198,6 +226,15 @@ export function RouteSheetFormPage() {
                         <TableCell>{c.customer.legal_name}</TableCell>
                         <TableCell className="text-xs">
                           {c.customer.address_line}, {c.customer.city}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {c.zone ? (
+                            <span title={`${c.zone.name}: ${weekdaysLabel(c.zone.delivery_days)}`}>
+                              <Mono>{c.zone.code}</Mono>
+                            </span>
+                          ) : (
+                            '—'
+                          )}
                         </TableCell>
                         <TableCell>
                           <Mono>{c.sales_order}</Mono>

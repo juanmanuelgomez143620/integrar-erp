@@ -113,6 +113,7 @@ async function snapshot(company: string) {
     'tax_returns',
     'carriers',
     'vehicles',
+    'delivery_zones',
     'route_sheets',
     'route_sheet_lines',
     'bank_accounts',
@@ -336,6 +337,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_document_ids: `{${B.productionOrder}}`,
     p_period: '2027-05',
     p_carrier_id: B.carrier,
+    p_zone_id: B.zone,
     p_vehicle_id: B.vehicle,
     // El préstamo que se evalúa es el pedido de B.
     p_loan_id: B.loan,
@@ -730,6 +732,7 @@ beforeAll(async () => {
   ).id
   // El transporte de B: un transportista y el camión de la demo.
   B.carrier = (await one(`select id from public.carriers where company_id = $1 and code = 'TR-001'`, [B.id])).id
+  B.zone = (await one(`select id from public.delivery_zones where company_id = $1 and code = 'Z-ELD'`, [B.id])).id
   B.taxpayer = (await one(`select id from public.taxpayers where company_id = $1 limit 1`, [B.id])).id
   B.vehicle = (await one(`select id from public.vehicles where company_id = $1 and code = 'CAM-01'`, [B.id])).id
   B.bankMovement = (await one(`select id from public.bank_movements where company_id = $1 limit 1`, [B.id])).id

@@ -10,7 +10,7 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Field } from '@/components/common/blocks'
 import { SimpleSelect } from '@/components/common/pickers'
 import { api, commands } from '@/lib/api'
-import { VAT_CONDITIONS } from '@/lib/domain/catalog'
+import { VAT_CONDITIONS, weekdaysLabel } from '@/lib/domain/catalog'
 import type { Customer, Supplier, VatCondition } from '@/lib/domain/types'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
@@ -34,6 +34,7 @@ const schema = z.object({
   payment_terms_days: z.string().regex(/^\d*$/, 'Sólo números'),
   credit_limit: z.string().regex(/^\d*$/, 'Sólo números'),
   price_list_id: z.string(),
+  zone_id: z.string(),
   lead_time_days: z.string().regex(/^\d*$/, 'Sólo números'),
   category: z.string(),
   notes: z.string(),
@@ -56,6 +57,7 @@ const empty: FormValues = {
   payment_terms_days: '30',
   credit_limit: '',
   price_list_id: '',
+  zone_id: '',
   lead_time_days: '',
   category: '',
   notes: '',
@@ -84,6 +86,12 @@ export function PartnerSheet({
     queryKey: ['price-lists', company.companyId],
     queryFn: () => api.priceLists(company.companyId),
     enabled: open && kind === 'customer' && company.can('price_list.read'),
+  })
+  // Las zonas de reparto (Fase 9c.1): las ve quien ve los clientes; si no se cargan, no se toca la que tenga.
+  const zones = useQuery({
+    queryKey: ['delivery-zones', company.companyId],
+    queryFn: () => api.deliveryZones(company.companyId),
+    enabled: open && kind === 'customer',
   })
 
   useEffect(() => {
@@ -120,6 +128,7 @@ export function PartnerSheet({
           ? {
               credit_limit: values.credit_limit ? Number(values.credit_limit) : null,
               ...(lists.data ? { price_list_id: values.price_list_id } : {}),
+              ...(zones.data ? { zone_id: values.zone_id } : {}),
             }
           : {
               category: values.category,
@@ -137,6 +146,7 @@ export function PartnerSheet({
   // Lo que dice el padrón del fisco de ese CUIT (Fase 8d), para quien lo puede leer.
   const padron = usePadron()
   const priceListId = useWatch({ control: form.control, name: 'price_list_id' })
+  const zoneId = useWatch({ control: form.control, name: 'zone_id' })
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
@@ -201,6 +211,25 @@ export function PartnerSheet({
               <Field label="Límite de crédito ($)" error={err.credit_limit?.message}>
                 <Input inputMode="numeric" {...form.register('credit_limit')} />
               </Field>
+              {zones.data && (
+                <Field
+                  label="Zona de reparto"
+                  className="sm:col-span-2"
+                  hint="Logística arma las hojas de ruta por zona, en sus días de reparto."
+                >
+                  <SimpleSelect
+                    value={zoneId}
+                    onChange={(v: string) => form.setValue('zone_id', v)}
+                    emptyLabel="Sin zona: se reparte a mano"
+                    options={zones.data
+                      .filter((z) => z.is_active || z.id === zoneId)
+                      .map((z) => ({
+                        value: z.id,
+                        label: `${z.code} · ${z.name} (${weekdaysLabel(z.delivery_days)})${z.is_active ? '' : ' (inactiva)'}`,
+                      }))}
+                  />
+                </Field>
+              )}
               {lists.data && (
                 <Field
                   label="Lista de precios"

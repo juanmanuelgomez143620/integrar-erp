@@ -1051,6 +1051,22 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
 
 // ---------------------------------------------------------------- Etiquetas
 
+/** Los días de reparto de una zona (Fase 9c.1): de lunes (1) a sábado (6). */
+export const WEEKDAYS: { day: number; label: string; short: string }[] = [
+  { day: 1, label: 'lunes', short: 'Lu' },
+  { day: 2, label: 'martes', short: 'Ma' },
+  { day: 3, label: 'miércoles', short: 'Mi' },
+  { day: 4, label: 'jueves', short: 'Ju' },
+  { day: 5, label: 'viernes', short: 'Vi' },
+  { day: 6, label: 'sábado', short: 'Sá' },
+]
+
+/** "lunes, miércoles y viernes": los días de reparto de una zona. */
+export function weekdaysLabel(days: number[]) {
+  const names = WEEKDAYS.filter((d) => days.includes(d.day)).map((d) => d.label)
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} y ${names.at(-1)}`
+}
+
 export const VAT_CONDITIONS: Record<VatCondition, string> = {
   RESPONSABLE_INSCRIPTO: 'Responsable inscripto',
   MONOTRIBUTO: 'Monotributo',

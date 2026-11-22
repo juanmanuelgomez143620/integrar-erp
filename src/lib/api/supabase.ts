@@ -297,6 +297,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     laborAgreements: (companyId) => rpc('labor_agreements_list', company(companyId)),
     carriers: (companyId) => rpc('carriers_list', company(companyId)),
     vehicles: (companyId) => rpc('vehicles_list', company(companyId)),
+    deliveryZones: (companyId) => rpc('delivery_zones_list', company(companyId)),
     routeSheetCandidates: (companyId) => rpc('route_sheet_candidates', company(companyId)),
     drivers: (companyId) => rpc('drivers_list', company(companyId)),
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
@@ -444,6 +445,9 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     setLaborAgreementActive: (companyId, agreementId, active) =>
       rpc('labor_agreement_set_active', { ...company(companyId), p_agreement_id: agreementId, p_active: active }),
     saveCarrier: (companyId, input) => rpc('carrier_save', { ...company(companyId), p_input: input }),
+    saveDeliveryZone: (companyId, input) => rpc('delivery_zone_save', { ...company(companyId), p_input: input }),
+    setDeliveryZoneActive: (companyId, zoneId, active) =>
+      rpc('delivery_zone_set_active', { ...company(companyId), p_zone_id: zoneId, p_active: active }),
     setCarrierActive: (companyId, carrierId, active) =>
       rpc('carrier_set_active', { ...company(companyId), p_carrier_id: carrierId, p_active: active }),
     saveVehicle: (companyId, input) => rpc('vehicle_save', { ...company(companyId), p_input: input }),

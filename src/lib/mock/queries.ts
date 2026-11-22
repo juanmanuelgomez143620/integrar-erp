@@ -6083,6 +6083,25 @@ export function listVehicles(db: DB, userId: string, companyId: string): T.Vehic
   return db.vehicles.filter((v) => v.company_id === companyId).sort((a, b) => compareCodes(a.code, b.code))
 }
 
+/** Una zona de reparto con cuántos clientes activos tiene (Fase 9c.1). */
+export interface DeliveryZoneRow extends T.DeliveryZone {
+  customers: number
+}
+
+/**
+ * Las zonas de reparto de la empresa, por código: las ve quien ve el transporte (Logística) o los clientes
+ * (Ventas, que elige la zona de cada uno).
+ */
+export function listDeliveryZones(db: DB, userId: string, companyId: string): DeliveryZoneRow[] {
+  const eff = effectivePermissions(db, userId, companyId)
+  if (!can(eff, 'carrier.read') && !can(eff, 'customer.read'))
+    throw new Error('Tu rol no tiene acceso a esta información.')
+  return db.deliveryZones
+    .filter((z) => z.company_id === companyId)
+    .sort((a, b) => compareCodes(a.code, b.code))
+    .map((z) => ({ ...z, customers: db.customers.filter((c) => c.zone_id === z.id && c.is_active).length }))
+}
+
 /** Un remito que se puede llevar en una hoja de ruta nueva. */
 export interface RouteCandidate {
   id: string
@@ -6090,8 +6109,16 @@ export interface RouteCandidate {
   dispatched_at: string | null
   sales_order: string
   customer: { code: string; legal_name: string; address_line: string; city: string; phone: string }
+  /** La zona de reparto del cliente, con sus días (Fase 9c.1). */
+  zone: { id: string; code: string; name: string; delivery_days: number[] } | null
   /** La hoja anterior en que no se entregó, con el motivo (si la hubo). */
   last_attempt: { display_number: string; reason: string } | null
+}
+
+/** La zona de reparto, como la ve una hoja de ruta. */
+function zoneOf(db: DB, zoneId: string | null) {
+  const z = zoneId ? db.deliveryZones.find((x) => x.id === zoneId) : undefined
+  return z ? { id: z.id, code: z.code, name: z.name, delivery_days: z.delivery_days } : null
 }
 
 /** Los remitos despachados pendientes de entrega, para armar una hoja de ruta: los más viejos primero. */
@@ -6108,6 +6135,7 @@ export function routeSheetCandidates(db: DB, userId: string, companyId: string):
       dispatched_at: d.dn!.dispatched_at,
       sales_order: db.documents.find((o) => o.id === d.dn!.sales_order_id)?.display_number ?? '',
       customer: customerStop(db.customers.find((c) => c.id === d.customer_id)),
+      zone: zoneOf(db, db.customers.find((c) => c.id === d.customer_id)?.zone_id ?? null),
       last_attempt: delivery.sheet
         ? { display_number: delivery.sheet.display_number, reason: delivery.line!.reason }
         : null,

@@ -54,6 +54,13 @@ export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
       (isCustomer ? await api.customers(company.companyId) : await api.suppliers(company.companyId)) as Row[],
   })
   const rows = data
+  // La zona de reparto de cada cliente (Fase 9c.1).
+  const zones = useQuery({
+    queryKey: ['delivery-zones', company.companyId],
+    queryFn: () => api.deliveryZones(company.companyId),
+    enabled: isCustomer,
+  })
+  const zoneCode = (id: string | null) => (id ? (zones.data?.find((z) => z.id === id)?.code ?? '') : '')
   const canCreate = company.can(`${kind}.create`)
   const canUpdate = company.can(`${kind}.update`)
   const canExport = company.can(`${kind}.export`)
@@ -161,6 +168,16 @@ export function PartnersPage({ kind }: { kind: 'customer' | 'supplier' }) {
               ]
             : [{ key: 'cat', header: 'Rubro', cell: (r: Row) => r.category }]),
           { key: 'city', header: 'Localidad', sort: (r) => r.city, cell: (r) => r.city },
+          ...(isCustomer
+            ? [
+                {
+                  key: 'zone',
+                  header: 'Zona',
+                  sort: (r: Row) => zoneCode(r.zone_id),
+                  cell: (r: Row) => (r.zone_id ? <Mono>{zoneCode(r.zone_id)}</Mono> : '—'),
+                },
+              ]
+            : []),
           {
             key: 'terms',
             header: 'Plazo',

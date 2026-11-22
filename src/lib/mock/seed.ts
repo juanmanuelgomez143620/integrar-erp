@@ -6,7 +6,7 @@
 
 import { DEMO_BOM_OPERATIONS, DEMO_BOMS, DEMO_WORK_CENTERS } from '../domain/boms'
 import { DEMO_EMPLOYEES, DEMO_JOB_CATEGORIES, DEMO_LABOR_AGREEMENTS } from '../domain/employees'
-import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
+import { DEMO_CARRIERS, DEMO_DELIVERY_ZONES, DEMO_VEHICLES } from '../domain/logistics'
 import type * as T from '../domain/types'
 import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
@@ -214,6 +214,7 @@ export function buildSeed(): DB {
     laborAgreements: [],
     carriers: [],
     vehicles: [],
+    deliveryZones: [],
     rsLines: [],
     bankAccounts: [],
     bankMovements: [],
@@ -424,6 +425,16 @@ export function buildSeed(): DB {
     db.suppliers.push(s)
   })
 
+  // ------------------------------------------------------------ Zonas de reparto (Fase 9c.1, a validar)
+  const zoneByCity = new Map<string, string>()
+  for (const { cities, ...row } of DEMO_DELIVERY_ZONES) {
+    const zone: T.DeliveryZone = { id: id('zon'), company_id: companyId, ...row, is_active: true, ...audited }
+    db.deliveryZones.push(zone)
+    for (const city of cities) zoneByCity.set(city, zone.id)
+  }
+  /** La zona de reparto de un cliente de la demo: la de su localidad. */
+  const zoneOf = (city: string) => zoneByCity.get(city) ?? null
+
   // ------------------------------------------------------------ Clientes
   // prettier-ignore
   const customerDefs: [string, string, T.VatCondition, string, number, number | null][] = [
@@ -456,6 +467,7 @@ export function buildSeed(): DB {
       payment_terms_days: terms,
       credit_limit: limit,
       price_list_id: null,
+      zone_id: zoneOf(city),
       notes: '',
       is_active: true,
       ...audited,
@@ -470,7 +482,15 @@ export function buildSeed(): DB {
     db.suppliers.push(row)
   }
   for (const c of BANK_CUSTOMERS)
-    db.customers.push({ ...c, id: id('cus'), company_id: companyId, price_list_id: null, is_active: true, ...audited })
+    db.customers.push({
+      ...c,
+      id: id('cus'),
+      company_id: companyId,
+      price_list_id: null,
+      zone_id: zoneOf(c.city),
+      is_active: true,
+      ...audited,
+    })
 
   // ------------------------------------------------------------ Productos
   type ProductDef = [

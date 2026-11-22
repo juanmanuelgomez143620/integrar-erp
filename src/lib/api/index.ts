@@ -71,6 +71,7 @@ export type {
   PeriodView,
   TaxReturnView,
   RouteCandidate,
+  DeliveryZoneRow,
   RouteSheetView,
   PostingRuleRow,
   PriceListDetail,
@@ -128,6 +129,7 @@ export type {
 } from '../mock/queries'
 export type {
   AccountInput,
+  DeliveryZoneInput,
   BankReconciliationInput,
   BomInput,
   CustomerReceiptInput,
@@ -293,6 +295,7 @@ const mockApi = {
   laborAgreements: (companyId: string) => query((db, u) => Q.listLaborAgreements(db, u, companyId)),
   carriers: (companyId: string) => query((db, u) => Q.listCarriers(db, u, companyId)),
   vehicles: (companyId: string) => query((db, u) => Q.listVehicles(db, u, companyId)),
+  deliveryZones: (companyId: string) => query((db, u) => Q.listDeliveryZones(db, u, companyId)),
   routeSheetCandidates: (companyId: string) => query((db, u) => Q.routeSheetCandidates(db, u, companyId)),
   drivers: (companyId: string) => query((db, u) => Q.listDrivers(db, u, companyId)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
@@ -464,6 +467,10 @@ const mockCommands = {
   setLaborAgreementActive: (companyId: string, agreementId: string, active: boolean) =>
     command((c) => E.cmdSetLaborAgreementActive(c, companyId, agreementId, active)),
   saveCarrier: (companyId: string, input: E.CarrierInput) => command((c) => E.cmdSaveCarrier(c, companyId, input)),
+  saveDeliveryZone: (companyId: string, input: E.DeliveryZoneInput) =>
+    command((c) => E.cmdSaveDeliveryZone(c, companyId, input)),
+  setDeliveryZoneActive: (companyId: string, zoneId: string, active: boolean) =>
+    command((c) => E.cmdSetDeliveryZoneActive(c, companyId, zoneId, active)),
   setCarrierActive: (companyId: string, carrierId: string, active: boolean) =>
     command((c) => E.cmdSetCarrierActive(c, companyId, carrierId, active)),
   saveVehicle: (companyId: string, input: E.VehicleInput) => command((c) => E.cmdSaveVehicle(c, companyId, input)),

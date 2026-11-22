@@ -1,5 +1,6 @@
 // Pruebas de la logística (docs/FASE_7_IMPUESTOS_LOGISTICA_Y_CONTROL.md §4): los transportistas,
-// los vehículos propios y las hojas de ruta, sobre buildSeed() y los cmd*.
+// los vehículos propios y las hojas de ruta, y las zonas de reparto (docs/FASE_9_LA_EMPRESA_CRECE.md,
+// 9c.1), sobre buildSeed() y los cmd*.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
@@ -10,24 +11,30 @@ import {
   cmdCloseRouteSheet,
   cmdConfirmDeliveryNote,
   cmdCreateCompanyFromTemplate,
+  cmdCreateCourse,
   cmdCreateDeliveryNote,
   cmdCreateRouteSheet,
   cmdCreateSalesOrder,
   cmdDepartRouteSheet,
   cmdSaveCarrier,
+  cmdSaveDeliveryZone,
+  cmdSaveMaster,
   cmdSaveVehicle,
   cmdSetCarrierActive,
+  cmdSetDeliveryZoneActive,
   cmdSetVehicleActive,
   deliveryStatus,
   routeSheetLines,
   type CarrierInput,
   type Ctx,
+  type DeliveryZoneInput,
   type RouteSheetInput,
   type VehicleInput,
 } from './engine'
 import {
   documentDetail,
   listCarriers,
+  listDeliveryZones,
   listDocuments,
   listDrivers,
   listNotifications,
@@ -35,6 +42,7 @@ import {
   routeSheetCandidates,
 } from './queries'
 import { buildSeed } from './seed'
+import type * as T from '../domain/types'
 
 let db: DB
 
@@ -396,5 +404,116 @@ describe('hojas de ruta (Fase 7c.2)', () => {
     )
     expect(() => routeSheetCandidates(db, userId('ventas'), companyId())).toThrow('Tu rol no tiene acceso')
     expect(() => listDrivers(db, userId('gerencia'), companyId())).toThrow('Tu rol no tiene acceso')
+  })
+})
+
+describe('zonas de reparto (Fase 9c.1)', () => {
+  const zones = (username = 'deposito') => listDeliveryZones(db, userId(username), companyId())
+  const zone = (code: string) => db.deliveryZones.find((z) => z.company_id === companyId() && z.code === code)!
+  const customer = (code: string) => db.customers.find((c) => c.company_id === companyId() && c.code === code)!
+  const zoneInput = (over: Partial<DeliveryZoneInput> = {}): DeliveryZoneInput => ({
+    id: '',
+    code: 'z-nor',
+    name: 'Norte de Misiones',
+    delivery_days: [6, 2, 2],
+    notes: '  San Pedro y Bernardo de Irigoyen.  ',
+    ...over,
+  })
+
+  it('la demo trae cinco zonas con sus días, y cada cliente en la de su localidad', () => {
+    expect(zones().map((z) => [z.code, z.delivery_days, z.customers])).toEqual([
+      ['Z-CEN', [3], 4],
+      ['Z-CHA', [5], 4],
+      ['Z-COR', [4], 9],
+      ['Z-ELD', [1, 3, 5], 13],
+      ['Z-POS', [2, 4], 10],
+    ])
+    expect(customer('CLI-001').zone_id).toBe(zone('Z-POS').id)
+    expect(customer('CLI-117').zone_id).toBe(zone('Z-CHA').id)
+    expect(db.customers.filter((c) => c.company_id === companyId() && !c.zone_id)).toEqual([])
+    // Las ven Logística y Ventas (que elige la de cada cliente); Producción, no.
+    expect(zones('ventas')).toHaveLength(5)
+    expect(() => zones('produccion')).toThrow()
+  })
+
+  it('Logística las crea, las modifica (con auditoría) y las desactiva; con validaciones y permisos', () => {
+    const { id } = cmdSaveDeliveryZone(ctx('deposito'), companyId(), zoneInput())
+    expect(db.deliveryZones.find((z) => z.id === id)).toMatchObject({
+      code: 'Z-NOR',
+      delivery_days: [2, 6],
+      notes: 'San Pedro y Bernardo de Irigoyen.',
+      is_active: true,
+    })
+    expect(db.audit.at(-1)!.summary).toBe('Dio de alta la zona de reparto Z-NOR Norte de Misiones: martes y sábado')
+    // Sin cambios, no queda en la auditoría.
+    const audits = db.audit.length
+    cmdSaveDeliveryZone(ctx('deposito'), companyId(), zoneInput({ id }))
+    expect(db.audit).toHaveLength(audits)
+    cmdSaveDeliveryZone(ctx('deposito'), companyId(), zoneInput({ id, delivery_days: [2] }))
+    expect(db.audit.at(-1)).toMatchObject({
+      action: 'UPDATE',
+      summary: 'Modificó la zona de reparto Z-NOR Norte de Misiones',
+      changes: { delivery_days: { from: [2, 6], to: [2] } },
+    })
+    const invalid = (over: Partial<DeliveryZoneInput>) =>
+      expectBusinessError(() => cmdSaveDeliveryZone(ctx('deposito'), companyId(), zoneInput(over)), 'DATO_INVALIDO')
+    expect(invalid({ code: 'Z-ELD' })).toBe('Ya existe una zona de reparto con el código Z-ELD.')
+    expect(invalid({ code: 'zona norte' })).toBe('El código de la zona tiene de 1 a 12 letras, números o guiones.')
+    expect(invalid({ code: 'Z-1', name: 'N' })).toBe('El nombre de la zona tiene de 2 a 60 caracteres.')
+    expect(invalid({ code: 'Z-1', delivery_days: [] })).toBe('Elegí al menos un día de reparto, de lunes a sábado.')
+    invalid({ code: 'Z-1', delivery_days: [7] })
+    invalid({ code: 'Z-1', delivery_days: [1.5] })
+    expect(invalid({ code: 'Z-1', notes: 'x'.repeat(201) })).toBe('La nota de la zona tiene hasta 200 caracteres.')
+    expectBusinessError(
+      () => cmdSaveDeliveryZone(ctx('ventas'), companyId(), zoneInput({ code: 'Z-1' })),
+      'SIN_PERMISO',
+    )
+    cmdSetDeliveryZoneActive(ctx('deposito'), companyId(), id, false)
+    expect(db.audit.at(-1)!.summary).toBe('Desactivó la zona de reparto Z-NOR Norte de Misiones')
+    expect(zones().find((z) => z.id === id)).toMatchObject({ is_active: false, customers: 0 })
+    expectBusinessError(() => cmdSetDeliveryZoneActive(ctx('ventas'), companyId(), id, true), 'SIN_PERMISO')
+  })
+
+  it('Ventas elige la zona de cada cliente: una activa (o la que ya tenía); vacía es "sin zona"', () => {
+    const c = customer('CLI-005')
+    const save = (zoneId: string) => cmdSaveMaster(ctx('ventas'), 'customer', companyId(), { ...c, zone_id: zoneId })
+    save(zone('Z-ELD').id)
+    expect(c.zone_id).toBe(zone('Z-ELD').id)
+    expect(db.audit.at(-1)!.changes).toMatchObject({ zone_id: { from: zone('Z-POS').id, to: zone('Z-ELD').id } })
+    // Una zona desactivada no se asigna; el cliente que ya la tiene, la conserva.
+    cmdSetDeliveryZoneActive(ctx('deposito'), companyId(), zone('Z-CHA').id, false)
+    expect(expectBusinessError(() => save(zone('Z-CHA').id), 'DATO_INVALIDO')).toBe(
+      'La zona de reparto debe estar activa y pertenecer a esta empresa.',
+    )
+    cmdSetDeliveryZoneActive(ctx('deposito'), companyId(), zone('Z-ELD').id, false)
+    save(zone('Z-ELD').id)
+    expect(c.zone_id).toBe(zone('Z-ELD').id)
+    save('')
+    expect(c.zone_id).toBeNull()
+  })
+
+  it('los remitos para repartir dicen la zona de su cliente; la empresa de un curso copia las zonas', () => {
+    const rem = db.documents.find((d) => d.company_id === companyId() && d.display_number === 'REM-00001')!
+    cmdConfirmDeliveryNote(ctx('deposito'), rem.id)
+    expect(routeSheetCandidates(db, userId('deposito'), companyId())[0]).toMatchObject({
+      display_number: 'REM-00001',
+      customer: { code: 'CLI-001' },
+      zone: { id: zone('Z-POS').id, code: 'Z-POS', name: 'Posadas y sur', delivery_days: [2, 4] },
+    })
+    const course = cmdCreateCourse(ctx('admin'), { academic_year: 2027, name: '6.º B', orientation: 'Gestión' })
+    const { id } = cmdCreateCompanyFromTemplate(ctx('docente'), { course_id: course })
+    const copied = db.deliveryZones.filter((z) => z.company_id === id)
+    expect(copied.map((z) => z.code).sort()).toEqual(['Z-CEN', 'Z-CHA', 'Z-COR', 'Z-ELD', 'Z-POS'])
+    const own = db.customers.find((c) => c.company_id === id && c.code === 'CLI-001')!
+    expect(copied.find((z) => z.id === own.zone_id)!.code).toBe('Z-POS')
+  })
+
+  it('al actualizar una base guardada (v33), quedan las zonas vacías y los clientes sin zona', () => {
+    const { deliveryZones: _zones, ...v33 } = structuredClone(db)
+    for (const c of v33.customers) delete (c as Partial<T.Customer>).zone_id
+    const upgraded = upgradeDatabase({ ...v33, version: 33 } as DB)!
+    expect(upgraded.version).toBe(DB_VERSION)
+    expect(upgraded.deliveryZones).toEqual([])
+    expect(upgraded.customers.every((c) => c.zone_id === null)).toBe(true)
   })
 })

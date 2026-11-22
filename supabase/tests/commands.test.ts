@@ -4247,6 +4247,110 @@ describe('paridad de comandos', () => {
     await reads('con el vehículo')
   })
 
+  it('zonas de reparto: alta, cambios, validaciones, desactivación y la zona de cada cliente (9c.1)', async () => {
+    const companyPg = pg(company)
+    /** El id de la base si la zona existe; si no (vacío o inventado), tal cual. */
+    const known = (id: string) => (mock.deliveryZones.some((x) => x.id === id) ? pg(id) : id)
+    const zoneOf = (code: string) => mock.deliveryZones.find((z) => z.company_id === company && z.code === code)!.id
+    const customer = (code: string) => mock.customers.find((c) => c.company_id === company && c.code === code)!
+    const reads = async (label: string) => {
+      for (const username of ['deposito', 'ventas', 'gerencia', 'produccion'])
+        await sameRead(
+          `zonas de reparto ${label} (${username})`,
+          username,
+          (b) => b.api.deliveryZones(companyPg),
+          (u) => Q.listDeliveryZones(mock, u, company),
+        )
+      await sameRead(
+        `clientes ${label}`,
+        'ventas',
+        (b) => b.api.customers(companyPg),
+        (u) => Q.listCustomers(mock, u, company),
+      )
+    }
+    await reads('al empezar')
+
+    const zoneInput = (over: Partial<E.DeliveryZoneInput> = {}): E.DeliveryZoneInput => ({
+      id: '',
+      code: ' z-nor ',
+      name: 'Norte de Misiones',
+      delivery_days: [6, 2, 2],
+      notes: '  San Pedro y Bernardo de Irigoyen.  ',
+      ...over,
+    })
+    const saveZone = (label: string, username: string, input: E.DeliveryZoneInput) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSaveDeliveryZone(c, company, input),
+        (b) => b.commands.saveDeliveryZone(companyPg, { ...input, id: known(input.id) }),
+      )
+    for (const username of ['ventas', 'gerencia'])
+      expect(await saveZone(`${username} no da de alta zonas`, username, zoneInput())).toBeNull()
+    for (const [label, over] of [
+      ['un código repetido', { code: 'Z-ELD' }],
+      ['un código con espacios', { code: 'Z 1' }],
+      ['un nombre corto', { name: 'N' }],
+      ['sin días', { delivery_days: [] }],
+      ['un domingo', { delivery_days: [7] }],
+      ['un día con decimales', { delivery_days: [1.5] }],
+      ['una nota larga', { notes: 'x'.repeat(201) }],
+      ['una zona que no existe', { id: crypto.randomUUID() }],
+    ] as [string, Partial<E.DeliveryZoneInput>][])
+      expect(await saveZone(label, 'deposito', zoneInput(over)), label).toBeNull()
+    const added = await ok(
+      'el alta de la zona',
+      'deposito',
+      (c) => E.cmdSaveDeliveryZone(c, company, zoneInput()),
+      (b) => b.commands.saveDeliveryZone(companyPg, zoneInput()),
+    )
+    loaded.link(added.mock.id, (added.pg as { id: string }).id)
+    const norte = added.mock.id
+    expect(await saveZone('sin cambios', 'deposito', zoneInput({ id: norte }))).not.toBeNull()
+    expect(await saveZone('otros días', 'deposito', zoneInput({ id: norte, delivery_days: [2] }))).not.toBeNull()
+    expect(await saveZone('el código de otra', 'deposito', zoneInput({ id: norte, code: 'Z-POS' }))).toBeNull()
+    await reads('con la zona nueva')
+
+    // La zona del cliente: Ventas la elige; una desactivada no se asigna, pero quien ya la tiene la conserva.
+    const assign = (label: string, code: string, zoneId: string) =>
+      step(
+        label,
+        'ventas',
+        (c) =>
+          E.cmdSaveMaster(c, 'customer', company, {
+            id: customer(code).id,
+            code,
+            legal_name: customer(code).legal_name,
+            zone_id: zoneId,
+          }),
+        (b) =>
+          b.commands.saveMaster('customer', companyPg, {
+            id: pg(customer(code).id),
+            code,
+            legal_name: customer(code).legal_name,
+            zone_id: zoneId ? pg(zoneId) : '',
+          }),
+      )
+    const setZoneActive = (label: string, username: string, id: string, active: boolean) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdSetDeliveryZoneActive(c, company, id, active),
+        (b) => b.commands.setDeliveryZoneActive(companyPg, pg(id), active),
+      )
+    expect(await assign('un cliente a la zona nueva', 'CLI-005', norte)).not.toBeNull()
+    expect(await setZoneActive('Ventas no la desactiva', 'ventas', norte, false)).toBeNull()
+    expect(await setZoneActive('desactivarla', 'deposito', norte, false)).not.toBeNull()
+    expect(await setZoneActive('desactivarla otra vez', 'deposito', norte, false)).not.toBeNull()
+    expect(await assign('otro cliente a la zona inactiva', 'CLI-006', norte)).toBeNull()
+    expect(await assign('el que ya la tenía la conserva', 'CLI-005', norte)).not.toBeNull()
+    expect(await assign('sin zona', 'CLI-006', '')).not.toBeNull()
+    expect(await assign('de vuelta a la suya', 'CLI-006', zoneOf('Z-ELD'))).not.toBeNull()
+    expect(await assign('y el otro también', 'CLI-005', zoneOf('Z-POS'))).not.toBeNull()
+    expect(await setZoneActive('activarla', 'deposito', norte, true)).not.toBeNull()
+    await reads('al final')
+  })
+
   it('hojas de ruta: armar, salir, rendir y anular; el remito dice si se entregó y no se anula en reparto', async () => {
     const companyPg = pg(company)
     const candidates = Q.routeSheetCandidates(mock, mockId('deposito'), company)

@@ -83,6 +83,7 @@ export interface DB {
   laborAgreements: T.LaborAgreement[]
   carriers: T.Carrier[]
   vehicles: T.Vehicle[]
+  deliveryZones: T.DeliveryZone[]
   rsLines: T.RouteSheetLine[]
   bankAccounts: T.BankAccount[]
   bankMovements: T.BankMovement[]
@@ -109,7 +110,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 33
+export const DB_VERSION = 34
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -168,6 +169,7 @@ const COLLECTIONS = [
   'laborAgreements',
   'carriers',
   'vehicles',
+  'deliveryZones',
   'rsLines',
   'bankAccounts',
   'bankMovements',
@@ -235,6 +237,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   taxpayers: 28,
   pointsOfSale: 29,
   fiscalNotices: 32,
+  deliveryZones: 34,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -614,6 +617,12 @@ const UPGRADES: Record<number, (db: DB) => void> = {
       if (db.accounts.some((a) => a.company_id === company.id)) insertBaseChart(ctx, company.id)
       insertBasePostingRules(ctx, company.id)
     }
+  },
+  // v33 → v34: las zonas de reparto (Fase 9c.1): vacías (Logística las crea) y los clientes, sin zona.
+  // Las de la demo llegan al restablecerla, como el resto de la empresa que crece.
+  33: (db) => {
+    db.deliveryZones ??= []
+    for (const c of db.customers) c.zone_id ??= null
   },
 }
 

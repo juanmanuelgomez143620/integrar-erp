@@ -117,6 +117,14 @@ const mockVehicles = ofTemplate(seed.vehicles)
   .map((v) => `${v.code} ${v.plate} ${v.description} ${v.is_active}`)
   .sort()
 
+/** Las zonas de reparto de la demo (Fase 9c.1) y la de cada cliente: "código nombre {días} nota activa", "cliente zona". */
+const mockZones = ofTemplate(seed.deliveryZones)
+  .map((z) => `${z.code} ${z.name} {${z.delivery_days.join(',')}} ${z.notes} ${z.is_active}`)
+  .sort()
+const mockCustomerZones = ofTemplate(seed.customers)
+  .map((c) => `${c.code} ${seed.deliveryZones.find((z) => z.id === c.zone_id)?.code ?? '-'}`)
+  .sort()
+
 let db: TestDb
 let template: string
 const u: Record<string, string> = {}
@@ -250,6 +258,29 @@ const staff = async (company: string) =>
          join public.sectors s on s.id = e.sector_id
          left join public.work_centers w on w.id = e.work_center_id
         where e.company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const zones = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select code || ' ' || name || ' ' || delivery_days::text || ' ' || notes || ' ' || is_active::text as line
+         from public.delivery_zones where company_id = $1`,
+      [company],
+    )
+  )
+    .map((r) => r.line)
+    .sort()
+
+const customerZones = async (company: string) =>
+  (
+    await db.admin<{ line: string }>(
+      `select c.code || ' ' || coalesce(z.code, '-') as line
+         from public.customers c left join public.delivery_zones z on z.id = c.zone_id
+        where c.company_id = $1`,
       [company],
     )
   )
@@ -670,6 +701,28 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     }
   })
 
+  it('tiene las mismas zonas de reparto que la demo, con cada cliente en la suya (9c.1)', async () => {
+    expect(mockZones).toHaveLength(5)
+    expect(await zones(template)).toEqual(mockZones)
+    expect(mockCustomerZones.filter((l) => l.endsWith(' -'))).toEqual([])
+    expect(await customerZones(template)).toEqual(mockCustomerZones)
+  })
+
+  it('la plantilla que ya existía recibe las zonas y la de cada cliente, sin repetir (9c.1)', async () => {
+    // Como estaba antes de las zonas; se deshace al terminar.
+    await db.admin('begin')
+    try {
+      await db.admin('update public.customers set zone_id = null where company_id = $1', [template])
+      await db.admin('delete from public.delivery_zones where company_id = $1', [template])
+      for (let i = 0; i < 2; i++)
+        await db.admin('select private.insert_demo_zones($1), private.assign_demo_zones($1)', [template])
+      expect(await zones(template)).toEqual(mockZones)
+      expect(await customerZones(template)).toEqual(mockCustomerZones)
+    } finally {
+      await db.admin('rollback')
+    }
+  })
+
   it('tiene los mismos transportistas y vehículos propios que la demo', async () => {
     expect(mockCarriers).toHaveLength(2)
     expect(await carriers(template)).toEqual(mockCarriers)
@@ -804,6 +857,8 @@ describe('empresa de un curso (company_create_from_template)', () => {
     expect(await staff(created.id)).toEqual(mockStaff)
     expect(await carriers(created.id)).toEqual(mockCarriers)
     expect(await vehicles(created.id)).toEqual(mockVehicles)
+    expect(await zones(created.id)).toEqual(mockZones)
+    expect(await customerZones(created.id)).toEqual(mockCustomerZones)
   })
 
   it('abre su cuenta en el Banco Aula con la apertura', async () => {

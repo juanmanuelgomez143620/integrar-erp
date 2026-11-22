@@ -265,6 +265,8 @@ export interface Customer extends Partner {
   credit_limit: number | null
   /** Lista de precios que se le propone (4d); sin lista, el precio de venta de cada producto. */
   price_list_id: string | null
+  /** Zona de reparto (Fase 9c.1); sin zona, se reparte a mano. */
+  zone_id: string | null
 }
 
 /** Lista de precios de una empresa (tabla price_lists): el precio sin IVA de cada producto que se vende. */
@@ -333,6 +335,18 @@ export interface Vehicle extends Audited {
   /** Dominio ficticio. */
   plate: string
   description: string
+  is_active: boolean
+}
+
+/** Zona de reparto (Fase 9c.1): la mantiene Logística; cada cliente puede estar en una. */
+export interface DeliveryZone extends Audited {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  /** Los días de reparto: de lunes (1) a sábado (6), en orden. */
+  delivery_days: number[]
+  notes: string
   is_active: boolean
 }
 

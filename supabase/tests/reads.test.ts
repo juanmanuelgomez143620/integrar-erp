@@ -358,6 +358,11 @@ describe('tesorería', () => {
     }
   })
 
+  it('las zonas de reparto con sus clientes (9c.1)', async () => {
+    for (const u of USERS)
+      await same(u, () => Q.listDeliveryZones(mock, userId(u), company), 'delivery_zones_list', [companyPg])
+  })
+
   it('el padrón del fisco simulado (8d.1)', async () => {
     for (const u of [...USERS, 'tesoreria2'])
       await same(u, () => Q.padron(mock, userId(u), company), 'padron', [companyPg])
