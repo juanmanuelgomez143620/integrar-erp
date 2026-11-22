@@ -26,14 +26,20 @@ describe('banco de proveedores y clientes ficticios', () => {
     }
   })
 
-  it('no repite códigos, razones sociales ni CUIT, tampoco con la empresa plantilla', () => {
+  it('no repite códigos, razones sociales ni CUIT, tampoco con los propios de la empresa plantilla', () => {
     const seed = buildSeed()
-    const template = [...seed.suppliers, ...seed.customers]
+    const codes = new Set(bank.map((p) => p.code))
+    // Los que la plantilla trae del banco (la empresa que crece, Fase 9b.1) son los mismos, sin cambios.
+    const fromBank = [...seed.suppliers, ...seed.customers].filter((p) => codes.has(p.code))
+    expect(fromBank).toHaveLength(40)
+    for (const p of fromBank) expect(p).toMatchObject(bank.find((b) => b.code === p.code)!)
+    const own = [...seed.suppliers, ...seed.customers].filter((p) => !codes.has(p.code))
+    expect(own).toHaveLength(20)
     for (const field of ['code', 'legal_name', 'tax_id'] as const) {
       const values = bank.map((p) => p[field]).filter(Boolean)
       expect(new Set(values).size, field).toBe(values.length)
       expect(
-        template.filter((p) => values.includes(p[field])),
+        own.filter((p) => values.includes(p[field])),
         field,
       ).toEqual([])
     }
@@ -47,8 +53,14 @@ describe('banco de proveedores y clientes ficticios', () => {
       userId: db.profiles.find((p) => p.username === username)!.id,
       now: new Date().toISOString(),
     })
-    for (const s of BANK_SUPPLIERS) cmdSaveMaster(ctx('compras1'), 'supplier', companyId, { ...s })
-    for (const c of BANK_CUSTOMERS) cmdSaveMaster(ctx('ventas'), 'customer', companyId, { ...c })
+    // Los que la plantilla todavía no trae (la 9b.1 suma diez proveedores y todos los clientes).
+    const has = (rows: { company_id: string; code: string }[], code: string) =>
+      rows.some((r) => r.company_id === companyId && r.code === code)
+    const missing = BANK_SUPPLIERS.filter((s) => !has(db.suppliers, s.code))
+    expect(missing).toHaveLength(20)
+    for (const s of missing) cmdSaveMaster(ctx('compras1'), 'supplier', companyId, { ...s })
+    for (const c of BANK_CUSTOMERS.filter((x) => !has(db.customers, x.code)))
+      cmdSaveMaster(ctx('ventas'), 'customer', companyId, { ...c })
     expect(db.suppliers.filter((s) => s.code.startsWith('PRV-1'))).toHaveLength(BANK_SUPPLIERS.length)
     expect(db.customers.filter((c) => c.code.startsWith('CLI-1'))).toHaveLength(BANK_CUSTOMERS.length)
   })

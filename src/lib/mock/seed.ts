@@ -10,6 +10,7 @@ import { DEMO_CARRIERS, DEMO_VEHICLES } from '../domain/logistics'
 import type * as T from '../domain/types'
 import type { DB } from './db'
 import { DB_VERSION, DEFAULT_SESSION_TIMEOUT_MINUTES } from './db'
+import { BANK_CUSTOMERS, BANK_SUPPLIERS } from './partner-bank'
 import {
   cmdApprovePurchaseOrder,
   cmdCreateDeliveryNote,
@@ -136,6 +137,23 @@ export function addDemoTreasurer(db: DB, companyId: string, now: string) {
     sector_id: sector?.id ?? null,
   })
 }
+
+/**
+ * Los proveedores del banco ficticio que suma la empresa que crece (Fase 9b.1, a validar): placas y
+ * tableros, aserraderos, barnices, herrajes, embalajes, bulonería y tapicería.
+ */
+const DEMO_BANK_SUPPLIERS = [
+  'PRV-101',
+  'PRV-102',
+  'PRV-103',
+  'PRV-106',
+  'PRV-107',
+  'PRV-113',
+  'PRV-114',
+  'PRV-117',
+  'PRV-122',
+  'PRV-123',
+]
 
 const id = (prefix: string) => `${prefix}-${String(++counter).padStart(4, '0')}-${crypto.randomUUID().slice(0, 8)}`
 
@@ -443,6 +461,16 @@ export function buildSeed(): DB {
       ...audited,
     })
   })
+
+  // La empresa que crece (Fase 9b.1): diez proveedores, por rubro de lo que compra la empresa, y los
+  // treinta clientes del banco de contribuyentes ficticios, con sus plazos y sus límites de crédito.
+  for (const s of BANK_SUPPLIERS.filter((p) => DEMO_BANK_SUPPLIERS.includes(p.code))) {
+    const row: T.Supplier = { ...s, id: id('sup'), company_id: companyId, is_active: true, ...audited }
+    supplier[s.code] = row.id
+    db.suppliers.push(row)
+  }
+  for (const c of BANK_CUSTOMERS)
+    db.customers.push({ ...c, id: id('cus'), company_id: companyId, price_list_id: null, is_active: true, ...audited })
 
   // ------------------------------------------------------------ Productos
   type ProductDef = [

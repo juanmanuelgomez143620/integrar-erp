@@ -7,7 +7,7 @@
 // apertura (src/lib/domain/chart-of-accounts.ts) que usa private.start_accounting.
 //
 // Uso: npm run db:demo [-- nombre-de-archivo.sql]
-// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9a).
+// Sin argumento reescribe la última migración de la plantilla (la de la Fase 9b.1).
 // Las funciones son "create or replace": si cambian después de aplicada, se
 // regeneran en una migración nueva con otro nombre.
 
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createServer } from 'vite'
 
 const root = join(import.meta.dirname, '..')
-const target = process.argv[2] ?? '20261118120000_demo_template_personal.sql'
+const target = process.argv[2] ?? '20261119120000_demo_template_clientes.sql'
 
 const server = await createServer({
   root,
@@ -318,6 +318,64 @@ begin
 end;
 $$;
 
+-- ------------------------------------------------------------------ Los proveedores y los clientes de la demo
+create or replace function private.demo_supplier_rows()
+returns table (code text, legal_name text, trade_name text, tax_id text, vat_condition text, address_line text,
+               city text, province text, phone text, email text, contact_name text, payment_terms_days int,
+               lead_time_days int, category text, notes text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select s.code::text, s.legal_name::text, s.trade_name::text, s.tax_id::text, s.vat_condition::text,
+         s.address_line::text, s.city::text, s.province::text, s.phone::text, s.email::text, s.contact_name::text,
+         s.payment_terms_days::int, s.lead_time_days::int, s.category::text, s.notes::text
+    from (values
+${values(suppliers, ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_condition', 'address_line', 'city', 'province', 'phone', 'email', 'contact_name', 'payment_terms_days', 'lead_time_days', 'category', 'notes'])}
+    ) as s (code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province, phone, email,
+            contact_name, payment_terms_days, lead_time_days, category, notes)
+$$;
+
+create or replace function private.demo_customer_rows()
+returns table (code text, legal_name text, trade_name text, tax_id text, vat_condition text, address_line text,
+               city text, province text, phone text, email text, contact_name text, payment_terms_days int,
+               credit_limit numeric, notes text)
+language sql
+immutable
+set search_path = ''
+as $$
+  select c.code::text, c.legal_name::text, c.trade_name::text, c.tax_id::text, c.vat_condition::text,
+         c.address_line::text, c.city::text, c.province::text, c.phone::text, c.email::text, c.contact_name::text,
+         c.payment_terms_days::int, c.credit_limit::numeric, c.notes::text
+    from (values
+${values(of(db.customers), ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_condition', 'address_line', 'city', 'province', 'phone', 'email', 'contact_name', 'payment_terms_days', 'credit_limit', 'notes'])}
+    ) as c (code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province, phone, email,
+            contact_name, payment_terms_days, credit_limit, notes)
+$$;
+
+-- Los proveedores y los clientes de la demo que la empresa todavía no tiene, por código (la empresa
+-- que crece, Fase 9b.1).
+create or replace function private.insert_demo_partners(p_company uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.suppliers (company_id, code, legal_name, trade_name, tax_id, vat_condition, address_line, city,
+                                province, phone, email, contact_name, payment_terms_days, lead_time_days, category,
+                                notes)
+  select p_company, r.code, r.legal_name, r.trade_name, r.tax_id, r.vat_condition, r.address_line, r.city, r.province,
+         r.phone, r.email, r.contact_name, r.payment_terms_days, r.lead_time_days, r.category, r.notes
+    from private.demo_supplier_rows() r
+   where not exists (select 1 from public.suppliers s where s.company_id = p_company and s.code = r.code);
+  insert into public.customers (company_id, code, legal_name, trade_name, tax_id, vat_condition, address_line, city,
+                                province, phone, email, contact_name, payment_terms_days, credit_limit, notes)
+  select p_company, r.code, r.legal_name, r.trade_name, r.tax_id, r.vat_condition, r.address_line, r.city, r.province,
+         r.phone, r.email, r.contact_name, r.payment_terms_days, r.credit_limit, r.notes
+    from private.demo_customer_rows() r
+   where not exists (select 1 from public.customers c where c.company_id = p_company and c.code = r.code);
+$$;
+
 -- ------------------------------------------------------------------ El personal de la demo (a validar)
 -- Las horas de un mes completo de quien cobra por hora (MONTH_HOURS).
 create or replace function private.month_hours()
@@ -545,23 +603,8 @@ ${values(
 ${values(of(db.approvalRules), ['doc_type', 'level', 'min_amount', 'max_amount', 'approver_role', 'require_different_user', 'description'])}
     ) as r (doc_type, level, min_amount, max_amount, approver_role, require_different_user, description);
 
-  insert into public.suppliers (company_id, code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province,
-                                phone, email, contact_name, payment_terms_days, lead_time_days, category, notes)
-  select v_id, s.code, s.legal_name, s.trade_name, s.tax_id, s.vat_condition, s.address_line, s.city, s.province,
-         s.phone, s.email, s.contact_name, s.payment_terms_days, s.lead_time_days, s.category, s.notes
-    from (values
-${values(suppliers, ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_condition', 'address_line', 'city', 'province', 'phone', 'email', 'contact_name', 'payment_terms_days', 'lead_time_days', 'category', 'notes'])}
-    ) as s (code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province, phone, email,
-            contact_name, payment_terms_days, lead_time_days, category, notes);
-
-  insert into public.customers (company_id, code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province,
-                                phone, email, contact_name, payment_terms_days, credit_limit, notes)
-  select v_id, c.code, c.legal_name, c.trade_name, c.tax_id, c.vat_condition, c.address_line, c.city, c.province,
-         c.phone, c.email, c.contact_name, c.payment_terms_days, c.credit_limit::numeric, c.notes
-    from (values
-${values(of(db.customers), ['code', 'legal_name', 'trade_name', 'tax_id', 'vat_condition', 'address_line', 'city', 'province', 'phone', 'email', 'contact_name', 'payment_terms_days', 'credit_limit', 'notes'])}
-    ) as c (code, legal_name, trade_name, tax_id, vat_condition, address_line, city, province, phone, email,
-            contact_name, payment_terms_days, credit_limit, notes);
+  -- Los proveedores y los clientes (Fase 9b.1: los del banco ficticio que suma la empresa que crece).
+  perform private.insert_demo_partners(v_id);
 
   insert into public.products (company_id, code, name, description, category, product_type, uom_code, is_stockable,
                                standard_cost, sale_price, vat_rate, min_stock, reorder_qty, default_supplier_id,

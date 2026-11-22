@@ -19,7 +19,7 @@ Objetivo: que INTEGR-AR tenga todos sus módulos desarrollados y funcionando, so
 | Paso | Qué | Estado |
 |---|---|---|
 | B1 | Faker (sólo desarrollo) y un generador de bancos de proveedores y clientes ficticios argentinos: CUIT de un rango ficticio con dígito verificador, condición frente al IVA coherente, localidades del NEA y contactos. Se guarda como datos del repositorio, para revisar. | Hecho (`src/lib/mock/partner-bank.ts`) |
-| B2 | Usar esos bancos cuando hagan falta: más clientes con Ventas (Fase 4) y en el entorno vivo (Fase 8). En Supabase, siempre con una migración nueva. | Pendiente |
+| B2 | Usar esos bancos cuando hagan falta: más clientes con Ventas (Fase 4) y en el entorno vivo (Fase 8). En Supabase, siempre con una migración nueva. | En curso: la 9b.1 (22/11) suma a la plantilla los 30 clientes y 10 de los proveedores del banco; los nombres no se revisan contra comercios reales (decisión del usuario, 22/11: son inventados y la app aclara que son ficticios) |
 
 ## Etapa C — Fase 2: Contabilidad base
 

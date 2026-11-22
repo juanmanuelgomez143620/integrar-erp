@@ -954,7 +954,7 @@ Notas de diseño anticipadas:
 - **10 clientes** con condiciones de IVA variadas: mueblerías (RI), carpinteros (monotributo), constructora (RI), organismo (exento), mostrador (consumidor final).
 - **Precios de referencia** actualizables por el docente con un porcentaje de ajuste (inflación) — función prevista `company_reprice(company_id, pct)`.
 - **Con los módulos correspondientes**: 10 empleados (Fase 6), cuentas bancarias y cajas simuladas (Fase 3), plan de cuentas básico (Fase 2).
-- Regla para todos los nombres: **claramente ficticios**; verificar que no coincidan con comercios reales conocidos de la región.
+- Regla para todos los nombres: **claramente ficticios** (inventados). No hace falta verificar si coinciden con comercios reales de la región: la app aclara por varios medios que son ficticios (decisión del usuario, 22/11/2026).
 
 ---
 

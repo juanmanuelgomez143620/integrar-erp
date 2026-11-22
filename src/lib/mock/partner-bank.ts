@@ -1,8 +1,8 @@
 // Generado por scripts/generate-partner-bank.mjs (npm run data:partners). No editar a mano.
 // Proveedores y clientes ficticios para casos, escenarios y los módulos de
 // ventas: CUIT del rango simulado 00000xxx, domicilios ficticios y emails en el
-// dominio reservado .example. Antes de usarlos en clase, revisar que ningún
-// nombre coincida con un comercio real de la zona (DATABASE.md §16).
+// dominio reservado .example. Los nombres son inventados: no hace falta revisar
+// si alguno coincide con un comercio real (DATABASE.md §16).
 import type * as T from '../domain/types'
 
 /** Un proveedor o cliente listo para cmdSaveMaster: sin id, empresa, lista de precios ni auditoría. */

@@ -4,19 +4,19 @@ Diseño corto. Pedido del usuario el 16/11: en lugar de sumar una segunda empres
 
 Una sola empresa más grande en lugar de dos plantillas: todos los cursos tienen más movimiento, no hay dos demos que mantener y los módulos ya existen. La foresto-industria queda descartada (su diseño está en el historial de git, por si se retoma).
 
-Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas); los nombres de comercios se revisan antes de usarlos en clase, para que ninguno coincida con uno real de la zona; de las personas, sólo los datos mínimos.
+Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas): los nombres se inventan y no hace falta revisar si alguno coincide con un comercio real de la zona, porque la app aclara por varios medios que son ficticios (decisión del usuario, 22/11); de las personas, sólo los datos mínimos.
 
 ## 1. Hoy y la propuesta (a validar)
 
 | | Hoy | Propuesta |
 |---|---|---|
 | Personal (legajos) | 11: la encargada general, 6 en el taller, 1 en el depósito, 1 chofer, 1 vendedora y 1 administrativa | **36**: taller 16, depósito 3, logística 5 (4 choferes y un coordinador), ventas 4, administración 6 (compras, tesorería, contabilidad e impuestos, RRHH) y 2 en la gerencia y la jefatura de planta |
-| Clientes | 10 | **40**, repartidos en zonas de reparto, cada uno con su lista de precios y su límite de crédito |
+| Clientes | 10 | **40**, repartidos en zonas de reparto (9c), cada uno con su plazo y su límite de crédito; las listas de precios las sigue armando Ventas (4d) |
 | Proveedores | 10 | **20** |
 | Productos | 20 | **unos 35**: dos o tres líneas nuevas de muebles con sus materiales |
 | Listas de materiales y centros de trabajo | 4 y 3 | **unas 12 y 4** (un centro nuevo, por ejemplo tapicería) |
 | Vehículos, transportistas y choferes | 2, 2 y 1 | **4, 3 y 4** |
-| Puntos de venta | 1 (casa central) | **2** (casa central y un local de ventas) |
+| Puntos de venta | 1 (casa central) | el segundo, el del showroom de Posadas, lo pide Ventas y lo habilita Impuestos, como actividad (8d.2) |
 | Balance inicial | el de hoy | crece en proporción: más fondos y capital (en la 9a, para pagar al personal) y más stock y rodados (9b) |
 | Movimiento | lo que generan los estudiantes (y 2 pedidos de arranque) | además, **la actividad del entorno**: los pedidos de los clientes, las entregas de los proveedores y las novedades del personal de cada semana |
 
@@ -25,7 +25,8 @@ Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas);
 | Paso | Qué | Resultado | Estado |
 |---|---|---|---|
 | 9a | Más personal: los legajos nuevos en todos los sectores, con sus categorías y convenios (madera, comercio y camioneros, como desde la 6d) | La liquidación de cada mes tiene más del triple de recibos: más trabajo para RRHH, Gerencia, Tesorería y Contabilidad | Hecha (22/11): 34 legajos (los dos de tapicería llegan con su centro en la 9b) y 80 millones más en el banco de la apertura |
-| 9b | Más clientes, proveedores y productos: los del banco de contribuyentes ficticios (`partner-bank.ts`, revisado antes), las listas de precios y los límites de crédito, las líneas nuevas con sus listas de materiales y el centro de trabajo nuevo, el segundo punto de venta y el balance inicial más grande; el padrón del fisco los incluye | Más para vender, comprar y fabricar | Pendiente |
+| 9b.1 | Más clientes y proveedores: los del banco de contribuyentes ficticios (`partner-bank.ts`), con su plazo y su límite de crédito; el padrón del fisco los incluye | Más a quién vender y a quién comprar | Hecha (22/11): 40 clientes y 20 proveedores |
+| 9b.2 | Más productos: las líneas nuevas con sus materiales, sus listas de materiales y el centro de trabajo nuevo (tapicería, con sus dos legajos), y el inventario inicial más grande | Más para vender y fabricar | Pendiente |
 | 9c | Logística a escala: zonas de reparto (cada cliente en una, con sus días de reparto), más vehículos y choferes, y la hoja de ruta que propone los remitos de una zona | Varias hojas de ruta por semana | Pendiente |
 | 9d | La actividad del entorno: el docente genera la semana (más adelante, el sistema con un ritmo): los pedidos de los clientes llegan para que Ventas los revise, los proveedores avisan que entregan lo pedido y el personal tiene sus novedades del mes | El volumen no depende de que los estudiantes inventen operaciones; cada curso arranca con una semana de trabajo pendiente | Pendiente |
 
@@ -39,11 +40,20 @@ Límites: todo sigue siendo ficticio (personas, clientes, proveedores y marcas);
 - **La base guardada en el navegador no cambia:** sumarle el personal sin los fondos de la apertura la dejaría sin poder pagar los sueldos; la empresa grande llega al restablecer la demo (Administración) y con cada empresa nueva. La plantilla de la base real sí suma el personal, porque nadie la opera: sólo se copia, y cada empresa nueva arma su propia apertura, ya con los fondos nuevos.
 - Notas de la 9a (22/11): `DEMO_EMPLOYEES` y `DEMO_JOB_CATEGORIES` (`src/lib/domain/employees.ts`) y `OPENING_BALANCES`; la carga de los legajos de la demo pasa a ser "los que falten, por número" (`insertEmployees` y `private.insert_demo_employees`). Las pruebas que contaban con el saldo chico de la apertura para provocar rechazos por falta de fondos corren sus importes los mismos 80 millones. Base de datos: migraciones 115 (`20261118120000_demo_template_personal.sql`, la plantilla regenerada) y 116 (`20261118120100_personal_plantilla.sql`, la plantilla que ya existía suma lo que le falta).
 
+### La 9b.1 en detalle (22/11, a validar)
+
+- **10 proveedores del banco ficticio, por rubro de lo que compra la empresa:** placas y tableros (PRV-101 y PRV-123), aserraderos (PRV-102 y PRV-113), barnices (PRV-103), herrajes (PRV-106), embalajes (PRV-107), bulonería (PRV-114) y tapicería (PRV-117 y PRV-122, para la línea nueva de la 9b.2). Quedan 20 en el banco para los casos y los escenarios.
+- **Los 30 clientes del banco ficticio (CLI-101 a CLI-130):** mueblerías, constructoras, alojamientos turísticos, carpinterías, estudios de decoración, instituciones y el consumidor final del showroom de Posadas, cada uno con su plazo de pago y su límite de crédito. Con los diez de antes, 40.
+- **El padrón del fisco** los incluye (los que tienen CUIT), como a los de antes.
+- **Las listas de precios no vienen armadas:** son el ejercicio de Ventas de la 4d (crear una lista, ajustarla por porcentaje y asignarla, por ejemplo a las mueblerías que revenden), y las empresas de los cursos no las copian de la plantilla.
+- **El segundo punto de venta no viene habilitado:** pedirlo (Ventas) y habilitarlo (Impuestos) es la actividad de la 8d.2; el showroom de Posadas ya está como cliente para sus ventas de mostrador.
+- **Dónde crece:** como en la 9a, la plantilla (en el simulador, al restablecer la demo, y en la base real, con una migración que le suma los proveedores y los clientes que le falten, por código, y el padrón) y las empresas que se creen después.
+
 ## 3. Decisiones (a validar)
 
 - **La escala** de la tabla: se puede subir o bajar sin cambiar el diseño.
 - **Las empresas ya creadas no cambian:** la empresa más grande es la plantilla, para los cursos nuevos (hoy, en la base real, sólo está la plantilla). Si un curso ya creado la quiere, se le puede sumar con una acción del docente **(a validar)**.
-- **Los nombres de los clientes y proveedores** salen del banco ficticio; antes de usarlo en clase, el usuario revisa que ningún nombre coincida con un comercio real de la zona (es la Etapa B2 del plan).
+- **Los nombres de los clientes y proveedores** salen del banco ficticio. El usuario decidió el 22/11 que no hace falta revisar si coinciden con comercios reales de la zona: son inventados y la app aclara por varios medios que son ficticios.
 - **La actividad del entorno (9d)** la dispara el docente con un botón ("Generar la semana"), con un ritmo propuesto (por ejemplo, de 8 a 12 pedidos por semana) y siempre igual para la misma semana (reproducible); más adelante, en automático según la fecha. Los pedidos llegan con el cliente y su referencia, como si los hubiera mandado él, y Ventas los revisa (crédito y stock) y los confirma: el resto del circuito (depósito, logística, facturación, cobranza, compras y producción) se mueve con eso. Los proveedores avisan que entregan lo pedido (Depósito recibe), y las novedades del mes (ausencias, horas extra) le llegan a RRHH como un parte que carga en la liquidación. **(a validar: qué genera y cuánto)**
 - **Orden:** va después de la Fase 8, como estaba. Propuesta: después de la 8f y la 7d, y **antes de los escenarios (8g)**, que aprovechan la empresa más grande y la actividad del entorno.
 

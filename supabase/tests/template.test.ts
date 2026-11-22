@@ -610,6 +610,40 @@ describe('plantilla Forestal del Norte (seed_demo_company)', () => {
     }
   })
 
+  it('la plantilla que ya existía suma los proveedores y clientes que le faltan, por código, y su padrón (9b.1)', async () => {
+    const codes = async (table: string) =>
+      (
+        await db.admin<{ code: string }>(`select code from public.${table} where company_id = $1 order by code`, [
+          template,
+        ])
+      ).map((r) => r.code)
+    const suppliers = await codes('suppliers')
+    const customers = await codes('customers')
+    expect(suppliers).toHaveLength(20)
+    expect(customers).toHaveLength(40)
+    // Como estaba antes de la empresa que crece (sin los del banco ficticio); se deshace al terminar.
+    await db.admin('begin')
+    try {
+      await db.admin(
+        `delete from public.taxpayers t where t.company_id = $1 and t.cuit in (
+           select s.tax_id from public.suppliers s where s.company_id = $1 and s.code like 'PRV-1%'
+           union all select c.tax_id from public.customers c where c.company_id = $1 and c.code like 'CLI-1%')`,
+        [template],
+      )
+      await db.admin(`delete from public.suppliers where company_id = $1 and code like 'PRV-1%'`, [template])
+      await db.admin(`delete from public.customers where company_id = $1 and code like 'CLI-1%'`, [template])
+      expect(await codes('suppliers')).toHaveLength(10)
+      expect(await codes('customers')).toHaveLength(10)
+      for (let i = 0; i < 2; i++)
+        await db.admin('select private.insert_demo_partners($1), private.insert_padron($1)', [template])
+      expect(await codes('suppliers')).toEqual(suppliers)
+      expect(await codes('customers')).toEqual(customers)
+      expect(await padron(template)).toEqual(mockPadron)
+    } finally {
+      await db.admin('rollback')
+    }
+  })
+
   it('tiene los mismos transportistas y vehículos propios que la demo', async () => {
     expect(mockCarriers).toHaveLength(2)
     expect(await carriers(template)).toEqual(mockCarriers)
