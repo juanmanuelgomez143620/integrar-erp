@@ -1,4 +1,4 @@
-import { Suspense } from 'react'
+import { lazy, Suspense } from 'react'
 import { Link, Navigate, Outlet, useLocation, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,24 @@ import { useMe, useSession } from '@/app/session'
 
 /** Rutas que no dependen de una empresa: hay que poder llegar a ellas sin quedar atrapado en el redireccionamiento. */
 const ACCOUNT_ROUTES = ['/cambiar-contrasena', '/perfil']
+
+const PublicHomePage = lazy(() =>
+  import('@/features/home/public-home-page').then((m) => ({ default: m.PublicHomePage })),
+)
+
+/**
+ * La raíz (D18): sin sesión, la página pública que explica qué es INTEGR-AR (se descarga sólo entonces);
+ * con sesión, lo de siempre: RequireAuth y, adentro, HomeRedirect.
+ */
+export function HomeGate() {
+  const { userId } = useSession()
+  if (userId) return <RequireAuth />
+  return (
+    <Suspense fallback={<Loading />}>
+      <PublicHomePage />
+    </Suspense>
+  )
+}
 
 export function RequireAuth() {
   const { userId, logout } = useSession()

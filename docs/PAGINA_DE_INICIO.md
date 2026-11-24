@@ -3,7 +3,7 @@
 > El pedido: "mejorar la página de inicio. Debe ser más explicativa y persuasiva: explicarle al usuario de
 > qué se trata. Como es restringido, sólo existirá un panel público explicativo o con datos de muestra."
 >
-> Estado: **diseño a validar** (23/11). Sin código todavía.
+> Estado: **hecha el 23/11** (el usuario pidió seguir con la página): P1 a P3. Falta revisarla en el celular y publicarla con el resto de `main`.
 
 ## 1. Cómo está hoy (análisis del 23/11)
 
@@ -48,9 +48,9 @@ Un panel de **sólo lectura** con la empresa de demostración, para ver cómo se
 
 | Paso | Qué | Estado |
 | --- | --- | --- |
-| P1 | Los textos y la estructura de este documento, validados con el usuario | Pendiente |
-| P2 | La página pública: portada, cómo funciona, los circuitos, qué se aprende, el docente, las preguntas y el pie; `/` pública sin sesión; el ingreso, en `/login` como hoy | Pendiente |
-| P3 | La muestra con datos ficticios: el tablero, el mapa vivo y los documentos de ejemplo, de sólo lectura, con el simulador en memoria | Pendiente |
+| P1 | Los textos y la estructura de este documento, validados con el usuario | Hecho (23/11): el usuario pidió seguir con la página |
+| P2 | La página pública: portada, cómo funciona, los circuitos, qué se aprende, el docente, las preguntas y el pie; `/` pública sin sesión; el ingreso, en `/login` como hoy | Hecho (23/11): `src/features/home/public-home-page.tsx` y `HomeGate` en los guardias |
+| P3 | La muestra con datos ficticios: el tablero, el mapa vivo y los documentos de ejemplo, de sólo lectura, con el simulador en memoria | Hecho (23/11): `sample.ts` (con pruebas) y `sample-panel.tsx`; no toca la base guardada |
 
 **Pruebas:** que sin sesión la página no consulte la base real (en la versión con Supabase), que con sesión `/` siga llevando a la empresa, el celular y la computadora, y el texto de la muestra (los datos de la demo).
 

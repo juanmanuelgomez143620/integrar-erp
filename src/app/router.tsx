@@ -2,7 +2,7 @@ import { lazy, type ComponentType } from 'react'
 import { createBrowserRouter, Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { LoginPage } from '@/features/auth/login-page'
-import { CompanyRoute, HomeRedirect, RequireAuth } from '@/features/auth/guards'
+import { CompanyRoute, HomeGate, HomeRedirect, RequireAuth } from '@/features/auth/guards'
 import { AppShell } from './layouts/app-shell'
 
 /**
@@ -149,10 +149,11 @@ function NotFound() {
 export const router = createBrowserRouter(
   [
     { path: '/login', element: <LoginPage /> },
+    // Sin sesión, la página pública (D18); con sesión, a la empresa del usuario.
+    { path: '/', element: <HomeGate />, children: [{ index: true, element: <HomeRedirect /> }] },
     {
       element: <RequireAuth />,
       children: [
-        { path: '/', element: <HomeRedirect /> },
         { path: '/empresas', element: <CompanySelectPage /> },
         { path: '/cambiar-contrasena', element: <ChangePasswordPage /> },
         { path: '/perfil', element: <ProfilePage /> },

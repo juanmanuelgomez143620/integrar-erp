@@ -34,8 +34,11 @@ function Variation({ indicator }: { indicator: ControlIndicator }) {
   )
 }
 
-/** Las alertas (7d.2): lo que requiere atención hoy, cada una con el enlace a su pantalla. */
-function AlertsSection({ alerts }: { alerts: ControlAlert[] }) {
+/**
+ * Las alertas (7d.2): lo que requiere atención hoy, cada una con el enlace a su pantalla (en la muestra de la
+ * página pública, D18, sin enlaces: ahí no hay a dónde ir).
+ */
+export function AlertsSection({ alerts, linked = true }: { alerts: ControlAlert[]; linked?: boolean }) {
   return (
     <Section
       title="Alertas de hoy"
@@ -44,15 +47,14 @@ function AlertsSection({ alerts }: { alerts: ControlAlert[] }) {
     >
       {alerts.length ? (
         <ul className="grid gap-2 sm:grid-cols-2">
-          {alerts.map((a) => (
-            <li key={a.key}>
-              <Link
-                to={a.path}
-                className={cn(
-                  'flex gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-muted/50',
-                  a.severity === 'danger' ? 'border-red-200 bg-red-50/60' : 'border-amber-200 bg-amber-50/60',
-                )}
-              >
+          {alerts.map((a) => {
+            const className = cn(
+              'flex gap-2 rounded-lg border px-3 py-2 text-sm',
+              linked && 'hover:bg-muted/50',
+              a.severity === 'danger' ? 'border-red-200 bg-red-50/60' : 'border-amber-200 bg-amber-50/60',
+            )
+            const body = (
+              <>
                 {a.severity === 'danger' ? (
                   <CircleAlert className="mt-0.5 size-4 shrink-0 text-red-700" />
                 ) : (
@@ -62,9 +64,20 @@ function AlertsSection({ alerts }: { alerts: ControlAlert[] }) {
                   <span className="font-medium">{a.title}</span>
                   <span className="block text-xs text-muted-foreground">{a.detail}</span>
                 </span>
-              </Link>
-            </li>
-          ))}
+              </>
+            )
+            return (
+              <li key={a.key}>
+                {linked ? (
+                  <Link to={a.path} className={className}>
+                    {body}
+                  </Link>
+                ) : (
+                  <div className={className}>{body}</div>
+                )}
+              </li>
+            )
+          })}
         </ul>
       ) : (
         <p className="text-sm text-muted-foreground">Nada que requiera atención hoy.</p>

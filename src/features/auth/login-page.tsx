@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { Navigate, useNavigate } from 'react-router'
+import { Link, Navigate, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Clock, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { showError } from '@/hooks/use-command'
 import { useIdleLogoutNotice } from '@/app/idle-logout'
 import { useSession } from '@/app/session'
 import { ROLES } from '@/lib/domain/catalog'
+import { schoolLogoUrl } from './school-logo'
 
 const ISLANDS: Record<number, string> = {
   1: 'Gerencia y Control',
@@ -53,11 +54,7 @@ export function LoginPage() {
     run(() => login(username, password))
   }
 
-  const schoolLogo = school?.logo_path
-    ? school.logo_path.startsWith('data:')
-      ? school.logo_path
-      : `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${school.logo_path}`
-    : null
+  const schoolLogo = schoolLogoUrl(school?.logo_path)
 
   return (
     <div className="grid min-h-svh lg:grid-cols-[minmax(380px,44%)_1fr]">
@@ -113,7 +110,10 @@ export function LoginPage() {
           )}
           <h2 className="text-xl font-semibold text-navy">Ingresar</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Ingresá con el usuario y la contraseña que te dio tu docente.
+            Ingresá con el usuario y la contraseña que te dio tu docente.{' '}
+            <Link to="/" className="font-medium text-brand-blue hover:underline">
+              ¿Qué es INTEGR-AR?
+            </Link>
           </p>
           {idleMinutes !== null && (
             <p
