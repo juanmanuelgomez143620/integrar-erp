@@ -351,6 +351,23 @@ export interface EnvironmentWeek {
   created_at: string
 }
 
+/**
+ * El aviso de entrega de un proveedor (Fase 9d.2): llega con la actividad de la semana para una orden de
+ * compra enviada, con el remito del proveedor, el transporte, el día en que llega y lo que trae.
+ */
+export interface DeliveryNotice {
+  id: string
+  company_id: string
+  /** La semana ISO en que llegó el aviso: "2026-W48". */
+  week: string
+  purchase_order_id: string
+  delivery_note: string
+  carrier_name: string
+  arrives_on: string
+  lines: { po_line_id: string; quantity: number }[]
+  created_at: string
+}
+
 /** Zona de reparto (Fase 9c.1): la mantiene Logística; cada cliente puede estar en una. */
 export interface DeliveryZone extends Audited {
   id: string

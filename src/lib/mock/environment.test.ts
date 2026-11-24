@@ -1,18 +1,25 @@
-// Pruebas de la actividad del entorno (docs/FASE_9_LA_EMPRESA_CRECE.md, 9d.1) sobre buildSeed() y los cmd*:
-// el docente genera la semana y llegan los pedidos de los clientes, que Ventas confirma o rechaza.
+// Pruebas de la actividad del entorno (docs/FASE_9_LA_EMPRESA_CRECE.md, 9d.1 y 9d.2) sobre buildSeed() y los
+// cmd*: el docente genera la semana y llegan los pedidos de los clientes, que Ventas confirma o rechaza, y los
+// avisos de entrega de los proveedores, que Depósito recibe.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
+import type * as T from '../domain/types'
 import {
   BusinessError,
+  cmdApprovePurchaseOrder,
   cmdCancelSalesOrder,
   cmdConfirmSalesOrder,
+  cmdCreateGoodsReceipt,
+  cmdCreatePurchaseOrder,
   cmdGenerateEnvironmentWeek,
+  cmdSendPurchaseOrder,
+  cmdSubmitPurchaseOrder,
   isoWeek,
   weekCustomerOrders,
   type Ctx,
 } from './engine'
-import { documentDetail, environmentView, listTasks } from './queries'
+import { documentDetail, environmentView, listTasks, receivableOrders } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -156,10 +163,135 @@ describe('la actividad del entorno (Fase 9d.1)', () => {
     expect(open).toEqual([])
   })
 
-  it('al actualizar una base guardada (v34), quedan las semanas vacías', () => {
-    const { environmentWeeks: _weeks, ...v34 } = structuredClone(db)
+  it('al actualizar una base guardada (v34), quedan las semanas y los avisos vacíos', () => {
+    const { environmentWeeks: _weeks, deliveryNotices: _notices, ...v34 } = structuredClone(db)
     const upgraded = upgradeDatabase({ ...v34, version: 34 } as DB)!
     expect(upgraded.version).toBe(DB_VERSION)
     expect(upgraded.environmentWeeks).toEqual([])
+    expect(upgraded.deliveryNotices).toEqual([])
+  })
+})
+
+/** Arma y envía una orden de compra de MP-001 a PRV-001, con su fecha de entrega comprometida. */
+function sentOrder(quantity: number, expected: string | null) {
+  const oc = cmdCreatePurchaseOrder(ctx('compras1'), companyId(), {
+    supplier_id: db.suppliers.find((s) => s.code === 'PRV-001')!.id,
+    expected_date: expected,
+    warehouse_id: db.warehouses.find((w) => w.code === 'DEP-MP')!.id,
+    payment_terms_days: 30,
+    delivery_terms: 'Entrega en planta',
+    notes: '',
+    lines: [
+      {
+        product_id: db.products.find((p) => p.code === 'MP-001')!.id,
+        requisition_line_id: null,
+        quantity,
+        unit_price: 1000,
+        vat_rate: 21,
+      },
+    ],
+  })
+  cmdSubmitPurchaseOrder(ctx('compras1'), oc.id)
+  cmdApprovePurchaseOrder(ctx('compras2'), oc.id, 'OK')
+  cmdSendPurchaseOrder(ctx('compras1'), oc.id)
+  return db.documents.find((d) => d.id === oc.id)!
+}
+
+/** Depósito recibe una cantidad de la única línea de la orden, con el remito que diga. */
+function receive(order: T.Document, quantity: number, note: string) {
+  const line = db.poLines.find((l) => l.document_id === order.id)!
+  cmdCreateGoodsReceipt(
+    ctx('deposito'),
+    companyId(),
+    {
+      purchase_order_id: order.id,
+      warehouse_id: order.po!.warehouse_id,
+      supplier_delivery_note: note,
+      carrier_name: '',
+      notes: '',
+      lines: [{ po_line_id: line.id, quantity }],
+    },
+    true,
+  )
+}
+
+describe('las entregas de los proveedores (Fase 9d.2)', () => {
+  it('avisan las órdenes enviadas que vencen en la semana o sin fecha, con su remito y lo pendiente', () => {
+    const thisWeek = sentOrder(10, '2027-05-15')
+    sentOrder(5, '2027-05-20')
+    const undated = sentOrder(8, null)
+    const { notices } = cmdGenerateEnvironmentWeek(ctx('docente'), companyId())
+    expect(notices).toEqual([thisWeek.display_number, undated.display_number])
+    const [first, second] = db.deliveryNotices
+    expect(first).toMatchObject({
+      purchase_order_id: thisWeek.id,
+      week: '2027-W19',
+      carrier_name: 'Reparto del proveedor',
+      arrives_on: '2027-05-15',
+      lines: [{ quantity: 10 }],
+    })
+    expect(first.delivery_note).toMatch(/^\d{4}-\d{8}$/)
+    // Sin fecha comprometida, llega hoy.
+    expect(second).toMatchObject({ purchase_order_id: undated.id, arrives_on: '2027-05-14', lines: [{ quantity: 8 }] })
+    expect(db.audit.at(-1)!.summary).toMatch(/: \d+ pedidos de clientes y 2 avisos de entrega de proveedores$/)
+    // Depósito recibe la notificación, con el enlace a la orden de compra.
+    const supplier = db.suppliers.find((s) => s.code === 'PRV-001')!.legal_name
+    const sent = db.notifications.filter(
+      (n) => n.type === 'AVISO_ENTREGA' && n.recipient_user_id === userId('deposito'),
+    )
+    expect(sent.map((n) => n.document_id)).toEqual([thisWeek.id, undated.id])
+    expect(sent[0].title).toBe(`${supplier} entrega ${thisWeek.display_number} el 15/05/2027`)
+    expect(sent[0].body).toContain(`remito ${first.delivery_note}`)
+  })
+
+  it('la recepción trae el aviso y lo da por recibido; la semana siguiente avisa el saldo', () => {
+    const order = sentOrder(10, '2027-05-15')
+    const later = sentOrder(5, '2027-05-20')
+    cmdGenerateEnvironmentWeek(ctx('docente'), companyId())
+    const notice = db.deliveryNotices[0]
+    const receivable = receivableOrders(db, userId('deposito'), companyId())
+    expect(receivable.find((r) => r.order.id === order.id)!.notice).toEqual({
+      delivery_note: notice.delivery_note,
+      carrier_name: 'Reparto del proveedor',
+      arrives_on: '2027-05-15',
+      lines: notice.lines,
+    })
+    expect(receivable.find((r) => r.order.id === later.id)!.notice).toBeNull()
+    // Llegan 6 de las 10: el aviso queda recibido y la orden, recibida en parte.
+    vi.setSystemTime(new Date('2027-05-15T10:00:00-03:00'))
+    receive(order, 6, notice.delivery_note)
+    expect(environmentView(db, userId('docente'), companyId()).weeks[0].notices).toEqual([
+      {
+        purchase_order: order.display_number,
+        supplier: db.suppliers.find((s) => s.code === 'PRV-001')!.legal_name,
+        delivery_note: notice.delivery_note,
+        arrives_on: '2027-05-15',
+        received: true,
+      },
+    ])
+    expect(
+      receivableOrders(db, userId('deposito'), companyId()).find((r) => r.order.id === order.id)!.notice,
+    ).toBeNull()
+    // La semana siguiente, el saldo de la primera y la que vencía después.
+    vi.setSystemTime(new Date('2027-05-17T10:00:00-03:00'))
+    expect(cmdGenerateEnvironmentWeek(ctx('docente'), companyId()).notices).toEqual([
+      order.display_number,
+      later.display_number,
+    ])
+    expect(db.deliveryNotices[1]).toMatchObject({
+      purchase_order_id: order.id,
+      week: '2027-W20',
+      arrives_on: '2027-05-17',
+      lines: [{ quantity: 4 }],
+    })
+    expect(db.deliveryNotices[2]).toMatchObject({ purchase_order_id: later.id, arrives_on: '2027-05-20' })
+  })
+
+  it('un aviso sin recibir no se repite la semana siguiente', () => {
+    sentOrder(10, null)
+    expect(cmdGenerateEnvironmentWeek(ctx('docente'), companyId()).notices).toHaveLength(1)
+    vi.setSystemTime(new Date('2027-05-17T10:00:00-03:00'))
+    expect(cmdGenerateEnvironmentWeek(ctx('docente'), companyId()).notices).toEqual([])
+    expect(db.audit.at(-1)!.summary).toMatch(/pedidos de clientes$/)
   })
 })

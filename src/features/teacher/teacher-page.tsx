@@ -318,7 +318,9 @@ function EnvironmentSection() {
   })
   const generate = useCommand(() => commands.generateEnvironmentWeek(company.companyId), {
     success: (r) =>
-      `Llegaron ${r.orders.length} pedidos de clientes (semana ${r.week}): Ventas tiene la tarea de revisarlos.`,
+      r.notices.length
+        ? `Llegaron ${r.orders.length} pedidos de clientes y ${r.notices.length} avisos de entrega de proveedores (semana ${r.week}): Ventas y Depósito tienen su trabajo.`
+        : `Llegaron ${r.orders.length} pedidos de clientes (semana ${r.week}): Ventas tiene la tarea de revisarlos.`,
   })
   if (!view.data) return <Loading error={view.error} />
   const { current, generated, weeks } = view.data
@@ -326,7 +328,7 @@ function EnvironmentSection() {
     <div className="grid grid-cols-1 gap-4">
       <Section
         title="Actividad del entorno"
-        description="Lo que llega de afuera cada semana, para que el trabajo no dependa de que los estudiantes inventen operaciones: los pedidos de los clientes, que Ventas revisa (el stock y el crédito) y confirma o rechaza. Se genera una vez por semana y la misma semana trae siempre lo mismo."
+        description="Lo que llega de afuera cada semana, para que el trabajo no dependa de que los estudiantes inventen operaciones: los pedidos de los clientes, que Ventas revisa (el stock y el crédito) y confirma o rechaza, y los avisos de entrega de los proveedores de las órdenes de compra enviadas, que Depósito recibe. Se genera una vez por semana y la misma semana trae siempre lo mismo."
         actions={
           <Button size="sm" disabled={generated || generate.isPending} onClick={() => generate.mutate([])}>
             <CalendarPlus /> {generated ? `Semana ${current} generada` : `Generar la semana ${current}`}
@@ -344,6 +346,7 @@ function EnvironmentSection() {
                   <span className="text-muted-foreground">
                     {' '}
                     · generada el {date(w.generated_on)} por {w.generated_by_name} · {w.orders.length} pedidos
+                    {w.notices.length > 0 && ` y ${w.notices.length} avisos de entrega`}
                   </span>
                 </p>
                 <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
@@ -365,6 +368,37 @@ function EnvironmentSection() {
                     )
                   })}
                 </ul>
+                {w.notices.length > 0 && (
+                  <>
+                    <p className="mt-3 mb-1.5 text-xs font-semibold text-muted-foreground">
+                      Avisos de entrega de los proveedores
+                    </p>
+                    <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+                      {w.notices.map((n) => (
+                        <li
+                          key={`${n.purchase_order}-${n.delivery_note}`}
+                          className="grid min-w-0 gap-0.5 rounded-md border px-2 py-1.5"
+                        >
+                          <span className="min-w-0 truncate">
+                            <Link to={company.docPath('PURCHASE_ORDER', n.purchase_order)} className="hover:underline">
+                              <Mono>{n.purchase_order}</Mono>
+                            </Link>{' '}
+                            {n.supplier}
+                          </span>
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-muted-foreground">
+                              Remito {n.delivery_note} · llega el {date(n.arrives_on)}
+                            </span>
+                            <StatusBadge
+                              label={n.received ? 'Recibido' : 'Por recibir'}
+                              badge={n.received ? 'success' : 'warning'}
+                            />
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
               </div>
             ))}
           </div>

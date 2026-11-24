@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { PackageCheck, PackageOpen } from 'lucide-react'
+import { PackageCheck, PackageOpen, Truck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { EmptyState, Field, Loading, Section } from '@/components/common/blocks'
@@ -13,6 +13,17 @@ import { date, money, qty } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
+
+/** Las cantidades de partida: lo que trae el aviso del proveedor (9d.2) o, si no hay aviso, todo lo pendiente. */
+function startingQuantities(order: ReceivableOrder) {
+  return Object.fromEntries(
+    order.lines.map((l) => {
+      const announced = order.notice?.lines.find((n) => n.po_line_id === l.line.id)?.quantity ?? 0
+      const value = order.notice ? Math.min(announced, l.pending) : l.pending
+      return [l.line.id, String(value).replace('.', ',')]
+    }),
+  )
+}
 
 export function ReceiptFormPage() {
   const company = useCompany()
@@ -32,13 +43,11 @@ function ReceiptForm({ orders }: { orders: ReceivableOrder[] }) {
     () => orders.find((o) => o.order.display_number === params.get('oc'))?.order.id ?? '',
   )
   const order = orders.find((o) => o.order.id === orderId)
-  const [note, setNote] = useState('')
-  const [carrier, setCarrier] = useState('')
+  const [note, setNote] = useState(order?.notice?.delivery_note ?? '')
+  const [carrier, setCarrier] = useState(order?.notice?.carrier_name ?? '')
   const [notes, setNotes] = useState('')
   const [warehouseId, setWarehouseId] = useState(() => order?.order.po?.warehouse_id ?? company.warehouses[0]?.id ?? '')
-  const [quantities, setQuantities] = useState<Record<string, string>>(() =>
-    order ? Object.fromEntries(order.lines.map((l) => [l.line.id, String(l.pending).replace('.', ',')])) : {},
-  )
+  const [quantities, setQuantities] = useState<Record<string, string>>(() => (order ? startingQuantities(order) : {}))
   const [confirming, setConfirming] = useState(false)
 
   // Cuando se elige otra orden de compra, reiniciamos depósito y cantidades con sus
@@ -48,7 +57,9 @@ function ReceiptForm({ orders }: { orders: ReceivableOrder[] }) {
   if (order && orderId !== loadedOrderId) {
     setLoadedOrderId(orderId)
     setWarehouseId(order.order.po?.warehouse_id ?? company.warehouses[0]?.id ?? '')
-    setQuantities(Object.fromEntries(order.lines.map((l) => [l.line.id, String(l.pending).replace('.', ',')])))
+    setQuantities(startingQuantities(order))
+    setNote(order.notice?.delivery_note ?? '')
+    setCarrier(order.notice?.carrier_name ?? '')
   }
 
   const parsed = useMemo(
@@ -119,11 +130,24 @@ function ReceiptForm({ orders }: { orders: ReceivableOrder[] }) {
                   onChange={setOrderId}
                   options={orders.map((o) => ({
                     value: o.order.id,
-                    label: `${o.order.display_number} · ${o.order.supplier_name} · ${o.order.status_info.label}`,
+                    label: `${o.order.display_number} · ${o.order.supplier_name} · ${o.order.status_info.label}${o.notice ? ` · llega el ${date(o.notice.arrives_on)}` : ''}`,
                   }))}
                   placeholder="Elegí la orden de compra"
                 />
               </Field>
+              {order?.notice && (
+                <p
+                  role="status"
+                  className="flex gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 sm:col-span-2"
+                >
+                  <Truck className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    El proveedor avisó que entrega el {date(order.notice.arrives_on)} con el remito{' '}
+                    {order.notice.delivery_note} ({order.notice.carrier_name}). Ya cargamos el remito, el transporte y
+                    lo que trae: controlá lo que efectivamente llegó y corregí lo que falte.
+                  </span>
+                </p>
+              )}
               {order && (
                 <>
                   <Field

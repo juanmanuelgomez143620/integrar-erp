@@ -55,6 +55,7 @@ import {
   ivaBookEntries,
   laterTaxReturn,
   invoicedQuantity,
+  deliveryNoticeReceived,
   isoWeek,
   invoicePaid,
   invoiceRegistrant,
@@ -2796,9 +2797,33 @@ export function pendingRequisitionLines(db: DB, userId: string, companyId: strin
   return result
 }
 
+/** El aviso de entrega del proveedor que todavía no se recibió (9d.2): con él se completa la recepción. */
+export interface ReceivableNotice {
+  delivery_note: string
+  carrier_name: string
+  arrives_on: string
+  lines: { po_line_id: string; quantity: number }[]
+}
+
 export interface ReceivableOrder {
   order: DocumentListItem
   lines: { line: T.PurchaseOrderLine; product: T.Product; pending: number }[]
+  notice: ReceivableNotice | null
+}
+
+/** El último aviso de entrega sin recibir de una orden de compra. */
+function pendingNotice(db: DB, orderId: string): ReceivableNotice | null {
+  const notice = db.deliveryNotices
+    .filter((n) => n.purchase_order_id === orderId && !deliveryNoticeReceived(db, n))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))[0]
+  return notice
+    ? {
+        delivery_note: notice.delivery_note,
+        carrier_name: notice.carrier_name,
+        arrives_on: notice.arrives_on,
+        lines: notice.lines,
+      }
+    : null
 }
 
 export function receivableOrders(db: DB, userId: string, companyId: string): ReceivableOrder[] {
@@ -2822,6 +2847,7 @@ export function receivableOrders(db: DB, userId: string, companyId: string): Rec
           pending: l.quantity - l.qty_received,
         }))
         .filter((x) => x.pending > 1e-9),
+      notice: pendingNotice(db, d.id),
     }))
 }
 
@@ -6265,6 +6291,8 @@ export interface EnvironmentWeekRow {
   generated_on: string
   generated_by_name: string
   orders: { id: string; display_number: string; customer: string; total: number; status: string }[]
+  /** Los avisos de entrega de los proveedores (9d.2), por número de orden de compra. */
+  notices: { purchase_order: string; supplier: string; delivery_note: string; arrives_on: string; received: boolean }[]
 }
 
 /** El panel de la actividad del entorno: la semana en curso, si ya se generó, y las generadas (la última primero). */
@@ -6299,6 +6327,17 @@ export function environmentView(db: DB, userId: string, companyId: string): Envi
           status: d.status,
         }
       }),
+      notices: db.deliveryNotices
+        .filter((n) => n.company_id === companyId && n.week === w.week)
+        .map((n) => ({ notice: n, order: db.documents.find((d) => d.id === n.purchase_order_id)! }))
+        .sort((a, b) => a.order.number - b.order.number)
+        .map(({ notice, order }) => ({
+          purchase_order: order.display_number,
+          supplier: db.suppliers.find((s) => s.id === order.supplier_id)?.legal_name ?? '',
+          delivery_note: notice.delivery_note,
+          arrives_on: notice.arrives_on,
+          received: deliveryNoticeReceived(db, notice),
+        })),
     })),
   }
 }

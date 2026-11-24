@@ -5749,10 +5749,11 @@ const isoWeekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay() || 
 
 /**
  * El sorteo de una semana: un generador congruencial (el de Numerical Recipes) con semilla fija, el año y
- * el número de la semana. Devuelve un entero de 0 a n − 1. Las cuentas son exactas en los dos lados.
+ * el número de la semana, más una sal para cada sorteo (0, los pedidos; 7, los remitos). Devuelve un entero
+ * de 0 a n − 1. Las cuentas son exactas en los dos lados mientras n no pase de 2.000.000.
  */
-function weekRandom(week: string) {
-  let state = Number(week.slice(0, 4)) * 100 + Number(week.slice(6))
+function weekRandom(week: string, salt = 0) {
+  let state = Number(week.slice(0, 4)) * 100 + Number(week.slice(6)) + salt
   return (n: number) => {
     state = (1664525 * state + 1013904223) % 4294967296
     return Math.floor((state * n) / 4294967296)
@@ -5825,9 +5826,56 @@ export function weekCustomerOrders(db: DB, companyId: string, week: string, toda
   return orders
 }
 
+/** Un aviso de entrega ya se recibió si después de él se registró una recepción de su orden de compra. */
+export function deliveryNoticeReceived(db: DB, notice: T.DeliveryNotice) {
+  return db.documents.some(
+    (d) =>
+      d.doc_type === 'GOODS_RECEIPT' &&
+      d.status === 'CONFIRMADO' &&
+      d.gr!.purchase_order_id === notice.purchase_order_id &&
+      (d.gr!.received_at ?? '') >= notice.created_at,
+  )
+}
+
+/**
+ * Los avisos de entrega de los proveedores en una semana (9d.2): cada orden de compra enviada o recibida en
+ * parte cuya entrega comprometida cae hasta el domingo de la semana (o que no tiene fecha), salvo las que ya
+ * tienen un aviso sin recibir. Trae todo lo pendiente, con el remito del proveedor y el día en que llega (la
+ * fecha comprometida o, si ya pasó, hoy).
+ */
+export function weekDeliveryNotices(db: DB, companyId: string, week: string, today: string) {
+  const sunday = addDays(today, 7 - isoWeekday(today))
+  const rand = weekRandom(week, 7)
+  return db.documents
+    .filter(
+      (d) =>
+        d.company_id === companyId &&
+        d.doc_type === 'PURCHASE_ORDER' &&
+        (d.status === 'ENVIADO' || d.status === 'RECIBIDO_PARCIAL') &&
+        (!d.po!.expected_date || d.po!.expected_date <= sunday) &&
+        db.poLines.some((l) => l.document_id === d.id && l.quantity - l.qty_received > 1e-9) &&
+        !db.deliveryNotices.some((n) => n.purchase_order_id === d.id && !deliveryNoticeReceived(db, n)),
+    )
+    .sort((a, b) => a.number - b.number)
+    .map((d) => {
+      const expected = d.po!.expected_date
+      return {
+        purchase_order_id: d.id,
+        delivery_note: `${String(1 + rand(9)).padStart(4, '0')}-${String(10000 + rand(90000)).padStart(8, '0')}`,
+        carrier_name: 'Reparto del proveedor',
+        arrives_on: expected && expected > today ? expected : today,
+        lines: db.poLines
+          .filter((l) => l.document_id === d.id && l.quantity - l.qty_received > 1e-9)
+          .sort((a, b) => a.line_no - b.line_no)
+          .map((l) => ({ po_line_id: l.id, quantity: l.quantity - l.qty_received })),
+      }
+    })
+}
+
 /**
  * El docente genera la actividad de la semana en curso (9d), una vez por semana: llegan los pedidos de los
- * clientes, recibidos, con la tarea de revisarlos para Ventas.
+ * clientes, recibidos, con la tarea de revisarlos para Ventas, y los avisos de entrega de los proveedores,
+ * que se le notifican a Depósito.
  */
 export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
   const { db } = ctx
@@ -5843,6 +5891,26 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     openTasksForStatus(ctx, doc, SYSTEM_ACTOR)
     return doc
   })
+  const notices = weekDeliveryNotices(db, companyId, week, today).map((n): T.DeliveryNotice => ({
+    id: uid(),
+    company_id: companyId,
+    week,
+    ...n,
+    created_at: ctx.now,
+  }))
+  const noticed = notices.map((notice) => {
+    db.deliveryNotices.push(notice)
+    const order = db.documents.find((d) => d.id === notice.purchase_order_id)!
+    const supplier = db.suppliers.find((s) => s.id === order.supplier_id)!
+    notifyRoles(ctx, companyId, ['DEPOSITO'], {
+      type: 'AVISO_ENTREGA',
+      title: `${supplier.legal_name} entrega ${order.display_number} el ${fmtDate(notice.arrives_on)}`,
+      body: `Llega con el remito ${notice.delivery_note} (${notice.carrier_name}): recibila y controlala contra la orden de compra y el remito.`,
+      link_path: docPath(db, order),
+      document_id: order.id,
+    })
+    return order.display_number
+  })
   const row: T.EnvironmentWeek = {
     id: uid(),
     company_id: companyId,
@@ -5853,6 +5921,9 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     created_at: ctx.now,
   }
   db.environmentWeeks.push(row)
+  const deliveries = noticed.length
+    ? ` y ${noticed.length} ${noticed.length === 1 ? 'aviso' : 'avisos'} de entrega de proveedores`
+    : ''
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -5860,9 +5931,9 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     entity_type: 'environment_week',
     entity_id: row.id,
     entity_label: `Semana ${week}`,
-    summary: `Generó la actividad de la semana ${week}: ${orders.length} pedidos de clientes`,
+    summary: `Generó la actividad de la semana ${week}: ${orders.length} pedidos de clientes${deliveries}`,
   })
-  return { week, orders: orders.map((d) => d.display_number) }
+  return { week, orders: orders.map((d) => d.display_number), notices: noticed }
 }
 
 /**

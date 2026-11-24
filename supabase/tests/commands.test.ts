@@ -5499,7 +5499,7 @@ describe('paridad de comandos', () => {
     await reads('al final')
   })
 
-  it('la actividad del entorno: el docente genera la semana y Ventas revisa los pedidos de los clientes (9d.1)', async () => {
+  it('la actividad del entorno: los pedidos de los clientes que revisa Ventas y los avisos de entrega que recibe Depósito (9d.1 y 9d.2)', async () => {
     const companyPg = pg(company)
     const reads = async (label: string) => {
       for (const username of ['docente', 'ventas'])
@@ -5517,8 +5517,57 @@ describe('paridad de comandos', () => {
         (u) => Q.listTasks(mock, u, company, 'mine', true),
         (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
       )
+      for (const username of ['deposito', 'compras1'])
+        await sameRead(
+          `las órdenes para recibir ${label} (${username})`,
+          username,
+          (b) => b.api.receivableOrders(companyPg),
+          (u) => Q.receivableOrders(mock, u, company),
+        )
     }
     await reads('al empezar')
+    // 9d.2: una orden de compra enviada sin fecha comprometida; la semana trae el aviso de su proveedor.
+    const ocInput: E.PurchaseOrderInput = {
+      supplier_id: supplier('PRV-001'),
+      expected_date: null,
+      warehouse_id: warehouse('DEP-MP'),
+      payment_terms_days: 30,
+      delivery_terms: 'Puesto en planta',
+      notes: '',
+      lines: [
+        { product_id: product('MP-001').id, requisition_line_id: null, quantity: 12, unit_price: 1500, vat_rate: 21 },
+      ],
+    }
+    const oc = await created(
+      'la OC que va a avisar el proveedor',
+      'compras1',
+      (c) => E.cmdCreatePurchaseOrder(c, company, ocInput),
+      (b) =>
+        b.commands.createPurchaseOrder(companyPg, {
+          ...ocInput,
+          supplier_id: pg(ocInput.supplier_id),
+          warehouse_id: pg(ocInput.warehouse_id),
+          lines: ocInput.lines.map((l) => ({ ...l, product_id: pg(l.product_id) })),
+        }),
+    )
+    await ok(
+      'enviar la OC a aprobación',
+      'compras1',
+      (c) => E.cmdSubmitPurchaseOrder(c, oc),
+      (b) => b.commands.submitPurchaseOrder(pg(oc)),
+    )
+    await ok(
+      'aprobar la OC',
+      'compras2',
+      (c) => E.cmdApprovePurchaseOrder(c, oc, 'Precio de lista'),
+      (b) => b.commands.approvePurchaseOrder(pg(oc), 'Precio de lista'),
+    )
+    await ok(
+      'enviar la OC al proveedor',
+      'compras1',
+      (c) => E.cmdSendPurchaseOrder(c, oc),
+      (b) => b.commands.sendPurchaseOrder(pg(oc)),
+    )
     const generate = (label: string, username: string) =>
       step(
         label,
@@ -5550,7 +5599,40 @@ describe('paridad de comandos', () => {
     )
     loaded.link(week.id, weekRow.id)
     expect(await generate('una sola vez por semana', 'docente')).toBeNull()
+    // El aviso de la OC nueva (y los de las enviadas antes, que ya vencieron).
+    const ocNumber = mock.documents.find((d) => d.id === oc)!.display_number
+    expect(result!.mock.notices, 'avisos de entrega').toContain(ocNumber)
+    expect(mock.deliveryNotices.filter((n) => n.company_id === company)).toHaveLength(result!.mock.notices.length)
     await reads('con los pedidos recibidos')
+    // Depósito recibe una parte con el remito del aviso: el aviso queda recibido.
+    const notice = mock.deliveryNotices.find((n) => n.purchase_order_id === oc)!
+    const ocLine = mock.poLines.find((l) => l.document_id === oc)!
+    const receipt = {
+      purchase_order_id: oc,
+      warehouse_id: warehouse('DEP-MP'),
+      supplier_delivery_note: notice.delivery_note,
+      carrier_name: notice.carrier_name,
+      notes: '',
+      lines: [{ po_line_id: ocLine.id, quantity: 7 }],
+    }
+    await created(
+      'recibir con el remito del aviso',
+      'deposito',
+      (c) => E.cmdCreateGoodsReceipt(c, company, receipt, true),
+      (b) =>
+        b.commands.createGoodsReceipt(
+          companyPg,
+          {
+            ...receipt,
+            purchase_order_id: pg(oc),
+            warehouse_id: pg(receipt.warehouse_id),
+            lines: [{ po_line_id: pg(ocLine.id), quantity: 7 }],
+          },
+          true,
+        ),
+    )
+    expect(Q.receivableOrders(mock, mockId('deposito'), company).find((r) => r.order.id === oc)!.notice).toBeNull()
+    await reads('con el aviso recibido')
     for (const order of orders.slice(0, 2))
       await sameRead(
         `el pedido ${order.display_number}, recibido`,

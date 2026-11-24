@@ -216,6 +216,7 @@ export function buildSeed(): DB {
     vehicles: [],
     deliveryZones: [],
     environmentWeeks: [],
+    deliveryNotices: [],
     rsLines: [],
     bankAccounts: [],
     bankMovements: [],
