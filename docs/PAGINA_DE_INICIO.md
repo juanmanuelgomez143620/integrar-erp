@@ -3,7 +3,7 @@
 > El pedido: "mejorar la página de inicio. Debe ser más explicativa y persuasiva: explicarle al usuario de
 > qué se trata. Como es restringido, sólo existirá un panel público explicativo o con datos de muestra."
 >
-> Estado: **hecha el 23/11** (el usuario pidió seguir con la página): P1 a P3. Falta revisarla en el celular y publicarla con el resto de `main`.
+> Estado: **hecha el 23/11** (el usuario pidió seguir con la página): P1 a P3. Revisada en el celular el 24/11 (sin desbordes; la primera pestaña de la muestra dice sólo "Hoy" en pantallas chicas para que entren las cuatro). Falta publicarla con el resto de `main`.
 
 ## 1. Cómo está hoy (análisis del 23/11)
 

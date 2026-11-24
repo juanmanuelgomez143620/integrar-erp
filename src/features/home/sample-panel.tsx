@@ -36,7 +36,9 @@ export function SamplePanel() {
   return (
     <Tabs defaultValue="today">
       <TabsList>
-        <TabsTrigger value="today">Hoy en la empresa</TabsTrigger>
+        <TabsTrigger value="today">
+          Hoy<span className="hidden sm:inline">&nbsp;en la empresa</span>
+        </TabsTrigger>
         <TabsTrigger value="circuit">El circuito</TabsTrigger>
         <TabsTrigger value="order">Un pedido</TabsTrigger>
         <TabsTrigger value="purchase">Una compra</TabsTrigger>
