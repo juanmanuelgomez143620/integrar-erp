@@ -1,12 +1,20 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
-import { Save } from 'lucide-react'
+import { ClipboardList, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Field, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
-import { commands, type DocumentDetail, type PayrollLineView, type PayrollView } from '@/lib/api'
+import {
+  api,
+  commands,
+  type DocumentDetail,
+  type PayrollLineView,
+  type PayrollView,
+  type StaffReportRow,
+} from '@/lib/api'
 import { PAYROLL_DEFAULT_RATES } from '@/lib/domain/catalog'
 import { money, qty, todayAR } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -48,6 +56,18 @@ const numberOf = (s: string) => {
   return s.trim() && Number.isFinite(n) ? n : Number.NaN
 }
 
+/** Lo que dice el parte de un legajo (9d.3): "1 ausencia · 3 h al 50 %". */
+function reportText(row: StaffReportRow | undefined) {
+  if (!row) return ''
+  return [
+    row.absence_days ? `${row.absence_days} ${row.absence_days === 1 ? 'ausencia' : 'ausencias'}` : '',
+    row.overtime_50 ? `${qty(row.overtime_50)} h al 50 %` : '',
+    row.overtime_100 ? `${qty(row.overtime_100)} h al 100 %` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 /**
  * Lo de cada empleado: sus novedades (que RRHH carga mientras la liquidación está en
  * borrador) y los importes de su recibo (docs/FASE_6_RRHH_Y_SUELDOS.md §3).
@@ -78,6 +98,29 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
   )
   const set = (id: string, key: keyof Draft, value: string) =>
     setDrafts((d) => ({ ...d, [id]: { ...d[id], [key]: value } }))
+  // El parte de novedades del mes (9d.3): lo que llegó con la actividad de las semanas.
+  const report = useQuery({
+    queryKey: ['staff-report', company.companyId, view.period],
+    queryFn: () => api.staffReport(company.companyId, view.period),
+  })
+  const reportOf = new Map((report.data ?? []).map((r) => [r.employee_id, r]))
+  const loadReport = () =>
+    setDrafts((d) =>
+      Object.fromEntries(
+        view.lines.map((l) => {
+          const row = reportOf.get(l.employee.id)
+          return [
+            l.id,
+            {
+              ...d[l.id],
+              absence_days: String(row?.absence_days ?? 0),
+              overtime_50: String(row?.overtime_50 ?? 0).replace('.', ','),
+              overtime_100: String(row?.overtime_100 ?? 0).replace('.', ','),
+            },
+          ]
+        }),
+      ),
+    )
   const cell = (l: PayrollLineView, key: keyof Draft, label: string) =>
     editable ? (
       <Input
@@ -100,13 +143,30 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
       }
       actions={
         editable ? (
-          <Button size="sm" disabled={!changed.length || save.isPending} onClick={() => save.mutate([])}>
-            <Save />{' '}
-            {save.isPending ? 'Guardando…' : `Guardar novedades${changed.length ? ` (${changed.length})` : ''}`}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {reportOf.size > 0 && (
+              <Button size="sm" variant="outline" onClick={loadReport}>
+                <ClipboardList /> Cargar el parte del mes
+              </Button>
+            )}
+            <Button size="sm" disabled={!changed.length || save.isPending} onClick={() => save.mutate([])}>
+              <Save />{' '}
+              {save.isPending ? 'Guardando…' : `Guardar novedades${changed.length ? ` (${changed.length})` : ''}`}
+            </Button>
+          </div>
         ) : undefined
       }
     >
+      {editable && reportOf.size > 0 && (
+        <p className="mb-3 flex gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+          <ClipboardList className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Llegó el parte de novedades del mes: {reportOf.size} empleados con ausencias sin aviso u horas extra (lo
+            dice cada uno abajo). "Cargar el parte del mes" las pone en las novedades; revisá también los días u horas
+            trabajados de quien faltó y guardá.
+          </span>
+        </p>
+      )}
       <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -135,6 +195,9 @@ export function PayrollSection({ detail }: { detail: DocumentDetail }) {
                     {l.agreement ? ` · ${l.agreement.code}` : ''}
                     {l.work_center ? ` · ${l.work_center.code}` : ''} · {l.seniority_years} años
                   </div>
+                  {reportOf.has(l.employee.id) && (
+                    <div className="text-xs text-amber-700">Parte: {reportText(reportOf.get(l.employee.id))}</div>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">
                   {l.pay_basis === 'HOURLY'

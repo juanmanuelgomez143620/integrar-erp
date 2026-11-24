@@ -368,6 +368,23 @@ export interface DeliveryNotice {
   created_at: string
 }
 
+/** Una novedad del parte del personal (Fase 9d.3): una ausencia sin aviso o horas extra al 50 o al 100 %. */
+export type StaffNoveltyKind = 'AUSENCIA' | 'EXTRA_50' | 'EXTRA_100'
+
+/** Una novedad del parte que llega con la semana (trae la semana anterior), con su día. */
+export interface StaffNovelty {
+  id: string
+  company_id: string
+  /** La semana ISO en que llegó el parte. */
+  week: string
+  employee_id: string
+  day: string
+  kind: StaffNoveltyKind
+  /** Las horas extra; 0 en una ausencia. */
+  hours: number
+  created_at: string
+}
+
 /** Zona de reparto (Fase 9c.1): la mantiene Logística; cada cliente puede estar en una. */
 export interface DeliveryZone extends Audited {
   id: string

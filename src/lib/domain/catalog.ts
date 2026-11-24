@@ -1055,6 +1055,7 @@ export const NOTIFICATION_TYPES: Record<string, string> = {
   INTIMACION: 'Intimación del fisco',
   MULTA: 'Multa del fisco',
   AVISO_ENTREGA: 'Aviso de entrega del proveedor',
+  PARTE_NOVEDADES: 'Parte de novedades del personal',
 }
 
 // ---------------------------------------------------------------- Etiquetas

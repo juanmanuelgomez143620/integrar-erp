@@ -86,6 +86,7 @@ export interface DB {
   deliveryZones: T.DeliveryZone[]
   environmentWeeks: T.EnvironmentWeek[]
   deliveryNotices: T.DeliveryNotice[]
+  staffNovelties: T.StaffNovelty[]
   rsLines: T.RouteSheetLine[]
   bankAccounts: T.BankAccount[]
   bankMovements: T.BankMovement[]
@@ -112,7 +113,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 36
+export const DB_VERSION = 37
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -174,6 +175,7 @@ const COLLECTIONS = [
   'deliveryZones',
   'environmentWeeks',
   'deliveryNotices',
+  'staffNovelties',
   'rsLines',
   'bankAccounts',
   'bankMovements',
@@ -244,6 +246,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   deliveryZones: 34,
   environmentWeeks: 35,
   deliveryNotices: 36,
+  staffNovelties: 37,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -637,6 +640,10 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   // v35 → v36: los avisos de entrega de los proveedores (Fase 9d.2), vacíos.
   35: (db) => {
     db.deliveryNotices ??= []
+  },
+  // v36 → v37: el parte de novedades del personal (Fase 9d.3), vacío.
+  36: (db) => {
+    db.staffNovelties ??= []
   },
 }
 

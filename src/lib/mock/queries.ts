@@ -6293,6 +6293,8 @@ export interface EnvironmentWeekRow {
   orders: { id: string; display_number: string; customer: string; total: number; status: string }[]
   /** Los avisos de entrega de los proveedores (9d.2), por número de orden de compra. */
   notices: { purchase_order: string; supplier: string; delivery_note: string; arrives_on: string; received: boolean }[]
+  /** El parte de novedades del personal que llegó (9d.3): las ausencias y las horas extra. */
+  staff: { absences: number; overtime_hours: number }
 }
 
 /** El panel de la actividad del entorno: la semana en curso, si ya se generó, y las generadas (la última primero). */
@@ -6338,6 +6340,46 @@ export function environmentView(db: DB, userId: string, companyId: string): Envi
           arrives_on: notice.arrives_on,
           received: deliveryNoticeReceived(db, notice),
         })),
+      staff: staffCounts(db.staffNovelties.filter((n) => n.company_id === companyId && n.week === w.week)),
     })),
   }
+}
+
+/** Cuántas ausencias y cuántas horas extra trae un parte. */
+function staffCounts(novelties: T.StaffNovelty[]) {
+  return {
+    absences: novelties.filter((n) => n.kind === 'AUSENCIA').length,
+    overtime_hours: novelties.reduce((s, n) => s + n.hours, 0),
+  }
+}
+
+/** Lo que dice el parte de novedades de un mes para un legajo (9d.3). */
+export interface StaffReportRow {
+  employee_id: string
+  absence_days: number
+  overtime_50: number
+  overtime_100: number
+}
+
+/**
+ * El parte de novedades del personal de un mes (aaaa-mm), por legajo: lo que RRHH carga en la liquidación
+ * (9d.3). Cada novedad cuenta para el mes de su día.
+ */
+export function staffReport(db: DB, userId: string, companyId: string, period: string): StaffReportRow[] {
+  assertPerm(db, userId, companyId, 'payroll.read')
+  const rows = new Map<string, StaffReportRow>()
+  for (const n of db.staffNovelties.filter((x) => x.company_id === companyId && x.day.slice(0, 7) === period)) {
+    const row = rows.get(n.employee_id) ?? {
+      employee_id: n.employee_id,
+      absence_days: 0,
+      overtime_50: 0,
+      overtime_100: 0,
+    }
+    if (n.kind === 'AUSENCIA') row.absence_days += 1
+    if (n.kind === 'EXTRA_50') row.overtime_50 += n.hours
+    if (n.kind === 'EXTRA_100') row.overtime_100 += n.hours
+    rows.set(n.employee_id, row)
+  }
+  const fileNumber = (id: string) => db.employees.find((e) => e.id === id)?.file_number ?? 0
+  return [...rows.values()].sort((a, b) => fileNumber(a.employee_id) - fileNumber(b.employee_id))
 }

@@ -5517,6 +5517,19 @@ describe('paridad de comandos', () => {
         (u) => Q.listTasks(mock, u, company, 'mine', true),
         (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
       )
+      // 9d.3: el parte de novedades de los meses que toca (el de hoy y los de sus días).
+      const periods = new Set([
+        todayAR().slice(0, 7),
+        ...mock.staffNovelties.filter((n) => n.company_id === company).map((n) => n.day.slice(0, 7)),
+      ])
+      for (const period of periods)
+        for (const username of ['rrhh', 'ventas'])
+          await sameRead(
+            `el parte de novedades de ${period} ${label} (${username})`,
+            username,
+            (b) => b.api.staffReport(companyPg, period),
+            (u) => Q.staffReport(mock, u, company, period),
+          )
       for (const username of ['deposito', 'compras1'])
         await sameRead(
           `las órdenes para recibir ${label} (${username})`,
@@ -5603,6 +5616,7 @@ describe('paridad de comandos', () => {
     const ocNumber = mock.documents.find((d) => d.id === oc)!.display_number
     expect(result!.mock.notices, 'avisos de entrega').toContain(ocNumber)
     expect(mock.deliveryNotices.filter((n) => n.company_id === company)).toHaveLength(result!.mock.notices.length)
+    expect(result!.mock.novelties, 'novedades del parte').toBeGreaterThanOrEqual(2)
     await reads('con los pedidos recibidos')
     // Depósito recibe una parte con el remito del aviso: el aviso queda recibido.
     const notice = mock.deliveryNotices.find((n) => n.purchase_order_id === oc)!

@@ -5749,8 +5749,9 @@ const isoWeekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay() || 
 
 /**
  * El sorteo de una semana: un generador congruencial (el de Numerical Recipes) con semilla fija, el año y
- * el número de la semana, más una sal para cada sorteo (0, los pedidos; 7, los remitos). Devuelve un entero
- * de 0 a n − 1. Las cuentas son exactas en los dos lados mientras n no pase de 2.000.000.
+ * el número de la semana, más una sal para cada sorteo. Devuelve un entero
+ * de 0 a n − 1 (la sal: 0, los pedidos; 7, los remitos; 13, el parte del personal). Las cuentas son exactas en
+ * los dos lados mientras n no pase de 2.000.000.
  */
 function weekRandom(week: string, salt = 0) {
   let state = Number(week.slice(0, 4)) * 100 + Number(week.slice(6)) + salt
@@ -5872,10 +5873,50 @@ export function weekDeliveryNotices(db: DB, companyId: string, week: string, tod
     })
 }
 
+/** El lunes de la semana anterior: el parte que llega en una semana es el de la anterior (9d.3). */
+export function staffReportFrom(today: string) {
+  return addDays(today, 1 - isoWeekday(today) - 7)
+}
+
+/**
+ * El parte de novedades del personal que llega en una semana (9d.3): el de la semana anterior, con 0 a 2
+ * ausencias sin aviso (de legajos distintos, de lunes a viernes) y 2 a 5 registros de horas extra (de 2 a 4
+ * horas; los sábados, al 100 %), de legajos activos que ya habían ingresado ese lunes, por número.
+ */
+export function weekStaffNovelties(db: DB, companyId: string, week: string, today: string) {
+  const from = staffReportFrom(today)
+  const employees = db.employees
+    .filter((e) => e.company_id === companyId && e.status === 'ACTIVO' && e.hire_date <= from)
+    .sort((a, b) => a.file_number - b.file_number)
+  if (!employees.length) return []
+  const rand = weekRandom(week, 13)
+  const novelties: { employee_id: string; day: string; kind: T.StaffNoveltyKind; hours: number }[] = []
+  const absences = Math.min(rand(3), employees.length)
+  const absent: number[] = []
+  for (let i = 0; i < absences; i++) {
+    let k = rand(employees.length)
+    while (absent.includes(k)) k = (k + 1) % employees.length
+    absent.push(k)
+    novelties.push({ employee_id: employees[k].id, day: addDays(from, rand(5)), kind: 'AUSENCIA', hours: 0 })
+  }
+  const overtime = 2 + rand(4)
+  for (let i = 0; i < overtime; i++) {
+    const k = rand(employees.length)
+    const offset = rand(6)
+    novelties.push({
+      employee_id: employees[k].id,
+      day: addDays(from, offset),
+      kind: offset === 5 ? 'EXTRA_100' : 'EXTRA_50',
+      hours: 2 + rand(3),
+    })
+  }
+  return novelties
+}
+
 /**
  * El docente genera la actividad de la semana en curso (9d), una vez por semana: llegan los pedidos de los
- * clientes, recibidos, con la tarea de revisarlos para Ventas, y los avisos de entrega de los proveedores,
- * que se le notifican a Depósito.
+ * clientes, recibidos, con la tarea de revisarlos para Ventas; los avisos de entrega de los proveedores, que
+ * se le notifican a Depósito, y el parte de novedades del personal de la semana anterior, para RRHH.
  */
 export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
   const { db } = ctx
@@ -5911,6 +5952,25 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     })
     return order.display_number
   })
+  const novelties = weekStaffNovelties(db, companyId, week, today).map((n): T.StaffNovelty => ({
+    id: uid(),
+    company_id: companyId,
+    week,
+    ...n,
+    created_at: ctx.now,
+  }))
+  db.staffNovelties.push(...novelties)
+  if (novelties.length) {
+    const from = staffReportFrom(today)
+    const absences = novelties.filter((n) => n.kind === 'AUSENCIA').length
+    const hours = novelties.reduce((s, n) => s + n.hours, 0)
+    notifyRoles(ctx, companyId, ['RRHH'], {
+      type: 'PARTE_NOVEDADES',
+      title: `Llegó el parte de novedades del ${fmtDate(from)} al ${fmtDate(addDays(from, 5))}`,
+      body: `${absences} ${absences === 1 ? 'ausencia' : 'ausencias'} sin aviso y ${hours} horas extra: cargalo en la liquidación del mes desde RRHH → Liquidaciones.`,
+      link_path: `/e/${getCompany(db, companyId).slug}/rrhh/liquidaciones`,
+    })
+  }
   const row: T.EnvironmentWeek = {
     id: uid(),
     company_id: companyId,
@@ -5921,9 +5981,8 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     created_at: ctx.now,
   }
   db.environmentWeeks.push(row)
-  const deliveries = noticed.length
-    ? ` y ${noticed.length} ${noticed.length === 1 ? 'aviso' : 'avisos'} de entrega de proveedores`
-    : ''
+  const deliveries = `${noticed.length} ${noticed.length === 1 ? 'aviso' : 'avisos'} de entrega de proveedores`
+  const staff = `${novelties.length} ${novelties.length === 1 ? 'novedad' : 'novedades'} del personal`
   logAudit(ctx, {
     company_id: companyId,
     actor,
@@ -5931,9 +5990,9 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     entity_type: 'environment_week',
     entity_id: row.id,
     entity_label: `Semana ${week}`,
-    summary: `Generó la actividad de la semana ${week}: ${orders.length} pedidos de clientes${deliveries}`,
+    summary: `Generó la actividad de la semana ${week}: ${orders.length} pedidos de clientes, ${deliveries} y ${staff}`,
   })
-  return { week, orders: orders.map((d) => d.display_number), notices: noticed }
+  return { week, orders: orders.map((d) => d.display_number), notices: noticed, novelties: novelties.length }
 }
 
 /**

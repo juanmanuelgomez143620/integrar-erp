@@ -318,9 +318,7 @@ function EnvironmentSection() {
   })
   const generate = useCommand(() => commands.generateEnvironmentWeek(company.companyId), {
     success: (r) =>
-      r.notices.length
-        ? `Llegaron ${r.orders.length} pedidos de clientes y ${r.notices.length} avisos de entrega de proveedores (semana ${r.week}): Ventas y Depósito tienen su trabajo.`
-        : `Llegaron ${r.orders.length} pedidos de clientes (semana ${r.week}): Ventas tiene la tarea de revisarlos.`,
+      `Semana ${r.week}: llegaron ${r.orders.length} pedidos de clientes, ${r.notices.length} avisos de entrega de proveedores y el parte con ${r.novelties} novedades del personal.`,
   })
   if (!view.data) return <Loading error={view.error} />
   const { current, generated, weeks } = view.data
@@ -328,7 +326,7 @@ function EnvironmentSection() {
     <div className="grid grid-cols-1 gap-4">
       <Section
         title="Actividad del entorno"
-        description="Lo que llega de afuera cada semana, para que el trabajo no dependa de que los estudiantes inventen operaciones: los pedidos de los clientes, que Ventas revisa (el stock y el crédito) y confirma o rechaza, y los avisos de entrega de los proveedores de las órdenes de compra enviadas, que Depósito recibe. Se genera una vez por semana y la misma semana trae siempre lo mismo."
+        description="Lo que llega de afuera cada semana, para que el trabajo no dependa de que los estudiantes inventen operaciones: los pedidos de los clientes, que Ventas revisa (el stock y el crédito) y confirma o rechaza, los avisos de entrega de los proveedores de las órdenes de compra enviadas, que Depósito recibe, y el parte de novedades del personal de la semana anterior, que RRHH carga en la liquidación. Se genera una vez por semana y la misma semana trae siempre lo mismo."
         actions={
           <Button size="sm" disabled={generated || generate.isPending} onClick={() => generate.mutate([])}>
             <CalendarPlus /> {generated ? `Semana ${current} generada` : `Generar la semana ${current}`}
@@ -347,6 +345,7 @@ function EnvironmentSection() {
                     {' '}
                     · generada el {date(w.generated_on)} por {w.generated_by_name} · {w.orders.length} pedidos
                     {w.notices.length > 0 && ` y ${w.notices.length} avisos de entrega`}
+                    {` · parte del personal: ${w.staff.absences} ausencias y ${w.staff.overtime_hours} horas extra`}
                   </span>
                 </p>
                 <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">

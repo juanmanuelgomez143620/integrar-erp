@@ -1,6 +1,6 @@
-// Pruebas de la actividad del entorno (docs/FASE_9_LA_EMPRESA_CRECE.md, 9d.1 y 9d.2) sobre buildSeed() y los
-// cmd*: el docente genera la semana y llegan los pedidos de los clientes, que Ventas confirma o rechaza, y los
-// avisos de entrega de los proveedores, que Depósito recibe.
+// Pruebas de la actividad del entorno (docs/FASE_9_LA_EMPRESA_CRECE.md, 9d.1 a 9d.3) sobre buildSeed() y los
+// cmd*: el docente genera la semana y llegan los pedidos de los clientes, que Ventas confirma o rechaza; los
+// avisos de entrega de los proveedores, que Depósito recibe, y el parte de novedades del personal, para RRHH.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_VERSION, upgradeDatabase, type DB } from './db'
@@ -19,7 +19,7 @@ import {
   weekCustomerOrders,
   type Ctx,
 } from './engine'
-import { documentDetail, environmentView, listTasks, receivableOrders } from './queries'
+import { documentDetail, environmentView, listTasks, receivableOrders, staffReport } from './queries'
 import { buildSeed } from './seed'
 
 let db: DB
@@ -108,7 +108,7 @@ describe('la actividad del entorno (Fase 9d.1)', () => {
       new RegExp(`^Recibió ${orders[0]} de .+ por .+: lo mandó el cliente \\(OC \\d{4}\\)$`),
     )
     expect(db.audit.at(-1)!.summary).toBe(
-      `Generó la actividad de la semana 2027-W19: ${orders.length} pedidos de clientes`,
+      `Generó la actividad de la semana 2027-W19: ${orders.length} pedidos de clientes, 0 avisos de entrega de proveedores y ${db.staffNovelties.length} novedades del personal`,
     )
     // La tarea es de Ventas (el rol), con el próximo paso a la vista.
     const tasks = listTasks(db, userId('ventas'), companyId(), 'mine').filter(
@@ -164,11 +164,12 @@ describe('la actividad del entorno (Fase 9d.1)', () => {
   })
 
   it('al actualizar una base guardada (v34), quedan las semanas y los avisos vacíos', () => {
-    const { environmentWeeks: _weeks, deliveryNotices: _notices, ...v34 } = structuredClone(db)
+    const { environmentWeeks: _weeks, deliveryNotices: _notices, staffNovelties: _staff, ...v34 } = structuredClone(db)
     const upgraded = upgradeDatabase({ ...v34, version: 34 } as DB)!
     expect(upgraded.version).toBe(DB_VERSION)
     expect(upgraded.environmentWeeks).toEqual([])
     expect(upgraded.deliveryNotices).toEqual([])
+    expect(upgraded.staffNovelties).toEqual([])
   })
 })
 
@@ -233,7 +234,9 @@ describe('las entregas de los proveedores (Fase 9d.2)', () => {
     expect(first.delivery_note).toMatch(/^\d{4}-\d{8}$/)
     // Sin fecha comprometida, llega hoy.
     expect(second).toMatchObject({ purchase_order_id: undated.id, arrives_on: '2027-05-14', lines: [{ quantity: 8 }] })
-    expect(db.audit.at(-1)!.summary).toMatch(/: \d+ pedidos de clientes y 2 avisos de entrega de proveedores$/)
+    expect(db.audit.at(-1)!.summary).toMatch(
+      /: \d+ pedidos de clientes, 2 avisos de entrega de proveedores y \d+ novedades del personal$/,
+    )
     // Depósito recibe la notificación, con el enlace a la orden de compra.
     const supplier = db.suppliers.find((s) => s.code === 'PRV-001')!.legal_name
     const sent = db.notifications.filter(
@@ -292,6 +295,73 @@ describe('las entregas de los proveedores (Fase 9d.2)', () => {
     expect(cmdGenerateEnvironmentWeek(ctx('docente'), companyId()).notices).toHaveLength(1)
     vi.setSystemTime(new Date('2027-05-17T10:00:00-03:00'))
     expect(cmdGenerateEnvironmentWeek(ctx('docente'), companyId()).notices).toEqual([])
-    expect(db.audit.at(-1)!.summary).toMatch(/pedidos de clientes$/)
+    expect(db.audit.at(-1)!.summary).toMatch(/pedidos de clientes, 0 avisos de entrega de proveedores y /)
+  })
+})
+
+describe('el parte de novedades del personal (Fase 9d.3)', () => {
+  it('trae la semana anterior: ausencias de legajos distintos y horas extra, con la notificación a RRHH', () => {
+    const { novelties } = cmdGenerateEnvironmentWeek(ctx('docente'), companyId())
+    const parte = db.staffNovelties
+    expect(parte).toHaveLength(novelties)
+    // La semana anterior a la 2027-W19: del lunes 3 al sábado 8 de mayo.
+    for (const n of parte) {
+      expect(n.week).toBe('2027-W19')
+      expect(n.day >= '2027-05-03' && n.day <= '2027-05-08').toBe(true)
+      const employee = db.employees.find((e) => e.id === n.employee_id)!
+      expect(employee.status).toBe('ACTIVO')
+      if (n.kind === 'AUSENCIA') {
+        expect(n.hours).toBe(0)
+        expect(isoWeekday(n.day)).toBeLessThanOrEqual(5)
+      } else {
+        expect(n.hours).toBeGreaterThanOrEqual(2)
+        expect(n.hours).toBeLessThanOrEqual(4)
+        expect(n.kind).toBe(isoWeekday(n.day) === 6 ? 'EXTRA_100' : 'EXTRA_50')
+      }
+    }
+    const absences = parte.filter((n) => n.kind === 'AUSENCIA')
+    expect(absences.length).toBeLessThanOrEqual(2)
+    expect(new Set(absences.map((n) => n.employee_id)).size).toBe(absences.length)
+    const overtime = parte.filter((n) => n.kind !== 'AUSENCIA')
+    expect(overtime.length).toBeGreaterThanOrEqual(2)
+    expect(overtime.length).toBeLessThanOrEqual(5)
+    // RRHH recibe la notificación, con el enlace a las liquidaciones.
+    const sent = db.notifications.filter((n) => n.type === 'PARTE_NOVEDADES' && n.recipient_user_id === userId('rrhh'))
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      title: 'Llegó el parte de novedades del 03/05/2027 al 08/05/2027',
+      link_path: `/e/${db.companies[0].slug}/rrhh/liquidaciones`,
+    })
+    expect(sent[0].body).toMatch(/^\d+ ausencias? sin aviso y \d+ horas extra: /)
+    // El panel del docente lo resume.
+    expect(environmentView(db, userId('docente'), companyId()).weeks[0].staff).toEqual({
+      absences: absences.length,
+      overtime_hours: overtime.reduce((s, n) => s + n.hours, 0),
+    })
+  })
+
+  it('cada novedad cuenta para el mes de su día: el parte de una semana entre dos meses', () => {
+    // La 2027-W23 trae la semana del lunes 31 de mayo al sábado 5 de junio.
+    vi.setSystemTime(new Date('2027-06-08T10:00:00-03:00'))
+    cmdGenerateEnvironmentWeek(ctx('docente'), companyId())
+    const total = (rows: ReturnType<typeof staffReport>) =>
+      rows.reduce((s, r) => s + r.absence_days + r.overtime_50 + r.overtime_100, 0)
+    const may = staffReport(db, userId('rrhh'), companyId(), '2027-05')
+    const june = staffReport(db, userId('rrhh'), companyId(), '2027-06')
+    const byMonth = (prefix: string) =>
+      db.staffNovelties
+        .filter((n) => n.day.startsWith(prefix))
+        .reduce((s, n) => s + (n.kind === 'AUSENCIA' ? 1 : n.hours), 0)
+    expect(total(may)).toBe(byMonth('2027-05'))
+    expect(total(june)).toBe(byMonth('2027-06'))
+    expect(total(may) + total(june)).toBeGreaterThan(0)
+    // Por legajo, en orden de legajo.
+    const files = [...may, ...june].map((r) => db.employees.find((e) => e.id === r.employee_id)!.file_number)
+    expect(june.map((r) => db.employees.find((e) => e.id === r.employee_id)!.file_number)).toEqual(
+      [...june.map((r) => db.employees.find((e) => e.id === r.employee_id)!.file_number)].sort((a, b) => a - b),
+    )
+    expect(files.length).toBe(may.length + june.length)
+    // Lo lee quien ve las liquidaciones.
+    expect(() => staffReport(db, userId('ventas'), companyId(), '2027-06')).toThrow()
   })
 })

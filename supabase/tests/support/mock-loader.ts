@@ -219,6 +219,7 @@ export async function loadMockDb(db: TestDb, mock: DB): Promise<LoadedMock> {
     await insert('fiscal_notices', mock.fiscalNotices as unknown as Row[])
     await insert('environment_weeks', mock.environmentWeeks as unknown as Row[])
     await insert('delivery_notices', mock.deliveryNotices as unknown as Row[])
+    await insert('staff_novelties', mock.staffNovelties as unknown as Row[])
     await insert('document_links', mock.docLinks as unknown as Row[])
     await insert('stock_movements', mock.stockMovements as unknown as Row[], true)
     await insert('stock_balances', mock.stockBalances as unknown as Row[])

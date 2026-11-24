@@ -368,6 +368,11 @@ describe('tesorería', () => {
       await same(u, () => Q.environmentView(mock, userId(u), company), 'environment_view', [companyPg])
   })
 
+  it('el parte de novedades del personal de un mes (9d.3)', async () => {
+    for (const u of USERS)
+      await same(u, () => Q.staffReport(mock, userId(u), company, '2027-05'), 'staff_report', [companyPg, '2027-05'])
+  })
+
   it('el padrón del fisco simulado (8d.1)', async () => {
     for (const u of [...USERS, 'tesoreria2'])
       await same(u, () => Q.padron(mock, userId(u), company), 'padron', [companyPg])

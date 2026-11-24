@@ -299,6 +299,7 @@ export function createSupabaseBackend(config: SupabaseConfig) {
     vehicles: (companyId) => rpc('vehicles_list', company(companyId)),
     deliveryZones: (companyId) => rpc('delivery_zones_list', company(companyId)),
     environment: (companyId) => rpc('environment_view', company(companyId)),
+    staffReport: (companyId, period) => rpc('staff_report', { ...company(companyId), p_period: period }),
     routeSheetCandidates: (companyId) => rpc('route_sheet_candidates', company(companyId)),
     drivers: (companyId) => rpc('drivers_list', company(companyId)),
     jobCategories: (companyId) => rpc('job_categories_list', company(companyId)),
