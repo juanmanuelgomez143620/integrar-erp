@@ -55,6 +55,7 @@ import {
   ivaBookEntries,
   laterTaxReturn,
   invoicedQuantity,
+  isoWeek,
   invoicePaid,
   invoiceRegistrant,
   isInstanceAdmin,
@@ -1008,6 +1009,11 @@ function nextStep(db: DB, doc: T.Document): { who: string; text: string } {
       return {
         who: 'Ventas',
         text: 'Revisar el cliente, los ítems, los precios y el depósito, y confirmar el pedido: se controla el stock disponible y el crédito del cliente, y se reserva la mercadería.',
+      }
+    case 'SALES_ORDER:RECIBIDO':
+      return {
+        who: 'Ventas',
+        text: 'Lo mandó el cliente: revisar el stock disponible y su crédito, y confirmarlo para reservar la mercadería, o rechazarlo con el motivo (si falta stock, se carga lo disponible en otro pedido).',
       }
     case 'SALES_ORDER:PENDIENTE_APROBACION':
       return {
@@ -6249,4 +6255,50 @@ export function listEmployees(db: DB, userId: string, companyId: string): Employ
         work_center: w ? { id: w.id, code: w.code, name: w.name } : null,
       }
     })
+}
+
+// ============================================================ La actividad del entorno (Fase 9d)
+
+/** Una semana generada y lo que llegó en ella. */
+export interface EnvironmentWeekRow {
+  week: string
+  generated_on: string
+  generated_by_name: string
+  orders: { id: string; display_number: string; customer: string; total: number; status: string }[]
+}
+
+/** El panel de la actividad del entorno: la semana en curso, si ya se generó, y las generadas (la última primero). */
+export interface EnvironmentView {
+  current: string
+  generated: boolean
+  weeks: EnvironmentWeekRow[]
+}
+
+/** La actividad del entorno de la empresa (9d): la ve el docente. */
+export function environmentView(db: DB, userId: string, companyId: string): EnvironmentView {
+  const eff = effectivePermissions(db, userId, companyId)
+  if (!eff.supervisor) throw new Error('Sólo docentes')
+  const current = isoWeek(businessDate(db.companies.find((c) => c.id === companyId)!))
+  const weeks = db.environmentWeeks
+    .filter((w) => w.company_id === companyId)
+    .sort((a, b) => (a.week < b.week ? 1 : a.week > b.week ? -1 : 0))
+  return {
+    current,
+    generated: weeks.some((w) => w.week === current),
+    weeks: weeks.map((w) => ({
+      week: w.week,
+      generated_on: w.generated_on,
+      generated_by_name: fullName(w.generated_by ? getProfile(db, w.generated_by) : undefined),
+      orders: w.order_ids.map((id) => {
+        const d = db.documents.find((x) => x.id === id)!
+        return {
+          id: d.id,
+          display_number: d.display_number,
+          customer: db.customers.find((c) => c.id === d.customer_id)?.legal_name ?? '',
+          total: d.total,
+          status: d.status,
+        }
+      }),
+    })),
+  }
 }

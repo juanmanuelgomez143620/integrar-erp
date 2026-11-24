@@ -5499,6 +5499,100 @@ describe('paridad de comandos', () => {
     await reads('al final')
   })
 
+  it('la actividad del entorno: el docente genera la semana y Ventas revisa los pedidos de los clientes (9d.1)', async () => {
+    const companyPg = pg(company)
+    const reads = async (label: string) => {
+      for (const username of ['docente', 'ventas'])
+        await sameRead(
+          `la actividad del entorno ${label} (${username})`,
+          username,
+          (b) => b.api.environment(companyPg),
+          (u) => Q.environmentView(mock, u, company),
+        )
+      // Las tareas creadas en el mismo instante no tienen un orden definido entre sí.
+      await sameRead(
+        `las tareas de Ventas ${label}`,
+        'ventas',
+        (b) => b.api.tasks(companyPg, 'mine', true),
+        (u) => Q.listTasks(mock, u, company, 'mine', true),
+        (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
+      )
+    }
+    await reads('al empezar')
+    const generate = (label: string, username: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdGenerateEnvironmentWeek(c, company),
+        (b) => b.commands.generateEnvironmentWeek(companyPg),
+      )
+    for (const username of ['gerencia', 'ventas'])
+      expect(await generate(`${username} no genera la semana`, username)).toBeNull()
+    const result = await generate('el docente genera la semana', 'docente')
+    expect(result, `el docente genera la semana: tenía que salir bien (${lastFailure})`).not.toBeNull()
+    expect(result!.pg, 'la semana y sus pedidos').toEqual(result!.mock)
+    expect(result!.mock.orders.length, 'pedidos de la semana').toBeGreaterThanOrEqual(8)
+    // Los pedidos nuevos y la semana, vinculados por su número.
+    const orders = result!.mock.orders.map((n) =>
+      mock.documents.find((d) => d.company_id === company && d.display_number === n)!,
+    )
+    for (const order of orders) {
+      const [row] = await db.admin<{ id: string }>(
+        `select id from public.documents where company_id = $1 and doc_type = 'SALES_ORDER' and display_number = $2`,
+        [companyPg, order.display_number],
+      )
+      await linkDocument(order.id, row.id)
+    }
+    const week = mock.environmentWeeks.find((w) => w.company_id === company && w.week === result!.mock.week)!
+    const [weekRow] = await db.admin<{ id: string }>(
+      'select id from public.environment_weeks where company_id = $1 and week = $2',
+      [companyPg, week.week],
+    )
+    loaded.link(week.id, weekRow.id)
+    expect(await generate('una sola vez por semana', 'docente')).toBeNull()
+    await reads('con los pedidos recibidos')
+    for (const order of orders.slice(0, 2))
+      await sameRead(
+        `el pedido ${order.display_number}, recibido`,
+        'ventas',
+        (b) => b.api.document(companyPg, 'SALES_ORDER', order.display_number),
+        (u) => Q.documentDetail(mock, u, company, 'SALES_ORDER', order.display_number),
+      )
+    // Ventas los revisa: confirma los que tienen stock (si el crédito no alcanza, esperan a Gerencia) y
+    // rechaza los demás con el motivo.
+    const reason = 'Falta stock: se carga lo disponible en otro pedido'
+    let confirmed = 0
+    for (const order of orders) {
+      const confirm = await step(
+        `confirmar ${order.display_number}`,
+        'ventas',
+        (c) => E.cmdConfirmSalesOrder(c, order.id),
+        (b) => b.commands.confirmSalesOrder(pg(order.id)),
+      )
+      if (confirm) {
+        confirmed++
+        continue
+      }
+      expect(
+        await step(
+          `rechazar ${order.display_number} sin motivo`,
+          'ventas',
+          (c) => E.cmdCancelSalesOrder(c, order.id, ''),
+          (b) => b.commands.cancelSalesOrder(pg(order.id), ''),
+        ),
+      ).toBeNull()
+      await ok(
+        `rechazar ${order.display_number}`,
+        'ventas',
+        (c) => E.cmdCancelSalesOrder(c, order.id, reason),
+        (b) => b.commands.cancelSalesOrder(pg(order.id), reason),
+      )
+    }
+    expect(confirmed, 'pedidos confirmados').toBeGreaterThan(0)
+    expect(confirmed, 'pedidos rechazados').toBeLessThan(orders.length)
+    await reads('al final')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

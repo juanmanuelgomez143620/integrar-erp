@@ -215,6 +215,7 @@ export function buildSeed(): DB {
     carriers: [],
     vehicles: [],
     deliveryZones: [],
+    environmentWeeks: [],
     rsLines: [],
     bankAccounts: [],
     bankMovements: [],

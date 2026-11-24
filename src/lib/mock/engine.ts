@@ -5675,10 +5675,13 @@ function insertSalesOrder(
   actor: Actor,
   input: SalesOrderInput,
   listPrices?: Map<string, number>,
+  /** Recibido: lo mandó el cliente (la actividad del entorno, Fase 9d.1). */
+  status: 'BORRADOR' | 'RECIBIDO' = 'BORRADOR',
 ) {
   const { db } = ctx
   const { customer, lines } = validateSalesOrder(ctx, companyId, input)
   const doc = newDocument(ctx, companyId, 'SALES_ORDER', actor, {
+    status,
     customer_id: customer.id,
     notes: input.notes.trim(),
     so: {
@@ -5721,10 +5724,145 @@ function insertSalesOrder(
     entity_id: doc.id,
     entity_label: doc.display_number,
     document_id: doc.id,
-    to_status: 'BORRADOR',
-    summary: `Creó ${doc.display_number} a ${customer.legal_name} por ${money(doc.total)}`,
+    to_status: status,
+    summary:
+      status === 'RECIBIDO'
+        ? `Recibió ${doc.display_number} de ${customer.legal_name} por ${money(doc.total)}: lo mandó el cliente (${doc.so!.customer_reference})`
+        : `Creó ${doc.display_number} a ${customer.legal_name} por ${money(doc.total)}`,
   })
   return doc
+}
+
+// ============================================================ La actividad del entorno (Fase 9d, docs/FASE_9_LA_EMPRESA_CRECE.md)
+
+/** La semana ISO de una fecha (aaaa-mm-dd), como to_char(…, 'IYYY-"W"IW') de Postgres: "2026-W48". */
+export function isoWeek(day: string) {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7))
+  const year = d.getUTCFullYear()
+  const week = Math.ceil(((d.getTime() - Date.UTC(year, 0, 1)) / 86_400_000 + 1) / 7)
+  return `${year}-W${String(week).padStart(2, '0')}`
+}
+
+/** El día de la semana de una fecha: de lunes (1) a domingo (7). */
+const isoWeekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay() || 7
+
+/**
+ * El sorteo de una semana: un generador congruencial (el de Numerical Recipes) con semilla fija, el año y
+ * el número de la semana. Devuelve un entero de 0 a n − 1. Las cuentas son exactas en los dos lados.
+ */
+function weekRandom(week: string) {
+  let state = Number(week.slice(0, 4)) * 100 + Number(week.slice(6))
+  return (n: number) => {
+    state = (1664525 * state + 1013904223) % 4294967296
+    return Math.floor((state * n) / 4294967296)
+  }
+}
+
+/** Por código, como `order by code collate "C"`. */
+const byCodeC = (a: { code: string }, b: { code: string }) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)
+
+/** La entrega que pide el cliente: el primer día de reparto de su zona desde pasado mañana; sin zona, a la semana. */
+function requestedDelivery(db: DB, customer: T.Customer, today: string) {
+  const zone = customer.zone_id ? db.deliveryZones.find((z) => z.id === customer.zone_id && z.is_active) : undefined
+  if (zone)
+    for (let k = 2; k <= 8; k++) {
+      const day = addDays(today, k)
+      if (zone.delivery_days.includes(isoWeekday(day))) return day
+    }
+  return addDays(today, 7)
+}
+
+/**
+ * Los pedidos que mandan los clientes en una semana (9d.1), siempre los mismos para la misma semana: de 8 a
+ * 12, de clientes que no son consumidor final, con 1 a 3 productos que se venden (de 1 a 5 unidades) al
+ * precio de su lista, la referencia de su orden de compra y la entrega en el día de reparto de su zona.
+ */
+export function weekCustomerOrders(db: DB, companyId: string, week: string, today: string): SalesOrderInput[] {
+  const customers = db.customers
+    .filter((c) => c.company_id === companyId && c.is_active && c.vat_condition !== 'CONSUMIDOR_FINAL')
+    .sort(byCodeC)
+  const products = db.products
+    .filter(
+      (p) =>
+        p.company_id === companyId &&
+        p.is_active &&
+        p.is_stockable &&
+        (p.product_type === 'PRODUCTO_TERMINADO' || p.product_type === 'MERCADERIA_REVENTA') &&
+        (p.sale_price ?? 0) > 0 &&
+        p.default_warehouse_id !== null,
+    )
+    .sort(byCodeC)
+  if (!customers.length || !products.length) return []
+  const rand = weekRandom(week)
+  const count = 8 + rand(5)
+  const orders: SalesOrderInput[] = []
+  for (let i = 0; i < count; i++) {
+    const customer = customers[rand(customers.length)]
+    const size = Math.min(1 + rand(3), products.length)
+    const chosen: number[] = []
+    const lines: SalesOrderInput['lines'] = []
+    for (let j = 0; j < size; j++) {
+      let k = rand(products.length)
+      while (chosen.includes(k)) k = (k + 1) % products.length
+      chosen.push(k)
+      lines.push({
+        product_id: products[k].id,
+        quantity: 1 + rand(5),
+        unit_price: listPriceFor(db, customer, products[k]),
+      })
+    }
+    orders.push({
+      customer_id: customer.id,
+      warehouse_id: products[chosen[0]].default_warehouse_id!,
+      delivery_date: requestedDelivery(db, customer, today),
+      payment_terms_days: customer.payment_terms_days,
+      customer_reference: `OC ${1000 + rand(9000)}`,
+      notes: `Pedido que mandó el cliente (semana ${week}).`,
+      lines,
+    })
+  }
+  return orders
+}
+
+/**
+ * El docente genera la actividad de la semana en curso (9d), una vez por semana: llegan los pedidos de los
+ * clientes, recibidos, con la tarea de revisarlos para Ventas.
+ */
+export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const actor = requireSupervisor(ctx, companyId)
+  const today = businessDate(getCompany(db, companyId))
+  const week = isoWeek(today)
+  if (db.environmentWeeks.some((w) => w.company_id === companyId && w.week === week))
+    fail('TRANSICION_INVALIDA', `La actividad de la semana ${week} ya se generó: la próxima, desde el lunes.`)
+  const inputs = weekCustomerOrders(db, companyId, week, today)
+  if (!inputs.length) fail('DATO_INVALIDO', 'No hay clientes ni productos para vender: la semana no trae pedidos.')
+  const orders = inputs.map((input) => {
+    const doc = insertSalesOrder(ctx, companyId, SYSTEM_ACTOR, input, undefined, 'RECIBIDO')
+    openTasksForStatus(ctx, doc, SYSTEM_ACTOR)
+    return doc
+  })
+  const row: T.EnvironmentWeek = {
+    id: uid(),
+    company_id: companyId,
+    week,
+    generated_on: today,
+    generated_by: ctx.userId,
+    order_ids: orders.map((d) => d.id),
+    created_at: ctx.now,
+  }
+  db.environmentWeeks.push(row)
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'environment_week',
+    entity_id: row.id,
+    entity_label: `Semana ${week}`,
+    summary: `Generó la actividad de la semana ${week}: ${orders.length} pedidos de clientes`,
+  })
+  return { week, orders: orders.map((d) => d.display_number) }
 }
 
 /**

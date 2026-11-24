@@ -84,6 +84,7 @@ export interface DB {
   carriers: T.Carrier[]
   vehicles: T.Vehicle[]
   deliveryZones: T.DeliveryZone[]
+  environmentWeeks: T.EnvironmentWeek[]
   rsLines: T.RouteSheetLine[]
   bankAccounts: T.BankAccount[]
   bankMovements: T.BankMovement[]
@@ -110,7 +111,7 @@ export interface DB {
   audit: T.AuditEvent[]
 }
 
-export const DB_VERSION = 34
+export const DB_VERSION = 35
 const STORAGE_KEY = 'integrar-erp.mockdb'
 
 /** Cierre de sesión por inactividad por defecto: cubre el recreo entre dos clases en una PC compartida. */
@@ -170,6 +171,7 @@ const COLLECTIONS = [
   'carriers',
   'vehicles',
   'deliveryZones',
+  'environmentWeeks',
   'rsLines',
   'bankAccounts',
   'bankMovements',
@@ -238,6 +240,7 @@ const COLLECTION_SINCE: Partial<Record<(typeof COLLECTIONS)[number], number>> = 
   pointsOfSale: 29,
   fiscalNotices: 32,
   deliveryZones: 34,
+  environmentWeeks: 35,
 }
 
 function isDatabase(value: unknown): value is DB {
@@ -623,6 +626,10 @@ const UPGRADES: Record<number, (db: DB) => void> = {
   33: (db) => {
     db.deliveryZones ??= []
     for (const c of db.customers) c.zone_id ??= null
+  },
+  // v34 → v35: la actividad del entorno (Fase 9d): las semanas generadas, vacías.
+  34: (db) => {
+    db.environmentWeeks ??= []
   },
 }
 

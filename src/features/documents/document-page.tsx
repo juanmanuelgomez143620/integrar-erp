@@ -990,6 +990,8 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
   if (doc.doc_type === 'SALES_ORDER' && detail.sales_order) {
     const so = detail.sales_order
     const customer = detail.customer
+    // Lo que mandó el cliente (la actividad del entorno, 9d.1) no lo vendió nadie: lo cargó el sistema.
+    const fromCustomer = detail.history.some((e) => e.action === 'CREATE' && e.to_status === 'RECIBIDO')
     return (
       <dl className={grid}>
         <InfoRow label="Cliente">{customer?.legal_name}</InfoRow>
@@ -1004,9 +1006,13 @@ function HeaderInfo({ detail }: { detail: DocumentDetail }) {
         </InfoRow>
         <InfoRow label="Referencia del cliente">{so.customer_reference || '—'}</InfoRow>
         {doc.reference_label && <InfoRow label="Presupuesto">{doc.reference_label}</InfoRow>}
-        <InfoRow label="Vendió">
-          {doc.created_by_name} · {doc.sector_name}
-        </InfoRow>
+        {fromCustomer ? (
+          <InfoRow label="Origen">Lo mandó el cliente (actividad del entorno)</InfoRow>
+        ) : (
+          <InfoRow label="Vendió">
+            {doc.created_by_name} · {doc.sector_name}
+          </InfoRow>
+        )}
         {doc.notes && <InfoRow label="Observaciones">{doc.notes}</InfoRow>}
       </dl>
     )

@@ -125,6 +125,7 @@ async function snapshot(company: string) {
     'points_of_sale',
     'fiscal_notices',
     'tax_fines',
+    'environment_weeks',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {

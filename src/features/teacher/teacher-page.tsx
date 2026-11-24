@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { KeyRound, ListPlus, Plus, UserPlus, X } from 'lucide-react'
+import { CalendarPlus, KeyRound, ListPlus, Plus, UserPlus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -14,14 +15,15 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { DataTable } from '@/components/common/data-table'
-import { Field, Loading, Section } from '@/components/common/blocks'
+import { Field, Loading, Mono, Section } from '@/components/common/blocks'
 import { PageHeader } from '@/components/common/page-header'
 import { SimpleSelect } from '@/components/common/pickers'
 import { AuditTimeline } from '@/components/common/audit-timeline'
+import { StatusBadge } from '@/components/common/status-badge'
 import { api, commands, type MemberView } from '@/lib/api'
-import { BANK_MODES, FISCO_MODES, MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
+import { BANK_MODES, DOC_STATUSES, FISCO_MODES, MODULES, ROLES, ROLE_ORDER } from '@/lib/domain/catalog'
 import type { ModuleCode, RoleCode } from '@/lib/domain/types'
-import { relative } from '@/lib/format'
+import { date, money, relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useCompany } from '@/app/company'
 import { PayrollRatesSection } from '@/features/hr/payroll'
@@ -75,6 +77,7 @@ export function TeacherPage() {
           <TabsTrigger value="members">Integrantes y roles</TabsTrigger>
           <TabsTrigger value="config">Módulos y control interno</TabsTrigger>
           <TabsTrigger value="activity">Actividad</TabsTrigger>
+          <TabsTrigger value="environment">Entorno</TabsTrigger>
         </TabsList>
 
         <TabsContent value="members" className="mt-3">
@@ -289,6 +292,10 @@ export function TeacherPage() {
             <AuditTimeline events={(audit.data ?? []).slice(0, 25)} compact />
           </Section>
         </TabsContent>
+
+        <TabsContent value="environment" className="mt-3">
+          <EnvironmentSection />
+        </TabsContent>
       </Tabs>
 
       {assignFor && <AssignRoleDialog member={assignFor} onClose={() => setAssignFor(null)} />}
@@ -296,6 +303,74 @@ export function TeacherPage() {
       <NewStudentDialog open={newStudent} onOpenChange={setNewStudent} />
       <BulkStudentsDialog open={bulkStudents} onOpenChange={setBulkStudents} />
     </>
+  )
+}
+
+/**
+ * La actividad del entorno (Fase 9d): el docente genera la semana en curso, una vez, y llegan los pedidos de
+ * los clientes para que Ventas los revise. Siempre lo mismo para la misma semana.
+ */
+function EnvironmentSection() {
+  const company = useCompany()
+  const view = useQuery({
+    queryKey: ['environment', company.companyId],
+    queryFn: () => api.environment(company.companyId),
+  })
+  const generate = useCommand(() => commands.generateEnvironmentWeek(company.companyId), {
+    success: (r) =>
+      `Llegaron ${r.orders.length} pedidos de clientes (semana ${r.week}): Ventas tiene la tarea de revisarlos.`,
+  })
+  if (!view.data) return <Loading error={view.error} />
+  const { current, generated, weeks } = view.data
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      <Section
+        title="Actividad del entorno"
+        description="Lo que llega de afuera cada semana, para que el trabajo no dependa de que los estudiantes inventen operaciones: los pedidos de los clientes, que Ventas revisa (el stock y el crédito) y confirma o rechaza. Se genera una vez por semana y la misma semana trae siempre lo mismo."
+        actions={
+          <Button size="sm" disabled={generated || generate.isPending} onClick={() => generate.mutate([])}>
+            <CalendarPlus /> {generated ? `Semana ${current} generada` : `Generar la semana ${current}`}
+          </Button>
+        }
+      >
+        {weeks.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Todavía no se generó ninguna semana.</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4">
+            {weeks.map((w) => (
+              <div key={w.week}>
+                <p className="mb-1.5 text-sm">
+                  <span className="font-semibold">Semana {w.week}</span>
+                  <span className="text-muted-foreground">
+                    {' '}
+                    · generada el {date(w.generated_on)} por {w.generated_by_name} · {w.orders.length} pedidos
+                  </span>
+                </p>
+                <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+                  {w.orders.map((o) => {
+                    const status = DOC_STATUSES.SALES_ORDER[o.status]
+                    return (
+                      <li key={o.id} className="grid min-w-0 gap-0.5 rounded-md border px-2 py-1.5">
+                        <span className="min-w-0 truncate">
+                          <Link to={company.docPath('SALES_ORDER', o.display_number)} className="hover:underline">
+                            <Mono>{o.display_number}</Mono>
+                          </Link>{' '}
+                          {o.customer}
+                        </span>
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="tabular text-xs text-muted-foreground">{money(o.total)}</span>
+                          {status && <StatusBadge label={status.label} badge={status.badge} />}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
   )
 }
 

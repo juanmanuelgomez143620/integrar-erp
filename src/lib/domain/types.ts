@@ -338,6 +338,19 @@ export interface Vehicle extends Audited {
   is_active: boolean
 }
 
+/** Una semana de la actividad del entorno que generó el docente (Fase 9d): lo que llegó en ella. */
+export interface EnvironmentWeek {
+  id: string
+  company_id: string
+  /** La semana ISO: "2026-W48". */
+  week: string
+  generated_on: string
+  generated_by: string | null
+  /** Los pedidos de los clientes que llegaron (9d.1), en el orden en que llegaron. */
+  order_ids: string[]
+  created_at: string
+}
+
 /** Zona de reparto (Fase 9c.1): la mantiene Logística; cada cliente puede estar en una. */
 export interface DeliveryZone extends Audited {
   id: string
