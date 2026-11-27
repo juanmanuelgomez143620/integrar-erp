@@ -218,6 +218,7 @@ export function buildSeed(): DB {
     environmentWeeks: [],
     deliveryNotices: [],
     staffNovelties: [],
+    scenarioRuns: [],
     rsLines: [],
     bankAccounts: [],
     bankMovements: [],

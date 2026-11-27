@@ -128,6 +128,7 @@ async function snapshot(company: string) {
     'environment_weeks',
     'delivery_notices',
     'staff_novelties',
+    'scenario_runs',
   ]
   const out: Record<string, unknown> = {}
   for (const t of tables) {
@@ -349,6 +350,7 @@ function argsFor(fn: string, params: { name: string; udt_name: string }[], compa
     p_amount: 1000000,
     p_months: 12,
     p_month: '2027-05',
+    p_scenario: 'FALTA_STOCK',
   }
   const args: Record<string, unknown> = {}
   for (const p of params) {

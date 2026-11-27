@@ -5689,6 +5689,125 @@ describe('paridad de comandos', () => {
     await reads('al final')
   })
 
+  it('escenarios: el docente inicia venta a crédito y falta de stock, las islas avanzan y los termina (8g.1)', async () => {
+    const companyPg = pg(company)
+    const reads = async (label: string) => {
+      for (const username of ['docente', 'ventas', 'gerencia'])
+        await sameRead(
+          `los escenarios ${label} (${username})`,
+          username,
+          (b) => b.api.scenarios(companyPg),
+          (u) => Q.scenarioView(mock, u, company),
+        )
+      // Las tareas creadas en el mismo instante no tienen un orden definido entre sí.
+      for (const username of ['ventas', 'gerencia'])
+        await sameRead(
+          `las tareas ${label} (${username})`,
+          username,
+          (b) => b.api.tasks(companyPg, 'mine', true),
+          (u) => Q.listTasks(mock, u, company, 'mine', true),
+          (t: { status: string; created_at: string }) => `${t.status === 'EN_CURSO'}|${t.created_at}`,
+        )
+    }
+    const start = (label: string, username: string, code: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdStartScenario(c, company, code),
+        (b) => b.commands.startScenario(companyPg, code),
+      )
+    const end = (label: string, username: string) =>
+      step(
+        label,
+        username,
+        (c) => E.cmdEndScenario(c, company),
+        (b) => b.commands.endScenario(companyPg),
+      )
+    /**
+     * El pedido de la situación de partida, la corrida y las tareas del pedido (la de Ventas y las consignas),
+     * vinculados en los dos lados: las tareas nacen en el mismo instante y, sin vincular, se compararían por
+     * posición.
+     */
+    const linkRun = async (number: string) => {
+      const order = mock.documents.find((d) => d.company_id === company && d.display_number === number)!
+      const [row] = await db.admin<{ id: string }>(
+        `select id from public.documents where company_id = $1 and doc_type = 'SALES_ORDER' and display_number = $2`,
+        [companyPg, number],
+      )
+      await linkDocument(order.id, row.id)
+      const run = mock.scenarioRuns.find((r) => r.company_id === company && r.status === 'EN_CURSO')!
+      const [runRow] = await db.admin<{ id: string }>(
+        `select id from public.scenario_runs where company_id = $1 and status = 'EN_CURSO'`,
+        [companyPg],
+      )
+      loaded.link(run.id, runRow.id)
+      const pgTasks = await db.admin<{ id: string; task_type: string; assigned_role: string | null }>(
+        'select id, task_type, assigned_role from public.tasks where document_id = $1',
+        [row.id],
+      )
+      for (const task of mock.tasks.filter((t) => t.document_id === order.id)) {
+        const match = pgTasks.find((t) => t.task_type === task.task_type && t.assigned_role === task.assigned_role)
+        expect(match, `la tarea ${task.task_type} de ${task.assigned_role}`).toBeDefined()
+        loaded.link(task.id, match!.id)
+      }
+      return order.id
+    }
+    await reads('al empezar')
+    expect(await start('Ventas no inicia escenarios', 'ventas', 'VENTA_CREDITO')).toBeNull()
+    expect(await start('un escenario que no existe', 'docente', 'OTRO')).toBeNull()
+    expect(await end('no hay ninguno en curso', 'docente')).toBeNull()
+
+    // Venta a crédito: Ventas confirma, el pedido espera a Gerencia, que lo autoriza.
+    const credit = await start('el docente inicia venta a crédito', 'docente', 'VENTA_CREDITO')
+    expect(credit, `el docente inicia venta a crédito: tenía que salir bien (${lastFailure})`).not.toBeNull()
+    expect(credit!.pg.order, 'el pedido de la situación de partida').toBe(credit!.mock.order)
+    const creditOrder = await linkRun(credit!.mock.order)
+    expect(await start('de a uno por empresa', 'docente', 'FALTA_STOCK')).toBeNull()
+    await reads('con venta a crédito')
+    await ok(
+      'Ventas confirma el pedido del escenario',
+      'ventas',
+      (c) => E.cmdConfirmSalesOrder(c, creditOrder),
+      (b) => b.commands.confirmSalesOrder(pg(creditOrder)),
+    )
+    await ok(
+      'Gerencia autoriza el crédito',
+      'gerencia',
+      (c) => E.cmdApproveSalesOrder(c, creditOrder, 'El cliente paga bien'),
+      (b) => b.commands.approveSalesOrder(pg(creditOrder), 'El cliente paga bien'),
+    )
+    await reads('con el crédito autorizado')
+    const creditEnd = await end('el docente termina venta a crédito', 'docente')
+    expect(creditEnd, `terminar venta a crédito (${lastFailure})`).not.toBeNull()
+    expect(creditEnd!.pg).toEqual(creditEnd!.mock)
+    expect(creditEnd!.mock).toEqual({ done: 2, total: 5 })
+
+    // Falta de stock: Ventas no lo puede confirmar completo y lo rechaza con el motivo.
+    const stock = await start('el docente inicia falta de stock', 'docente', 'FALTA_STOCK')
+    expect(stock, `el docente inicia falta de stock: tenía que salir bien (${lastFailure})`).not.toBeNull()
+    expect(stock!.pg.order, 'el pedido de la situación de partida').toBe(stock!.mock.order)
+    const stockOrder = await linkRun(stock!.mock.order)
+    expect(
+      await step(
+        'Ventas no lo confirma completo',
+        'ventas',
+        (c) => E.cmdConfirmSalesOrder(c, stockOrder),
+        (b) => b.commands.confirmSalesOrder(pg(stockOrder)),
+      ),
+    ).toBeNull()
+    await ok(
+      'Ventas lo rechaza con el motivo',
+      'ventas',
+      (c) => E.cmdCancelSalesOrder(c, stockOrder, 'No hay stock para todo'),
+      (b) => b.commands.cancelSalesOrder(pg(stockOrder), 'No hay stock para todo'),
+    )
+    await reads('con falta de stock')
+    const stockEnd = await end('el docente termina falta de stock', 'docente')
+    expect(stockEnd!.pg).toEqual(stockEnd!.mock)
+    expect(stockEnd!.mock).toEqual({ done: 1, total: 5 })
+    await reads('al final')
+  })
+
   it('después de los comandos, cada usuario lee lo mismo en ambos lados', async () => {
     const companyPg = pg(company)
     const types: DocType[] = [

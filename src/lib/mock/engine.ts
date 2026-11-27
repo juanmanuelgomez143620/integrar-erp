@@ -52,6 +52,7 @@ import {
   parentCode,
 } from '../domain/chart-of-accounts'
 import { cuitIsValid } from '../domain/cuit'
+import { SCENARIOS, type ScenarioCode } from '../domain/scenarios'
 import { MONTH_HOURS } from '../domain/employees'
 import { MAX_BULK_STUDENTS, baseUsername, uniqueUsername } from '../domain/students'
 import type * as T from '../domain/types'
@@ -5993,6 +5994,308 @@ export function cmdGenerateEnvironmentWeek(ctx: Ctx, companyId: string) {
     summary: `Generó la actividad de la semana ${week}: ${orders.length} pedidos de clientes, ${deliveries} y ${staff}`,
   })
   return { week, orders: orders.map((d) => d.display_number), notices: noticed, novelties: novelties.length }
+}
+
+// ============================================================ Los escenarios (Fase 8g, docs/FASE_8G_ESCENARIOS.md)
+
+/** Lo disponible de un producto en su depósito: lo que hay menos lo reservado. */
+function availableInDefault(db: DB, product: T.Product) {
+  const warehouseId = product.default_warehouse_id!
+  return round3(onHandQuantity(db, product.id, warehouseId) - reservedQuantity(db, product.id, warehouseId))
+}
+
+/** El total de un ítem con su IVA, como lo calcula el pedido. */
+function lineTotalWithVat(quantity: number, price: number, vatRate: number) {
+  const subtotal = round2(quantity * price)
+  return round2(subtotal + round2((subtotal * vatRate) / 100))
+}
+
+/**
+ * La situación de partida de un escenario (8g.1): el pedido que llega del cliente, elegido siempre igual con
+ * los datos de la empresa. Falta de stock: el producto terminado con lista de materiales con menos disponible,
+ * por lo disponible más 6, del cliente con más crédito (primero los que no tienen límite). Venta a crédito: el
+ * cliente con el límite más bajo y el producto con más disponible, por la menor cantidad que supera el límite.
+ */
+export function scenarioSituation(db: DB, companyId: string, code: ScenarioCode, today: string) {
+  const customers = db.customers
+    .filter((c) => c.company_id === companyId && c.is_active && c.vat_condition !== 'CONSUMIDOR_FINAL')
+    .sort(byCodeC)
+  const sellable = db.products.filter(
+    (p) =>
+      p.company_id === companyId &&
+      p.is_active &&
+      p.is_stockable &&
+      (p.sale_price ?? 0) > 0 &&
+      p.default_warehouse_id !== null,
+  )
+  let customer: T.Customer | undefined
+  let product: T.Product | undefined
+  let available = 0
+  let quantity = 0
+  if (code === 'FALTA_STOCK') {
+    customer = [...customers].sort(
+      (a, b) =>
+        (a.credit_limit === null ? 0 : 1) - (b.credit_limit === null ? 0 : 1) ||
+        (b.credit_limit ?? 0) - (a.credit_limit ?? 0) ||
+        byCodeC(a, b),
+    )[0]
+    const candidates = sellable
+      .filter(
+        (p) =>
+          p.product_type === 'PRODUCTO_TERMINADO' &&
+          db.boms.some((b) => b.company_id === companyId && b.product_id === p.id && b.is_active),
+      )
+      .map((p) => ({ p, available: availableInDefault(db, p) }))
+      .sort((a, b) => a.available - b.available || byCodeC(a.p, b.p))
+    if (candidates.length) {
+      product = candidates[0].p
+      available = Math.max(candidates[0].available, 0)
+      quantity = Math.floor(available) + 6
+    }
+  } else {
+    customer = customers
+      .filter((c) => c.credit_limit !== null && c.credit_limit > 0)
+      .sort((a, b) => a.credit_limit! - b.credit_limit! || byCodeC(a, b))[0]
+    const candidates = sellable
+      .filter((p) => p.product_type === 'PRODUCTO_TERMINADO' || p.product_type === 'MERCADERIA_REVENTA')
+      .map((p) => ({ p, available: availableInDefault(db, p) }))
+      .sort((a, b) => b.available - a.available || byCodeC(a.p, b.p))
+    if (customer && candidates.length) {
+      product = candidates[0].p
+      available = Math.max(candidates[0].available, 0)
+      const price = listPriceFor(db, customer, product)
+      const limit = customer.credit_limit!
+      quantity = Math.max(1, Math.floor(limit / (price * (1 + product.vat_rate / 100))) - 1)
+      while (lineTotalWithVat(quantity, price, product.vat_rate) <= limit) quantity++
+      if (quantity > Math.floor(available))
+        fail(
+          'DATO_INVALIDO',
+          `No hay stock suficiente para armar el escenario: ${product.code} tiene ${fmtQty(available, product.uom_code)} disponibles y el pedido necesita ${quantity}.`,
+        )
+    }
+  }
+  if (!customer || !product)
+    fail('DATO_INVALIDO', 'La empresa no tiene los clientes o los productos que necesita el escenario.')
+  const input: SalesOrderInput = {
+    customer_id: customer.id,
+    warehouse_id: product.default_warehouse_id!,
+    delivery_date: requestedDelivery(db, customer, today),
+    payment_terms_days: customer.payment_terms_days,
+    customer_reference: code === 'FALTA_STOCK' ? 'OC 9001' : 'OC 9002',
+    notes: `Pedido del escenario «${SCENARIOS[code].name}».`,
+    lines: [{ product_id: product.id, quantity, unit_price: listPriceFor(db, customer, product) }],
+  }
+  return {
+    input,
+    context: {
+      customer_id: customer.id,
+      product_id: product.id,
+      quantity,
+      available: code === 'FALTA_STOCK' ? available : null,
+      credit_limit: code === 'VENTA_CREDITO' ? customer.credit_limit : null,
+    },
+  }
+}
+
+/**
+ * Los criterios de logro de una corrida (8g.1): cada uno mira la auditoría dentro de la ventana del escenario
+ * (del inicio al fin), "tal documento llegó a tal estado".
+ */
+export function scenarioCriteria(db: DB, run: T.ScenarioRun): { key: string; done: boolean }[] {
+  const end = run.ended_at ?? '9999-12-31'
+  const events = db.audit.filter(
+    (e) =>
+      e.company_id === run.company_id &&
+      e.document_id !== null &&
+      e.to_status !== null &&
+      e.occurred_at >= run.started_at &&
+      e.occurred_at <= end,
+  )
+  const docs = new Map(db.documents.filter((d) => d.company_id === run.company_id).map((d) => [d.id, d]))
+  const reached = (ok: (d: T.Document) => boolean, statuses: string[], from?: string) =>
+    events.some((e) => {
+      const d = docs.get(e.document_id!)
+      return !!d && statuses.includes(e.to_status!) && (from === undefined || e.from_status === from) && ok(d)
+    })
+  const c = run.context
+  const fresh = (d: T.Document) => d.created_at >= run.started_at
+  const withProduct = (lines: { document_id: string; product_id: string }[], d: T.Document) =>
+    lines.some((l) => l.document_id === d.id && l.product_id === c.product_id)
+  if (run.scenario === 'FALTA_STOCK')
+    return [
+      { key: 'FS_RECHAZO', done: reached((d) => d.id === c.order_id, ['ANULADO']) },
+      {
+        key: 'FS_DISPONIBLE',
+        done: reached(
+          (d) =>
+            d.doc_type === 'SALES_ORDER' &&
+            d.id !== c.order_id &&
+            d.customer_id === c.customer_id &&
+            fresh(d) &&
+            withProduct(db.soLines, d),
+          ['CONFIRMADO'],
+        ),
+      },
+      {
+        key: 'FS_FABRICA',
+        done: reached(
+          (d) => d.doc_type === 'PRODUCTION_ORDER' && d.pd?.product_id === c.product_id && fresh(d),
+          ['TERMINADA'],
+        ),
+      },
+      {
+        key: 'FS_DESPACHO',
+        done: reached(
+          (d) =>
+            d.doc_type === 'DELIVERY_NOTE' && d.customer_id === c.customer_id && fresh(d) && withProduct(db.dnLines, d),
+          ['CONFIRMADO'],
+        ),
+      },
+      {
+        key: 'FS_FACTURA',
+        done: reached(
+          (d) => d.doc_type === 'SALES_INVOICE' && d.customer_id === c.customer_id && fresh(d),
+          ['REGISTRADA'],
+        ),
+      },
+    ]
+  return [
+    { key: 'VC_REVISA', done: reached((d) => d.id === c.order_id, ['PENDIENTE_APROBACION']) },
+    {
+      key: 'VC_DECIDE',
+      done: reached((d) => d.id === c.order_id, ['CONFIRMADO', 'RECHAZADO'], 'PENDIENTE_APROBACION'),
+    },
+    {
+      key: 'VC_DESPACHO',
+      done: reached((d) => d.doc_type === 'DELIVERY_NOTE' && d.dn?.sales_order_id === c.order_id, ['CONFIRMADO']),
+    },
+    {
+      key: 'VC_FACTURA',
+      done: reached((d) => d.doc_type === 'SALES_INVOICE' && d.fv?.sales_order_id === c.order_id, ['REGISTRADA']),
+    },
+    {
+      key: 'VC_COBRO',
+      done: reached(
+        (d) => d.doc_type === 'CUSTOMER_RECEIPT' && d.customer_id === c.customer_id && fresh(d),
+        ['CONFIRMADO'],
+      ),
+    },
+  ]
+}
+
+/**
+ * El docente inicia un escenario (8g.1), de a uno por empresa: llega el pedido de la situación de partida
+ * (recibido, con su tarea para Ventas) y cada rol de las islas que participan recibe la tarea de la consigna.
+ */
+export function cmdStartScenario(ctx: Ctx, companyId: string, code: string) {
+  const { db } = ctx
+  const actor = requireSupervisor(ctx, companyId)
+  const info = SCENARIOS[code as ScenarioCode]
+  if (!info) fail('DATO_INVALIDO', 'Elegí un escenario.')
+  if (db.scenarioRuns.some((r) => r.company_id === companyId && r.status === 'EN_CURSO'))
+    fail('TRANSICION_INVALIDA', 'Ya hay un escenario en curso: terminalo antes de iniciar otro.')
+  const company = getCompany(db, companyId)
+  const { input, context } = scenarioSituation(db, companyId, info.code, businessDate(company))
+  const order = insertSalesOrder(ctx, companyId, SYSTEM_ACTOR, input, undefined, 'RECIBIDO')
+  openTasksForStatus(ctx, order, SYSTEM_ACTOR)
+  const run: T.ScenarioRun = {
+    id: uid(),
+    company_id: companyId,
+    scenario: info.code,
+    status: 'EN_CURSO',
+    context: { order_id: order.id, ...context },
+    started_at: ctx.now,
+    started_by: ctx.userId,
+    ended_at: null,
+    ended_by: null,
+  }
+  db.scenarioRuns.push(run)
+  const title = `Escenario «${info.name}»`
+  const description =
+    'El docente inició un escenario: la consigna de tu isla y lo que falta están en Mi trabajo, arriba de las tareas.'
+  for (const brief of info.briefs) {
+    const task: T.Task = {
+      id: uid(),
+      company_id: companyId,
+      document_id: order.id,
+      task_type: 'CONSIGNA_ESCENARIO',
+      title,
+      description,
+      origin_status: null,
+      context: { run_id: run.id },
+      assigned_role: brief.role,
+      assigned_user_id: null,
+      status: 'PENDIENTE',
+      priority: 'ALTA',
+      source: 'ESCENARIO',
+      claimed_by: null,
+      claimed_at: null,
+      completed_by: null,
+      completed_at: null,
+      created_by: actor.user_id,
+      created_at: ctx.now,
+    }
+    db.tasks.push(task)
+    notifyUsers(
+      ctx,
+      companyId,
+      usersWithRole(db, companyId, brief.role),
+      {
+        type: 'NUEVA_TAREA',
+        title: `Nueva tarea: ${title}`,
+        body: description,
+        link_path: `/e/${company.slug}/mi-trabajo`,
+        document_id: order.id,
+        task_id: task.id,
+      },
+      actor.user_id,
+    )
+  }
+  const customer = db.customers.find((c) => c.id === context.customer_id)!
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'CREATE',
+    entity_type: 'scenario_run',
+    entity_id: run.id,
+    entity_label: title,
+    summary: `Inició el escenario «${info.name}»: llegó el pedido ${order.display_number} de ${customer.legal_name}`,
+  })
+  return { run_id: run.id, order: order.display_number }
+}
+
+/** El docente termina el escenario en curso: se cierran las tareas de las consignas y queda el resultado. */
+export function cmdEndScenario(ctx: Ctx, companyId: string) {
+  const { db } = ctx
+  const actor = requireSupervisor(ctx, companyId)
+  const run = db.scenarioRuns.find((r) => r.company_id === companyId && r.status === 'EN_CURSO')
+  if (!run) fail('TRANSICION_INVALIDA', 'No hay un escenario en curso.')
+  run.status = 'TERMINADO'
+  run.ended_at = ctx.now
+  run.ended_by = ctx.userId
+  for (const task of db.tasks)
+    if (
+      task.task_type === 'CONSIGNA_ESCENARIO' &&
+      task.context.run_id === run.id &&
+      (task.status === 'PENDIENTE' || task.status === 'EN_CURSO')
+    ) {
+      task.status = 'RESUELTA'
+      task.completed_by = ctx.userId
+      task.completed_at = ctx.now
+    }
+  const criteria = scenarioCriteria(db, run)
+  const done = criteria.filter((c) => c.done).length
+  const name = SCENARIOS[run.scenario as ScenarioCode].name
+  logAudit(ctx, {
+    company_id: companyId,
+    actor,
+    action: 'UPDATE',
+    entity_type: 'scenario_run',
+    entity_id: run.id,
+    entity_label: `Escenario «${name}»`,
+    summary: `Terminó el escenario «${name}»: ${done} de ${criteria.length} criterios logrados`,
+  })
+  return { done, total: criteria.length }
 }
 
 /**

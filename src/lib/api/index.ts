@@ -75,6 +75,8 @@ export type {
   EnvironmentView,
   EnvironmentWeekRow,
   StaffReportRow,
+  ScenarioView,
+  ScenarioRunView,
   RouteSheetView,
   PostingRuleRow,
   PriceListDetail,
@@ -301,6 +303,7 @@ const mockApi = {
   deliveryZones: (companyId: string) => query((db, u) => Q.listDeliveryZones(db, u, companyId)),
   environment: (companyId: string) => query((db, u) => Q.environmentView(db, u, companyId)),
   staffReport: (companyId: string, period: string) => query((db, u) => Q.staffReport(db, u, companyId, period)),
+  scenarios: (companyId: string) => query((db, u) => Q.scenarioView(db, u, companyId)),
   routeSheetCandidates: (companyId: string) => query((db, u) => Q.routeSheetCandidates(db, u, companyId)),
   drivers: (companyId: string) => query((db, u) => Q.listDrivers(db, u, companyId)),
   jobCategories: (companyId: string) => query((db, u) => Q.listJobCategories(db, u, companyId)),
@@ -477,6 +480,8 @@ const mockCommands = {
   setDeliveryZoneActive: (companyId: string, zoneId: string, active: boolean) =>
     command((c) => E.cmdSetDeliveryZoneActive(c, companyId, zoneId, active)),
   generateEnvironmentWeek: (companyId: string) => command((c) => E.cmdGenerateEnvironmentWeek(c, companyId)),
+  startScenario: (companyId: string, scenario: string) => command((c) => E.cmdStartScenario(c, companyId, scenario)),
+  endScenario: (companyId: string) => command((c) => E.cmdEndScenario(c, companyId)),
   setCarrierActive: (companyId: string, carrierId: string, active: boolean) =>
     command((c) => E.cmdSetCarrierActive(c, companyId, carrierId, active)),
   saveVehicle: (companyId: string, input: E.VehicleInput) => command((c) => E.cmdSaveVehicle(c, companyId, input)),

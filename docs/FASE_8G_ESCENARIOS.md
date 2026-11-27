@@ -39,9 +39,33 @@
 
 | Paso | Qué | Estado |
 | --- | --- | --- |
-| 8g.1 | El motor: el catálogo, las corridas, el inicio con la situación de partida, las tareas de consigna, la evaluación y el panel del docente, con dos escenarios: falta de stock y cliente moroso (aprovechan los pedidos de la 9d) | Pendiente |
+| 8g.1 | El motor: el catálogo, las corridas, el inicio con la situación de partida, las tareas de consigna, la evaluación y el panel del docente, con dos escenarios: falta de stock y venta a crédito (cliente moroso pasa a la 8g.2) | Hecha (25/11) |
 | 8g.2 | Los otros cinco escenarios | Pendiente |
 | 8g.3 | El informe para calificar, por isla y por estudiante (quién hizo qué, desde la auditoría), imprimible y con la rúbrica | Pendiente |
+
+## 4 bis. La 8g.1 en detalle (25/11; el usuario dijo "avanzá" con las opciones propuestas)
+
+- **Dos escenarios: falta de stock y venta a crédito.** Cliente moroso pasa a la 8g.2: necesita facturas vencidas, y la demo no tiene deudas de clientes ni se puede cargar un documento con fecha pasada. Hará falta un saldo inicial vencido del cliente o la fecha simulada (D-09).
+- **La situación de partida** es un pedido de cliente que llega **recibido** (como los de la 9d, con su tarea para Ventas). Se elige siempre igual con los datos de la empresa:
+  - **Falta de stock:** el producto terminado con lista de materiales que tiene **menos stock disponible** (lo que hay menos lo reservado), pedido por lo disponible más 6 unidades. Lo pide el cliente con más crédito (primero los que no tienen límite) y la referencia es "OC 9001".
+  - **Venta a crédito:** el cliente con el **límite de crédito más bajo**, que pide el producto con **más stock disponible** por la menor cantidad que supera su límite (si no alcanza el stock, el escenario no se puede iniciar y lo dice). La referencia es "OC 9002".
+- **Las consignas**, una por isla, viven en el catálogo del código con los datos de la corrida (el pedido, el cliente, el producto, la cantidad):
+  - falta de stock: Ventas, Producción y Depósito;
+  - venta a crédito: Ventas, Gerencia, Depósito y Tesorería.
+  Cada rol de esas islas recibe una tarea "Escenario «…»" (origen `ESCENARIO`, con el enlace al pedido), que se cierra al terminar el escenario.
+- **Los criterios** se evalúan sobre la **auditoría dentro de la ventana del escenario** (del inicio al fin): "tal documento llegó a tal estado".
+  - Falta de stock: Ventas rechazó el pedido con el motivo; cargó y confirmó otro pedido del cliente con el producto; Producción terminó una orden de producción del producto; Depósito despachó el producto al cliente; Ventas facturó al cliente.
+  - Venta a crédito: Ventas confirmó el pedido y quedó esperando a Gerencia; Gerencia autorizó o rechazó; Depósito lo despachó; Ventas lo facturó; Tesorería registró un cobro del cliente.
+- **Pantallas:**
+  - **Panel docente → Escenarios** sirve para iniciar uno (de a uno por empresa), ver los criterios por isla con su avance, terminarlo y ver los anteriores con su resultado.
+  - En **Mi trabajo**, cada estudiante ve el escenario en curso, la consigna de su isla y lo que falta.
+  - Los criterios que evalúa el docente y la rúbrica quedan para la 8g.3.
+- **Notas de la 8g.1 (25/11):**
+  - Los textos (las consignas, los criterios y la situación) están en `src/lib/domain/scenarios.ts` y se completan con los datos de la corrida.
+  - La base guarda la corrida (`scenario_runs`, con la situación de partida en su contexto) y evalúa los criterios con la misma lógica que el simulador (`private.scenario_criteria`).
+  - Con la demo, venta a crédito eligió a Gómez, Lucas (límite de $ 400.000), que pide 3 pupitres por $ 544.500 (con 2 no lo superaba). Al confirmarlo Ventas, el pedido quedó esperando a Gerencia, que lo autorizó: 2 de 5 criterios.
+  - Lo que pasa después de terminar el escenario no cuenta, y se puede iniciar otro.
+  - Base de datos: migración 131 (`20261125120000_escenarios.sql`). El simulador pasa a la versión 38.
 
 ## 5. A validar con el usuario
 

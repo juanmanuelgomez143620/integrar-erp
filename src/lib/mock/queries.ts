@@ -13,6 +13,7 @@ import {
   type StatusInfo,
 } from '../domain/catalog'
 import { TREASURY_RUBRO } from '../domain/chart-of-accounts'
+import type { ScenarioCode, ScenarioLabels } from '../domain/scenarios'
 import type * as T from '../domain/types'
 import { date, money, qty, todayAR } from '../format'
 import type { DB } from './db'
@@ -56,6 +57,7 @@ import {
   laterTaxReturn,
   invoicedQuantity,
   deliveryNoticeReceived,
+  scenarioCriteria,
   isoWeek,
   invoicePaid,
   invoiceRegistrant,
@@ -6382,4 +6384,61 @@ export function staffReport(db: DB, userId: string, companyId: string, period: s
   }
   const fileNumber = (id: string) => db.employees.find((e) => e.id === id)?.file_number ?? 0
   return [...rows.values()].sort((a, b) => fileNumber(a.employee_id) - fileNumber(b.employee_id))
+}
+
+// ============================================================ Los escenarios (Fase 8g)
+
+/** Una corrida de un escenario con los datos que completan sus textos y el estado de cada criterio. */
+export interface ScenarioRunView {
+  id: string
+  scenario: ScenarioCode
+  status: 'EN_CURSO' | 'TERMINADO'
+  started_at: string
+  started_by_name: string
+  ended_at: string | null
+  ended_by_name: string | null
+  labels: ScenarioLabels
+  criteria: { key: string; done: boolean }[]
+}
+
+/** El escenario en curso (lo ven todos los integrantes) y los terminados (los ve el docente), el último primero. */
+export interface ScenarioView {
+  current: ScenarioRunView | null
+  history: ScenarioRunView[]
+}
+
+export function scenarioView(db: DB, userId: string, companyId: string): ScenarioView {
+  const profile = getProfile(db, userId)
+  if (!profile?.is_active || (!isInstanceAdmin(profile) && !getMember(db, userId, companyId)?.is_active))
+    throw new Error('No participás en esta empresa')
+  const supervisor = effectivePermissions(db, userId, companyId).supervisor
+  const view = (r: T.ScenarioRun): ScenarioRunView => {
+    const product = db.products.find((p) => p.id === r.context.product_id)
+    return {
+      id: r.id,
+      scenario: r.scenario as ScenarioCode,
+      status: r.status,
+      started_at: r.started_at,
+      started_by_name: nameOf(db, r.started_by),
+      ended_at: r.ended_at,
+      ended_by_name: r.ended_at ? nameOf(db, r.ended_by) : null,
+      labels: {
+        order: db.documents.find((d) => d.id === r.context.order_id)?.display_number ?? '',
+        customer: db.customers.find((c) => c.id === r.context.customer_id)?.legal_name ?? '',
+        product: product ? `${product.code} ${product.name}` : '',
+        quantity: r.context.quantity,
+        available: r.context.available,
+        credit_limit: r.context.credit_limit,
+      },
+      criteria: scenarioCriteria(db, r),
+    }
+  }
+  const runs = db.scenarioRuns
+    .filter((r) => r.company_id === companyId)
+    .sort((a, b) => (a.started_at < b.started_at ? 1 : a.started_at > b.started_at ? -1 : 0))
+  const current = runs.find((r) => r.status === 'EN_CURSO')
+  return {
+    current: current ? view(current) : null,
+    history: supervisor ? runs.filter((r) => r.status === 'TERMINADO').map(view) : [],
+  }
 }

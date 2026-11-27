@@ -25,6 +25,7 @@ import { BANK_MODES, DOC_STATUSES, FISCO_MODES, MODULES, ROLES, ROLE_ORDER } fro
 import type { ModuleCode, RoleCode } from '@/lib/domain/types'
 import { date, money, relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
+import { ScenariosSection } from '@/features/scenarios/scenario-views'
 import { useCompany } from '@/app/company'
 import { PayrollRatesSection } from '@/features/hr/payroll'
 import { IibbRateSection } from '@/features/tax/tax-return'
@@ -78,6 +79,7 @@ export function TeacherPage() {
           <TabsTrigger value="config">Módulos y control interno</TabsTrigger>
           <TabsTrigger value="activity">Actividad</TabsTrigger>
           <TabsTrigger value="environment">Entorno</TabsTrigger>
+          <TabsTrigger value="scenarios">Escenarios</TabsTrigger>
         </TabsList>
 
         <TabsContent value="members" className="mt-3">
@@ -295,6 +297,10 @@ export function TeacherPage() {
 
         <TabsContent value="environment" className="mt-3">
           <EnvironmentSection />
+        </TabsContent>
+
+        <TabsContent value="scenarios" className="mt-3">
+          <ScenariosSection />
         </TabsContent>
       </Tabs>
 

@@ -880,6 +880,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CONFIRMAR_TRANSFERENCIA: 'Confirmar transferencia',
   CONFIRMAR_PV: 'Confirmar pedido',
   REVISAR_PEDIDO_CLIENTE: 'Revisar pedido del cliente',
+  CONSIGNA_ESCENARIO: 'Consigna del escenario',
   AUTORIZAR_CREDITO: 'Autorizar crédito',
   DESPACHAR_PEDIDO: 'Despachar pedido',
   DESPACHAR_REMITO: 'Despachar remito',

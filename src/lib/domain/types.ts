@@ -368,6 +368,30 @@ export interface DeliveryNotice {
   created_at: string
 }
 
+/**
+ * Una corrida de un escenario (Fase 8g, docs/FASE_8G_ESCENARIOS.md): el docente lo inicia, la situación de
+ * partida queda en su contexto y los criterios se evalúan sobre la auditoría entre el inicio y el fin.
+ */
+export interface ScenarioRun {
+  id: string
+  company_id: string
+  scenario: string
+  status: 'EN_CURSO' | 'TERMINADO'
+  /** El pedido que llegó, el cliente, el producto y la cantidad (más lo disponible o el límite de crédito). */
+  context: {
+    order_id: string
+    customer_id: string
+    product_id: string
+    quantity: number
+    available: number | null
+    credit_limit: number | null
+  }
+  started_at: string
+  started_by: string | null
+  ended_at: string | null
+  ended_by: string | null
+}
+
 /** Una novedad del parte del personal (Fase 9d.3): una ausencia sin aviso o horas extra al 50 o al 100 %. */
 export type StaffNoveltyKind = 'AUSENCIA' | 'EXTRA_50' | 'EXTRA_100'
 

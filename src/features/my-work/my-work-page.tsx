@@ -14,6 +14,7 @@ import { dateTime, relative } from '@/lib/format'
 import { useCommand } from '@/hooks/use-command'
 import { useSession } from '@/app/session'
 import { useCompany } from '@/app/company'
+import { ScenarioBanner } from '@/features/scenarios/scenario-views'
 
 const TASK_STATUS = {
   PENDIENTE: { label: 'Pendiente', badge: 'warning' },
@@ -42,6 +43,7 @@ export function MyWorkPage() {
         title="Mi trabajo"
         description="Cada sector ve automáticamente las operaciones que requieren su intervención. Cuando resolvés el documento, la tarea se cierra sola y pasa al sector siguiente."
       />
+      <ScenarioBanner />
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="mb-3">
         <TabsList>
           <TabsTrigger value="mine">Mis tareas</TabsTrigger>
